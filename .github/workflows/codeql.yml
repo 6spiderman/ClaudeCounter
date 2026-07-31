@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
   security-events: write
+  # The analyze step calls GET /repos/{owner}/{repo}/actions/runs/{run_id} to
+  # attach results to the correct run; without this it fails late, after the
+  # scan itself already completed, with "Resource not accessible by
+  # integration" on that endpoint specifically.
+  actions: read
 
 jobs:
   analyze:
