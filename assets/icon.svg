@@ -1,0 +1,36 @@
+<!--
+  ClaudeCounter application icon - design source.
+
+  A gauge dial: a three-quarter ring with the "used" arc filled in. It is
+  deliberately generic (a meter, not a chat or a spark) so nothing but the
+  project's name connects it to Anthropic's branding.
+
+  The shipped ClaudeCounter.ico is generated from `generate-icon.ps1`, which
+  redraws these shapes with System.Drawing at each required pixel size rather
+  than rasterising this file. Keep the two in sync by eye; this SVG is the
+  reference for the proportions.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3FBF57"/>
+      <stop offset="1" stop-color="#1F7A34"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square plate, matching the tray icon silhouette -->
+  <rect x="0" y="0" width="256" height="256" rx="56" ry="56" fill="url(#bg)"/>
+
+  <!-- gauge track: 270 degrees, opening at the bottom -->
+  <path d="M 62.9 193.1 A 92 92 0 1 1 193.1 193.1"
+        fill="none" stroke="#FFFFFF" stroke-opacity="0.28"
+        stroke-width="30" stroke-linecap="round"/>
+
+  <!-- filled portion: ~72% of the sweep -->
+  <path d="M 62.9 193.1 A 92 92 0 0 1 202.7 76.3"
+        fill="none" stroke="#FFFFFF"
+        stroke-width="30" stroke-linecap="round"/>
+
+  <!-- hub -->
+  <circle cx="128" cy="128" r="22" fill="#FFFFFF"/>
+</svg>

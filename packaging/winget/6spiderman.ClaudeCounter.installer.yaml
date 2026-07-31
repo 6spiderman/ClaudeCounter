@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# Template. Replace <VERSION>, <RELEASE_DATE> and the two <SHA256_*> hashes
+# before submitting - see README.md in this folder.
+
+PackageIdentifier: 6spiderman.ClaudeCounter
+PackageVersion: <VERSION>
+
+InstallerType: inno
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+
+InstallerSwitches:
+  # winget passes /SILENT rather than /VERYSILENT to Inno installers for
+  # --silent (microsoft/winget-cli#2793), so both modes are spelled out here
+  # instead of relying on the defaults.
+  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+
+# The installer replaces in place; there is no separate upgrade path.
+UpgradeBehavior: install
+
+# Inno appends "_is1" to the AppId GUID for its uninstall registry key. This
+# must match packaging/inno/ClaudeCounter.iss and never changes.
+ProductCode: '{46EDE506-3485-4A9F-93D6-EE4491756F22}_is1'
+
+ReleaseDate: <RELEASE_DATE>
+ReleaseNotesUrl: https://github.com/6spiderman/ClaudeCounter/releases/tag/v<VERSION>
+
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/6spiderman/ClaudeCounter/releases/download/v<VERSION>/ClaudeCounter-<VERSION>-x64-setup.exe
+    InstallerSha256: <SHA256_X64>
+
+  # Hold this entry back until someone has confirmed the arm64 build actually
+  # runs on real hardware. It is cross-published and otherwise untested.
+  - Architecture: arm64
+    InstallerUrl: https://github.com/6spiderman/ClaudeCounter/releases/download/v<VERSION>/ClaudeCounter-<VERSION>-arm64-setup.exe
+    InstallerSha256: <SHA256_ARM64>
+
+ManifestType: installer
+ManifestVersion: 1.6.0

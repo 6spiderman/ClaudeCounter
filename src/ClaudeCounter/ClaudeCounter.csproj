@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <!-- Both RIDs the release workflow publishes for, so the lock file covers
+         the graphs `dotnet publish -r win-x64|win-arm64` actually needs. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeCounter</AssemblyName>
+    <AssemblyTitle>ClaudeCounter</AssemblyTitle>
+    <Product>ClaudeCounter</Product>
+    <Description>Claude plan usage in the system tray</Description>
+    <ApplicationIcon>..\..\assets\ClaudeCounter.ico</ApplicationIcon>
+
+    <!--
+      The Windows Desktop runtime pack ships WPF's native libraries even for a
+      WinForms-only app, and a single-file publish leaves native code beside the
+      exe unless told otherwise. Without this the "single file" is actually six,
+      and anyone who copies just the exe out of the portable zip gets a broken
+      app. Set here rather than only on the CI command line so a local publish
+      produces the same artifact.
+    -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Also embedded, not just set as the shell icon: dialogs load it from here
+      rather than via Icon.ExtractAssociatedIcon(ProcessPath), which depends on
+      the exe being where the app thinks it is and gives back a shell-cached
+      approximation rather than the crisp size we asked for.
+    -->
+    <EmbeddedResource Include="..\..\assets\ClaudeCounter.ico" LogicalName="ClaudeCounter.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# Template. Replace <VERSION> before submitting - see README.md in this folder.
+
+PackageIdentifier: 6spiderman.ClaudeCounter
+PackageVersion: <VERSION>
+PackageLocale: en-US
+
+Publisher: 6spiderman
+PublisherUrl: https://github.com/6spiderman
+PublisherSupportUrl: https://github.com/6spiderman/ClaudeCounter/issues
+Author: 6spiderman
+
+PackageName: ClaudeCounter
+PackageUrl: https://github.com/6spiderman/ClaudeCounter
+Moniker: claudecounter
+
+License: MIT
+LicenseUrl: https://github.com/6spiderman/ClaudeCounter/blob/main/LICENSE
+Copyright: Copyright (c) 2026 6spiderman
+CopyrightUrl: https://github.com/6spiderman/ClaudeCounter/blob/main/LICENSE
+
+ShortDescription: Your Claude plan usage in the Windows system tray.
+
+Description: |-
+  ClaudeCounter is a lightweight Windows system-tray monitor for your Claude
+  Pro or Max plan usage. The tray icon shows your current five-hour session
+  utilization and changes colour as you approach your limit; a flyout breaks
+  out the rolling seven-day window, the per-model windows, and a countdown to
+  each reset.
+
+  It signs in through your browser and keeps its own session, so it does not
+  need the Claude Code CLI installed and does not interfere with it. Polling
+  interval, warning thresholds and start-with-Windows are configurable. No
+  background service, no admin rights, no telemetry.
+
+  Not affiliated with, endorsed by, or supported by Anthropic.
+
+Tags:
+  - anthropic
+  - claude
+  - monitor
+  - notification-area
+  - quota
+  - systray
+  - tray
+  - usage
+
+ReleaseNotesUrl: https://github.com/6spiderman/ClaudeCounter/releases/tag/v<VERSION>
+
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (no leading v), for a dry run'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            '${{ github.event.inputs.version }}'
+          } else {
+            '${{ github.ref_name }}' -replace '^v', ''
+          }
+          if ($ver -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Version '$ver' is not semver. Tag as vMAJOR.MINOR.PATCH[-prerelease]."
+          }
+          "version=$ver"              >> $env:GITHUB_OUTPUT
+          "tag=v$ver"                 >> $env:GITHUB_OUTPUT
+          "prerelease=$($ver -like '*-*')".ToLower() >> $env:GITHUB_OUTPUT
+          Write-Host "Building $ver"
+
+      # Locked mode fails the build outright if a resolved package version
+      # drifts from packages.lock.json - a compromised or silently-bumped
+      # upstream release cannot change what a tagged release ships.
+      - name: Restore
+        run: dotnet restore ClaudeCounter.sln --locked-mode
+
+      # Never publish a red tag.
+      - name: Test
+        run: dotnet test ClaudeCounter.sln -c Release --no-restore
+
+      - name: Publish
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          foreach ($rid in 'win-x64', 'win-arm64') {
+            dotnet publish src/ClaudeCounter/ClaudeCounter.csproj `
+              -c Release -r $rid --self-contained true --no-restore `
+              -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
+              -p:DebugType=none -p:Version=$env:VERSION `
+              -o "dist/$rid"
+            if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+
+            # A single-file publish should leave exactly one file. A stray .dll
+            # means something did not get embedded and the portable zip would
+            # be broken for anyone who unzips only the exe.
+            $stray = Get-ChildItem "dist/$rid" -File | Where-Object Name -ne 'ClaudeCounter.exe'
+            if ($stray) {
+              throw "Unexpected files alongside the exe for ${rid}: $($stray.Name -join ', '). Add -p:IncludeNativeLibrariesForSelfExtract=true."
+            }
+          }
+
+      # No version pin: the arm64 architecture identifiers used in
+      # ClaudeCounter.iss need Inno Setup 6.3+, and hosted runners already ship
+      # something newer than that. An exact old pin broke here the moment the
+      # runner image's bundled version moved past it - `choco install` refuses
+      # to downgrade without --force. `choco install` on an already-present
+      # package is a no-op that exits 0, so this is safe to run unconditionally.
+      - name: Ensure Inno Setup is present
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found at $iscc after installing Inno Setup"
+          }
+          Write-Host "Inno Setup version: $((Get-Item $iscc).VersionInfo.ProductVersion)"
+
+      - name: Build installers
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          foreach ($arch in 'x64', 'arm64') {
+            $src = Resolve-Path "dist/win-$arch"
+            & $iscc "/DAppVersion=$env:VERSION" "/DArch=$arch" "/DSourceDir=$src" `
+                    packaging\inno\ClaudeCounter.iss
+            if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $arch" }
+          }
+
+      - name: Build portable archives
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          foreach ($arch in 'x64', 'arm64') {
+            $staging = "dist/portable-$arch"
+            New-Item -ItemType Directory -Force $staging | Out-Null
+            Copy-Item "dist/win-$arch/ClaudeCounter.exe" $staging
+            Copy-Item LICENSE   "$staging/LICENSE.txt"
+            Copy-Item README.md $staging
+            Compress-Archive -Path "$staging/*" `
+              -DestinationPath "dist/ClaudeCounter-$env:VERSION-$arch-portable.zip" -Force
+          }
+
+      - name: Hash artifacts
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -File |
+            Where-Object Extension -in '.exe', '.zip' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+              "$hash  $($_.Name)"
+            } |
+            Set-Content dist/SHA256SUMS.txt -Encoding ascii
+
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Compose release notes
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $sections = [System.Collections.Generic.List[string]]::new()
+
+          # Lift this version's section out of the changelog, if it has one.
+          if (Test-Path CHANGELOG.md) {
+            $changelog = Get-Content CHANGELOG.md -Raw
+            $heading = '## [' + $env:VERSION + ']'
+            $pattern = '(?ms)^' + [regex]::Escape($heading) + '.*?(?=^## |\z)'
+            $match = [regex]::Match($changelog, $pattern)
+            if ($match.Success) { $sections.Add($match.Value.Trim()) }
+            else { Write-Host "::warning::No CHANGELOG section for $env:VERSION" }
+          }
+
+          # Built as an array joined with a newline, not a here-string: a
+          # PowerShell here-string's closing '@ must sit at column 0, which
+          # would end this YAML block scalar early (it requires every content
+          # line to stay indented) and corrupt the rest of the file - exactly
+          # what happened here originally, silently, because nothing had
+          # actually parsed this file as YAML before it reached GitHub.
+          $sections.Add(@(
+            '## Verify your download'
+            ''
+            'Releases are not code-signed, so Windows SmartScreen will warn about them.'
+            'Check the hash of what you downloaded against the list below before running it:'
+            ''
+            '```powershell'
+            'Get-FileHash .\<the file you downloaded> -Algorithm SHA256'
+            '```'
+          ) -join "`n")
+
+          $sections.Add("``````" + "`n" + (Get-Content dist/SHA256SUMS.txt -Raw).Trim() + "`n" + "``````")
+
+          $sections.Add(@(
+            'If SmartScreen blocks the installer, choose **More info** then **Run anyway**.'
+            ''
+            '> ClaudeCounter is not affiliated with, endorsed by, or supported by Anthropic.'
+          ) -join "`n")
+
+          ($sections -join "`n`n") | Set-Content dist/RELEASE_NOTES.md -Encoding utf8
+          Get-Content dist/RELEASE_NOTES.md
+
+      # Skipped on workflow_dispatch: that path is for rehearsing a build, and
+      # `gh release create` would create the tag as a side effect.
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          $ghArgs = [System.Collections.Generic.List[string]]::new()
+          $ghArgs.AddRange([string[]]@('release', 'create', $env:TAG))
+          $ghArgs.AddRange([string[]](Get-ChildItem dist/*-setup.exe, dist/*-portable.zip |
+            ForEach-Object FullName))
+          $ghArgs.Add('dist/SHA256SUMS.txt')
+          $ghArgs.AddRange([string[]]@('--title', "ClaudeCounter $env:TAG"))
+          $ghArgs.AddRange([string[]]@('--notes-file', 'dist/RELEASE_NOTES.md'))
+          if ($env:PRERELEASE -eq 'true') { $ghArgs.Add('--prerelease') }
+
+          gh @ghArgs
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt

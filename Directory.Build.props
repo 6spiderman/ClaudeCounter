@@ -1,0 +1,33 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- CI overrides this with the git tag: -p:Version=$ver -->
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+
+    <Authors>6spiderman</Authors>
+    <Company>6spiderman</Company>
+    <Copyright>Copyright (c) 2026 6spiderman</Copyright>
+    <RepositoryUrl>https://github.com/6spiderman/ClaudeCounter</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+    <!--
+      Without this, .NET appends "+<git sha>" to InformationalVersion and the
+      About box reads "1.2.0+9fceb02". AppInfo truncates at '+' defensively
+      anyway, but there is no reason to put it there in the first place.
+    -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
+    <AnalysisLevel>latest</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!--
+      Pin resolved package versions so a compromised or accidentally-bumped
+      upstream release cannot silently change what a build pulls in. CI
+      restores in locked mode, which fails the build outright on any drift
+      from packages.lock.json.
+    -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+</Project>
