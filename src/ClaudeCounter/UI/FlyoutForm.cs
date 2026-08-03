@@ -111,7 +111,7 @@ public sealed class FlyoutForm : Form
 
             if (snapshot.ExtraUsage is { IsEnabled: true } extra)
             {
-                var used = extra.UsedCredits?.ToString("0.##") ?? "?";
+                var used = extra.UsedCredits?.ToString("0.00") ?? "?";
                 var limit = extra.MonthlyLimit?.ToString("0.##") ?? "?";
                 var pct = extra.Utilization is { } u ? $" ({u:0}%)" : "";
                 y = AddLabel($"Extra usage: ${used} / ${limit}{pct}",
