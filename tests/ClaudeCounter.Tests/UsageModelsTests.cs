@@ -78,6 +78,8 @@ public class UsageModelsTests
     [Fact]
     public void ParsesEnabledExtraUsage()
     {
+        // Raw wire shape: monthly_limit/used_credits are still cents here.
+        // UsageJson.Parse (tested below) is what converts them to dollars.
         const string json = """
             {"extra_usage": {"is_enabled": true, "monthly_limit": 50, "used_credits": 12.5, "utilization": 25.0}}
             """;
@@ -86,5 +88,38 @@ public class UsageModelsTests
         Assert.Equal(50m, snapshot.ExtraUsage.MonthlyLimit);
         Assert.Equal(12.5m, snapshot.ExtraUsage.UsedCredits);
         Assert.Equal(25.0, snapshot.ExtraUsage.Utilization);
+    }
+
+    [Fact]
+    public void ParseConvertsExtraUsageCentsToDollars()
+    {
+        // Live bug: a real account that had spent $2.21 of a $95 extra-usage
+        // limit reported monthly_limit: 9500, used_credits: 221 - the tray
+        // showed "$221 / $9500" as a result. The endpoint reports cents.
+        const string json = """
+            {"extra_usage": {"is_enabled": true, "monthly_limit": 9500, "used_credits": 221, "utilization": 2.3}}
+            """;
+        var snapshot = UsageJson.Parse(json)!;
+        Assert.Equal(95m, snapshot.ExtraUsage!.MonthlyLimit);
+        Assert.Equal(2.21m, snapshot.ExtraUsage.UsedCredits);
+        Assert.Equal(2.3, snapshot.ExtraUsage.Utilization);
+    }
+
+    [Fact]
+    public void ParseTreatsNullExtraUsageCreditsAsNull()
+    {
+        const string json = """
+            {"extra_usage": {"is_enabled": false, "monthly_limit": null, "used_credits": null, "utilization": null}}
+            """;
+        var snapshot = UsageJson.Parse(json)!;
+        Assert.Null(snapshot.ExtraUsage!.MonthlyLimit);
+        Assert.Null(snapshot.ExtraUsage.UsedCredits);
+    }
+
+    [Fact]
+    public void ParseToleratesMissingExtraUsage()
+    {
+        var snapshot = UsageJson.Parse("{}");
+        Assert.Null(snapshot!.ExtraUsage);
     }
 }

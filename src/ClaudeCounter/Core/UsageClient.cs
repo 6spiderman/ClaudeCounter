@@ -52,7 +52,7 @@ public sealed class UsageClient : IDisposable
                 return new UsageResult.TransientError($"HTTP {(int)response.StatusCode}");
 
             var json = await response.Content.ReadAsStringAsync(ct);
-            var snapshot = JsonSerializer.Deserialize<UsageSnapshot>(json, UsageJson.Options);
+            var snapshot = UsageJson.Parse(json);
             return snapshot is null
                 ? new UsageResult.TransientError("Empty response body")
                 : new UsageResult.Success(snapshot);
