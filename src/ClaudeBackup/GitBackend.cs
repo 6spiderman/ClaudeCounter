@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using ClaudeCounter.Core;
 
 [assembly: InternalsVisibleTo("ClaudeCounter.Tests")]
@@ -224,34 +223,13 @@ public sealed class GitBackend
         return new BackendResult(false, scrubbed);
     }
 
-    // Matches "<scheme>://<userinfo>@" so a user:token (or bare token)
-    // embedded in a URL can be stripped wherever it appears in free text -
-    // not just a clean remote URL, but also a full sentence of git stderr
-    // like "fatal: unable to access 'https://<token>@github.com/...': ...".
-    // Requiring an explicit "scheme://" prefix is what keeps this from
-    // mangling the SSH shorthand form ("git@github.com:user/repo.git"),
-    // where "git@" is a username, not a credential, and there is no "://" to
-    // match against. The userinfo group deliberately swallows an optional
-    // ":password" segment too (":" is not excluded from the character
-    // class) rather than capturing user and password separately - both are
-    // credential-shaped and neither should ever survive into a log.
-    private static readonly Regex CredentialUrlRegex = new(
-        @"\b(?<scheme>https?|ssh)://[^\s/@]+@",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     /// <summary>
-    /// Strips credential-bearing "user:pass@" / "token@" prefixes out of any
-    /// URL found in <paramref name="text"/>. Safe to call on arbitrary free
-    /// text (git stderr, exception messages) as well as a bare URL; text
-    /// with no matching pattern - including the SSH shorthand form - passes
-    /// through unchanged. Null/empty input returns "" rather than throwing.
-    /// Internal (not private) so it can be tested directly.
+    /// Delegates to the shared <see cref="CredentialScrubber"/> so
+    /// <see cref="RcloneBackend"/> uses the exact same regex instead of a
+    /// second copy that could drift out of sync. Internal (not private) so
+    /// it can be tested directly.
     /// </summary>
-    internal static string ScrubCredentials(string? text)
-    {
-        if (string.IsNullOrEmpty(text)) return text ?? "";
-        return CredentialUrlRegex.Replace(text, m => $"{m.Groups["scheme"].Value}://");
-    }
+    internal static string ScrubCredentials(string? text) => CredentialScrubber.Scrub(text);
 
     /// <summary>
     /// Redacts a configured remote URL before it is ever written to the log
