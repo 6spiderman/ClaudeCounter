@@ -1,4 +1,8 @@
+using ClaudeCounter.Notifications;
+
 namespace ClaudeCounter.Settings;
+
+public enum PopupPlacement { NearTray, Centered }
 
 public sealed class AppSettings
 {
@@ -8,6 +12,17 @@ public sealed class AppSettings
     public int WarnThreshold { get; set; } = 75;
     public int CriticalThreshold { get; set; } = 90;
     public bool AutostartEnabled { get; set; } = true;
+
+    public bool CriticalAlertsEnabled { get; set; } = true;
+    public bool MaxedAlertsEnabled { get; set; } = true;
+    public bool AlertFiveHour { get; set; } = true;
+    public bool AlertSevenDay { get; set; } = true;
+    public bool AlertSevenDayOpus { get; set; }        // default false
+    public bool AlertSevenDaySonnet { get; set; }      // default false
+    public PopupPlacement PopupPlacement { get; set; } = PopupPlacement.NearTray;
+
+    // Persisted alert dedupe state so restarts do not re-pop.
+    public Dictionary<string, WindowAlertState> NotificationState { get; set; } = new();
 
     /// <summary>Ask GitHub once a day whether a newer release exists.</summary>
     public bool CheckForUpdates { get; set; } = true;
