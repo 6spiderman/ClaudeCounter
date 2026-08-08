@@ -39,11 +39,19 @@ public sealed class BackupConfig
 
     public static BackupConfig Default() => new()
     {
+        // plugins/*.json (not plugins/**/*.json): the only irreplaceable
+        // state under plugins/ is the top-level manifests (installed_plugins.json,
+        // known_marketplaces.json, blocklist.json). Everything nested one or
+        // more directories deeper is re-downloadable third-party plugin
+        // content, some of which carries secret-shaped keys (e.g. .mcp.json
+        // "Authorization" fields) that the file-name denylist cannot see
+        // inside. A user who wants the full plugin tree backed up can opt in
+        // explicitly; it should not be a silent default.
         Include = new()
         {
-            "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/**/*.json",
+            "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/*.json",
         },
-        Exclude = new() { "projects/**", "statsig/**", "**/*cache*" },
+        Exclude = new() { "projects/**", "statsig/**", "**/*cache*", "**/cache/**" },
     };
 
     public static BackupConfig Load(string path)

@@ -14,6 +14,22 @@ public class BackupConfigTests
         Assert.Contains("settings.json", c.Include);
     }
 
+    // Fix round 1 / I6, I7: "plugins/**/*.json" pulled in the entire plugin
+    // tree (measured at 144 files on a real machine), most of it
+    // re-downloadable third-party content, some of it carrying secret-shaped
+    // keys the file-name denylist cannot see inside. The default now only
+    // reaches the top-level plugin manifests. "**/*cache*" only matched the
+    // final path segment, so a directory named e.g. "plugins/cache" survived
+    // untouched - "**/cache/**" prunes the whole subtree.
+    [Fact]
+    public void DefaultDoesNotDeepIncludePluginTreeAndPrunesCacheDirectories()
+    {
+        var c = BackupConfig.Default();
+        Assert.Contains("plugins/*.json", c.Include);
+        Assert.DoesNotContain("plugins/**/*.json", c.Include);
+        Assert.Contains("**/cache/**", c.Exclude);
+    }
+
     [Fact]
     public void RoundTripsThroughFile()
     {
