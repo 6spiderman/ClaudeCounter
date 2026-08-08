@@ -134,6 +134,11 @@ begin
     // schtasks exits non-zero when the task does not exist (component was
     // never installed, or backup was never configured) - that is expected
     // and must not block or warn during uninstall, so the result is ignored.
+    // M2: "ClaudeCounter Backup" here must stay in sync with
+    // BackupTaskManager.TaskName in src/ClaudeCounter/Settings/BackupTaskManager.cs -
+    // this .iss script cannot import that C# const, so if the task name ever
+    // changes there, update it here too or every already-installed copy's
+    // scheduled task is orphaned on uninstall.
     Exec('schtasks.exe', '/Delete /F /TN "ClaudeCounter Backup"',
          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
