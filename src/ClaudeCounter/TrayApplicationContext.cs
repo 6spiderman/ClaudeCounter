@@ -1,5 +1,6 @@
 using ClaudeCounter.Core;
 using ClaudeCounter.Core.Auth;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
 
@@ -26,6 +27,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
+    private readonly ThresholdTracker _tracker;
     private readonly PollingService _polling;
     private readonly FlyoutForm _flyout;
     private readonly ToolStripMenuItem _updateItem;
@@ -58,6 +60,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _refresher = new OAuthTokenRefresher(_tokenEndpoint);
         _exchanger = new OAuthCodeExchanger(_tokenEndpoint);
+
+        _tracker = new ThresholdTracker(_settings.NotificationState);
 
         _polling = new PollingService(
             new TokenProvider(_sessionStore, _refresher),
@@ -261,6 +265,33 @@ public sealed class TrayApplicationContext : ApplicationContext
             _updateCheckStarted = true;
             _ = CheckForUpdatesAsync();
         }
+
+        EvaluateAlerts(state);
+    }
+
+    private void EvaluateAlerts(PollState state)
+    {
+        if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
+            return;
+
+        var events = _tracker.Evaluate(snapshot, _settings);
+        if (events.Count == 0)
+            return;
+
+        foreach (var e in events)
+        {
+            var enabled = e.Level == AlertLevel.Maxed
+                ? _settings.MaxedAlertsEnabled
+                : _settings.CriticalAlertsEnabled;
+            if (!enabled)
+                continue;
+            Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+            AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position);
+        }
+
+        // Persist dedupe state whether or not a popup was shown, so a disabled
+        // alert level does not re-fire on every later poll.
+        SaveSettings();
     }
 
     private void UpdateIcon(PollState state)
