@@ -85,7 +85,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add(_signInItem);
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         if (BackupTaskManager.WorkerAvailable())
-            menu.Items.Add("Back up now", null, (_, _) => BackupTaskManager.RunNow());
+            menu.Items.Add("Back up now", null, async (_, _) => await RunBackupNowAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_updateItem);
         menu.Items.Add("Open log folder", null, (_, _) => Shell.ShowLogFolder());
@@ -377,6 +377,23 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private static string ResetSuffix(DateTimeOffset? resetsAt, DateTimeOffset now) =>
         resetsAt is { } at ? $", resets in {TimeText.Countdown(at, now)}" : "";
+
+    /// <summary>
+    /// I1: "Back up now" must surface its result instead of firing the
+    /// worker and forgetting about it - a failing backup previously looked
+    /// exactly like a successful one. Awaiting here does not block the UI
+    /// thread: BackupTaskManager.RunNowAsync awaits WaitForExitAsync, which
+    /// yields back to the message loop while the worker runs.
+    /// </summary>
+    private async Task RunBackupNowAsync()
+    {
+        var exitCode = await BackupTaskManager.RunNowAsync();
+        var message = BackupTaskManager.ResultMessage(exitCode);
+        Log.Info($"Back up now: {message}");
+        _notifyIcon.ShowBalloonTip(
+            4000, "ClaudeCounter Backup", message,
+            exitCode == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
 
     private void ShowSettings()
     {

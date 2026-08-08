@@ -172,4 +172,32 @@ public class BackupTaskManagerTests
         Assert.DoesNotContain("/Create", args);
         Assert.DoesNotContain("/Delete", args);
     }
+
+    // I1: ResultMessage is the pure mapping RunNowAsync's caller uses to
+    // decide what to show the user - exercised directly here since RunNowAsync
+    // itself launches a real process and is not something a unit test should
+    // invoke against a real worker.
+    [Theory]
+    [InlineData(0, "Backup complete.")]
+    [InlineData(1, "Backup not run - check your backup settings.")]
+    [InlineData(2, "Backup failed - see the log.")]
+    public void ResultMessageMapsKnownExitCodes(int exitCode, string expected) =>
+        Assert.Equal(expected, BackupTaskManager.ResultMessage(exitCode));
+
+    [Fact]
+    public void ResultMessageHandlesNullAsCouldNotStart()
+    {
+        var message = BackupTaskManager.ResultMessage(null);
+        Assert.Contains("Could not start", message);
+    }
+
+    // RunNowAsync itself is deliberately not exercised here: this test
+    // project has a ProjectReference to ClaudeBackup.csproj (so
+    // ClaudeCounter.csproj can be referenced without it - see this file's
+    // header - which means ClaudeBackup.exe is copied next to the test host,
+    // and WorkerPath() (a plain File.Exists check beside the running exe)
+    // finds it. Calling RunNowAsync from a unit test would therefore launch
+    // the REAL worker against this machine's real backup.json - exactly the
+    // kind of real-process invocation this project's tests must not do.
+    // ResultMessage above is RunNowAsync's entire pure, testable surface.
 }

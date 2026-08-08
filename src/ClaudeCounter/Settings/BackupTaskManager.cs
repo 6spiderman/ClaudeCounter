@@ -21,6 +21,12 @@ namespace ClaudeCounter.Settings;
 /// </summary>
 public static class BackupTaskManager
 {
+    // M2: also hardcoded, separately, in packaging/inno/ClaudeCounter.iss's
+    // CurUninstallStepChanged (the uninstaller cannot import a C# const) -
+    // keep both in sync. Renaming this without updating the .iss would
+    // orphan the scheduled task of every already-installed copy: uninstall
+    // would delete a task by the OLD name while this const would only ever
+    // register the NEW one.
     public const string TaskName = "ClaudeCounter Backup";
 
     /// <summary>
@@ -38,20 +44,49 @@ public static class BackupTaskManager
     /// <summary>True when the backup worker is installed and the feature should be shown.</summary>
     public static bool WorkerAvailable() => WorkerPath() is not null;
 
-    /// <summary>Launches the worker as a detached child process with no console window.</summary>
-    public static void RunNow()
+    /// <summary>
+    /// Launches the worker and asynchronously waits for it to exit, off the
+    /// UI thread (the `await` yields back to the message loop while the
+    /// process runs, so this is safe to call directly from a button/menu
+    /// click handler without freezing the UI). Returns the worker's exit code
+    /// (0/1/2 - see BackupRunner's doc comment), or null if the worker could
+    /// not be started at all (not installed, or Process.Start/launch threw).
+    /// Previously this was fire-and-forget: the exit code the worker was
+    /// built around was never read, so a failing "back up now" looked
+    /// identical to a successful one. Pair with <see cref="ResultMessage"/>
+    /// to turn the result into UI text.
+    /// </summary>
+    public static async Task<int?> RunNowAsync()
     {
         if (WorkerPath() is not { } path)
-            return;
+            return null;
         try
         {
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true });
+            using var process = Process.Start(
+                new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true });
+            if (process is null)
+                return null;
+            await process.WaitForExitAsync().ConfigureAwait(true);
+            return process.ExitCode;
         }
         catch (Exception e)
         {
             Log.Warn($"Could not launch the backup worker: {e.Message}");
+            return null;
         }
     }
+
+    /// <summary>
+    /// Maps a <see cref="RunNowAsync"/> result to the text a "back up now"
+    /// caller should show the user. Pure and unit-testable - performs no I/O.
+    /// </summary>
+    public static string ResultMessage(int? exitCode) => exitCode switch
+    {
+        0 => "Backup complete.",
+        1 => "Backup not run - check your backup settings.",
+        2 => "Backup failed - see the log.",
+        _ => "Could not start the backup worker. See the log for details.",
+    };
 
     /// <summary>
     /// Builds the schtasks.exe command-line argument string for registering
@@ -157,8 +192,22 @@ public static class BackupTaskManager
                 RedirectStandardError = true,
             };
             using var p = Process.Start(psi);
-            p?.WaitForExit();
-            return p is null ? null : p.ExitCode == 0;
+            if (p is null)
+                return null;
+            // M1: both streams are redirected, so reading one to completion
+            // synchronously before waiting risks the classic pipe-buffer
+            // deadlock - if schtasks fills the OTHER stream's OS pipe buffer
+            // while this process is blocked reading the first one (or
+            // blocked in WaitForExit with neither stream being drained),
+            // both sides stall forever. Starting async reads for both before
+            // WaitForExit keeps both pipes drained regardless of how much
+            // each stream produces or in what order.
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            p.WaitForExit();
+            stdoutTask.Wait();
+            stderrTask.Wait();
+            return p.ExitCode == 0;
         }
         catch (Exception e)
         {
@@ -179,12 +228,21 @@ public static class BackupTaskManager
                 RedirectStandardError = true,
             };
             using var p = Process.Start(psi);
-            p?.WaitForExit();
             if (p is null)
                 return false;
+            // M1: same reasoning as QueryTaskExists above - read both
+            // redirected streams asynchronously, started before WaitForExit,
+            // rather than blocking on ReadToEnd after the process has
+            // already exited (too late to prevent a deadlock if it never
+            // exits because a full pipe buffer is blocking it).
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
+            p.WaitForExit();
+            stdoutTask.Wait();
+            var stderr = stderrTask.Result;
             if (p.ExitCode != 0)
             {
-                Log.Warn($"schtasks exited {p.ExitCode}: {p.StandardError.ReadToEnd().Trim()}");
+                Log.Warn($"schtasks exited {p.ExitCode}: {stderr.Trim()}");
                 return false;
             }
             return true;

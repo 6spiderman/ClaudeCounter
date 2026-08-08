@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using ClaudeBackup;
 using ClaudeCounter.Settings;
 
@@ -227,6 +228,21 @@ public sealed class SettingsForm : Form
         layout.SetColumnSpan(_backupGithubUrl, 2);
         row++;
 
+        // I2: the security model's non-negotiable guardrail - ClaudeCounter
+        // has no way to call the GitHub API and check a repo's visibility, so
+        // it cannot enforce privacy. The one thing it can do is make sure the
+        // user is not left assuming it was checked for them.
+        var privacyCaption = new Label
+        {
+            Text = "This repo must be private. ClaudeCounter cannot verify that automatically.",
+            AutoSize = true,
+            MaximumSize = new Size(320, 0),
+            ForeColor = SystemColors.GrayText,
+        };
+        layout.Controls.Add(privacyCaption, 0, row);
+        layout.SetColumnSpan(privacyCaption, 2);
+        row++;
+
         layout.Controls.Add(new Label { Text = "Branch", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
         _backupGithubBranch = new TextBox { Text = config.Github.Branch, Width = 130, Anchor = AnchorStyles.Left };
         layout.Controls.Add(_backupGithubBranch, 1, row);
@@ -305,7 +321,7 @@ public sealed class SettingsForm : Form
             Dock = DockStyle.Fill,
         };
         var runNowButton = new Button { Text = "Back up now", AutoSize = true };
-        runNowButton.Click += (_, _) => BackupTaskManager.RunNow();
+        runNowButton.Click += async (_, _) => await RunBackupNowAsync();
         var saveScheduleButton = new Button { Text = "Save and register schedule", AutoSize = true };
         saveScheduleButton.Click += OnSaveBackupSchedule;
         backupButtons.Controls.Add(runNowButton);
@@ -315,6 +331,20 @@ public sealed class SettingsForm : Form
         row++;
 
         return row;
+    }
+
+    /// <summary>
+    /// I1: report the worker's actual exit code instead of firing it and
+    /// forgetting - a failing backup previously looked identical to a
+    /// successful one. Awaiting does not block the UI thread: RunNowAsync
+    /// awaits WaitForExitAsync, which yields back to the message loop.
+    /// </summary>
+    private async Task RunBackupNowAsync()
+    {
+        var exitCode = await BackupTaskManager.RunNowAsync();
+        var message = BackupTaskManager.ResultMessage(exitCode);
+        MessageBox.Show(this, message, "ClaudeCounter", MessageBoxButtons.OK,
+            exitCode == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
     private void OnSaveBackupSchedule(object? sender, EventArgs e)
@@ -327,12 +357,33 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        var remoteUrl = _backupGithubUrl!.Text.Trim();
+        if (HasEmbeddedCredential(remoteUrl))
+        {
+            MessageBox.Show(this,
+                "Remote URL must not embed a credential (e.g. https://user:token@host/...). " +
+                "backup.json is never allowed to contain a secret - set up Git Credential " +
+                "Manager (or an SSH key) for this remote instead.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var rcloneRemote = _backupDriveRemote!.Text.Trim();
+        if (HasLeadingDash(rcloneRemote))
+        {
+            MessageBox.Show(this,
+                "Rclone remote must not start with '-' - rclone would parse it as an option " +
+                "rather than a remote name.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         var config = BackupConfig.Load(BackupConfig.DefaultPath());
         config.Github.Enabled = _backupGithubEnabled!.Checked;
-        config.Github.RemoteUrl = _backupGithubUrl!.Text.Trim();
+        config.Github.RemoteUrl = remoteUrl;
         config.Github.Branch = _backupGithubBranch!.Text.Trim();
         config.Drive.Enabled = _backupDriveEnabled!.Checked;
-        config.Drive.RcloneRemote = _backupDriveRemote!.Text.Trim();
+        config.Drive.RcloneRemote = rcloneRemote;
         config.Include = SplitLines(_backupInclude!.Text);
         config.Exclude = SplitLines(_backupExclude!.Text);
         config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
@@ -372,6 +423,36 @@ public sealed class SettingsForm : Form
 
     private static List<string> SplitLines(string text) =>
         text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    // I3: matches a URL scheme followed by a userinfo component
+    // (scheme://user[:pass]@...) - the shape a credential-bearing HTTPS
+    // remote takes (e.g. "https://ghp_xxx@github.com/org/repo.git"). Does NOT
+    // match the SSH shorthand form ("git@github.com:org/repo.git"): that has
+    // no "scheme://" prefix at all, and the "git@" there is a fixed username,
+    // not a secret. Public static (not requiring a Form instance) so it is
+    // directly unit-testable per the project's rule against constructing a
+    // Form in a test.
+    private static readonly Regex EmbeddedCredentialPattern =
+        new(@"^[a-z][a-z0-9+.\-]*://[^/@]*@", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>
+    /// True when <paramref name="url"/> carries a userinfo component that
+    /// would put a credential into backup.json in plain text - the project's
+    /// hard constraint is that no secret is ever written there. The fix for
+    /// a user who needs authentication is Git Credential Manager or an SSH
+    /// key, not embedding a token in the remote URL.
+    /// </summary>
+    public static bool HasEmbeddedCredential(string? url) =>
+        !string.IsNullOrEmpty(url) && EmbeddedCredentialPattern.IsMatch(url);
+
+    /// <summary>
+    /// True when <paramref name="remote"/> starts with '-'. An rclone remote
+    /// spec passed on the command line as a bare positional argument is
+    /// parsed as an option if it starts with a dash - ArgumentList prevents
+    /// shell injection but not this, so it is rejected in the UI instead.
+    /// </summary>
+    public static bool HasLeadingDash(string? remote) =>
+        !string.IsNullOrEmpty(remote) && remote.StartsWith('-');
 
     protected override void OnShown(EventArgs e)
     {
