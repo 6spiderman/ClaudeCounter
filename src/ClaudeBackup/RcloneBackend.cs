@@ -16,8 +16,10 @@ namespace ClaudeBackup;
 /// zip is a plaintext copy of the user's Claude config sitting on disk. That
 /// delete can itself fail (an AV scanner or an indexer holding a handle on a
 /// just-written file is a real, not hypothetical, failure mode) - when it
-/// does, the failure is logged loudly rather than swallowed, and the next
-/// call to Run sweeps any such leftover away before writing a new one.
+/// does, the failure is logged loudly rather than swallowed. The next call
+/// to Run also sweeps any zip left behind by such a failure, but only ones
+/// old enough and unlocked enough to be confidently NOT a concurrently
+/// running instance's own in-flight archive - see <see cref="SweepStaleZips"/>.
 /// Every string that can reach a log line, an exception message, or a
 /// <see cref="BackendResult.Message"/> is funneled through <see cref="Fail"/>,
 /// which scrubs credential-bearing URL fragments via the shared
@@ -147,33 +149,81 @@ public sealed class RcloneBackend
     }
 
     /// <summary>
+    /// How old a <c>claude-backup-*.zip</c> must be, by <see cref="File.GetLastWriteTimeUtc(string)"/>,
+    /// before <see cref="SweepStaleZips"/> will even consider deleting it.
+    /// Deliberately generous: this class's zip file names now carry a GUID
+    /// (see <see cref="Run"/>), which means a naive "delete anything
+    /// matching the pattern" sweep would just as happily delete a
+    /// CONCURRENTLY RUNNING instance's own in-flight archive - e.g. a
+    /// scheduled run racing a tray "back up now" button - as a genuinely
+    /// abandoned one. A real backup run finishes in seconds to at most a few
+    /// minutes, so anything still there a full day later cannot plausibly
+    /// belong to a live run; anything younger is left alone even if it
+    /// really is stale, because the cost of leaving it an extra sweep cycle
+    /// is nothing (the owning run's own <see cref="DeleteZip"/> handles the
+    /// common case) while the cost of guessing wrong is deleting bytes out
+    /// from under an active upload.
+    /// </summary>
+    private static readonly TimeSpan StaleZipAge = TimeSpan.FromHours(24);
+
+    /// <summary>
     /// Best-effort cleanup of any zip left behind by a previous run whose
     /// own delete failed (see <see cref="DeleteZip"/>). Runs at the start of
     /// every <see cref="Run"/> call rather than relying on any external
     /// sweep, since nothing else in this tool ever revisits <c>tempDir</c>.
-    /// A failure to sweep is logged and otherwise ignored - it must never
-    /// block the current run's own backup from proceeding.
+    /// Conservative on two independent axes so it cannot become the cross-
+    /// run deletion hazard it is meant to clean up after: an age gate (see
+    /// <see cref="StaleZipAge"/>) skips anything that could plausibly belong
+    /// to a still-running instance, and a per-file lock check skips
+    /// anything still open (whether or not it is old enough) instead of
+    /// letting one locked file abort the whole sweep. A failure anywhere in
+    /// here - enumerating the directory, stat'ing a file, an unexpected
+    /// exception from a single delete - is logged at Warn and swallowed: a
+    /// housekeeping step must never take down a backup.
     /// </summary>
     private void SweepStaleZips()
     {
         try
         {
-            foreach (var stale in Directory.EnumerateFiles(_tempDir, "claude-backup-*.zip"))
+            var cutoffUtc = DateTime.UtcNow - StaleZipAge;
+            var removed = 0;
+
+            foreach (var candidate in Directory.EnumerateFiles(_tempDir, "claude-backup-*.zip"))
             {
                 try
                 {
-                    File.Delete(stale);
-                    Log.Warn($"RcloneBackend: swept stale temp zip left over from a previous run: '{stale}'.");
+                    // Too young to safely assume this is not a concurrently
+                    // running instance's own in-flight zip - leave it; the
+                    // owning run's own finally block is responsible for it.
+                    if (File.GetLastWriteTimeUtc(candidate) > cutoffUtc)
+                        continue;
+
+                    File.Delete(candidate);
+                    removed++;
                 }
-                catch (Exception ex)
+                catch (IOException)
                 {
-                    Log.Warn($"RcloneBackend: failed to sweep stale temp zip '{stale}': {ex.Message}");
+                    // Still locked (most plausibly a live run's own zip that
+                    // happens to be old enough to pass the age gate, or an
+                    // AV scanner/indexer) - skip it quietly rather than
+                    // treating a normal race as an error worth logging.
                 }
+                catch (UnauthorizedAccessException)
+                {
+                    // Same reasoning as the IOException case above.
+                }
+            }
+
+            if (removed > 0)
+            {
+                Log.Info(
+                    $"RcloneBackend: swept {removed} stale temp zip(s) older than " +
+                    $"{StaleZipAge.TotalHours:0} hour(s) from '{_tempDir}'.");
             }
         }
         catch (Exception ex)
         {
-            Log.Warn($"RcloneBackend: failed to enumerate '{_tempDir}' for stale-zip sweep: {ex.Message}");
+            Log.Warn($"RcloneBackend: failed to sweep stale temp zips in '{_tempDir}': {ex.Message}");
         }
     }
 

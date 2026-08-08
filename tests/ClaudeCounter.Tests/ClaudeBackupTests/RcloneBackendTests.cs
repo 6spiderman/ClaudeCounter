@@ -214,15 +214,18 @@ public class RcloneBackendTests : IDisposable
         Assert.Single(runner.ZipEntriesAtCopyTime!, e => e == "settings.json");
     }
 
-    // I-2: a zip left behind by a previous run (its own delete having
-    // failed) must not linger forever - the next Run call sweeps it away
-    // before writing a new one.
+    // I-2 (fix round 2): a zip left behind by a previous run (its own delete
+    // having failed) must not linger forever - but only once it is old
+    // enough that it cannot plausibly belong to a still-running instance.
+    // LastWriteTimeUtc is set explicitly, back beyond the 24-hour age gate,
+    // rather than relying on wall-clock timing to make the file "old".
     [Fact]
-    public void SweepsStaleZipFromPreviousRunBeforeWritingNewOne()
+    public void SweepsGenuinelyOldStaleZipFromPreviousRun()
     {
         Directory.CreateDirectory(_tmp);
         var stale = Path.Combine(_tmp, "claude-backup-20200101-000000-deadbeefdeadbeefdeadbeefdeadbeef.zip");
         File.WriteAllText(stale, "leftover plaintext from a previous run");
+        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow - TimeSpan.FromHours(25));
 
         var runner = new FakeRunner();
         var result = new RcloneBackend(runner, _tmp)
@@ -231,6 +234,41 @@ public class RcloneBackendTests : IDisposable
         Assert.True(result.Ok);
         Assert.False(File.Exists(stale));
         Assert.Empty(Directory.GetFiles(_tmp));
+    }
+
+    // The other half of the same fix: the age gate exists specifically
+    // because the zip file name now carries a GUID (M-1), which means a
+    // naive "delete anything matching the pattern" sweep would just as
+    // happily delete a CONCURRENTLY RUNNING instance's own in-flight
+    // archive - e.g. a scheduled run racing a tray "back up now" - as a
+    // genuinely abandoned one. A zip younger than the threshold must survive
+    // the sweep even though it matches the glob, while the current run's
+    // own zip is still cleaned up normally.
+    [Fact]
+    public void RecentZipMatchingThePatternSurvivesTheSweep()
+    {
+        Directory.CreateDirectory(_tmp);
+        var recent = Path.Combine(_tmp, "claude-backup-20990101-000000-cafebabecafebabecafebabecafebabe.zip");
+        File.WriteAllText(recent, "plausibly a concurrently running instance's own zip");
+        // No explicit SetLastWriteTimeUtc: File.WriteAllText just now leaves
+        // it at "now", well inside the 24-hour age gate.
+
+        try
+        {
+            var runner = new FakeRunner();
+            var result = new RcloneBackend(runner, _tmp)
+                .Run(_root, new[] { "settings.json" }, new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+            Assert.True(result.Ok);
+            Assert.True(File.Exists(recent));
+            // The run's own zip was still cleaned up normally - the recent
+            // file is the ONLY thing left in the temp dir.
+            Assert.Equal(new[] { recent }, Directory.GetFiles(_tmp));
+        }
+        finally
+        {
+            if (File.Exists(recent)) File.Delete(recent);
+        }
     }
 
     // M-1: two zips created in the same wall-clock second (e.g. a scheduled
