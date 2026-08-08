@@ -1247,6 +1247,15 @@ public static class BackupTaskManager
 
 Then `dotnet restore ClaudeCounter.sln` (updates the tray lock file). This makes the tray depend on the worker's config types but NOT run it in-process.
 
+> **This reference is only safe because `Log` now lives in `src/ClaudeCounter.Shared`.** An earlier
+> revision of this plan had `ClaudeBackup` link `Core/Log.cs` via `<Compile Include>`, which
+> compiled a second copy of `ClaudeCounter.Core.Log` into `ClaudeBackup.dll`. With that in place,
+> this unaliased reference produces `CS0433` in the production tray build, because 12 files in
+> `src/ClaudeCounter` resolve `Log` unqualified through `using ClaudeCounter.Core;`. It also gave
+> each copy its own `static` lock and append cursor over the same log file. Both projects now
+> reference the shared project instead, so the type exists exactly once. Do not reintroduce a
+> linked `Compile Include` for shared source.
+
 - [ ] **Step 5: Backup tab in SettingsForm + "Back up now" menu**
 
 - In `SettingsForm`, only build the Backup controls when `BackupTaskManager.WorkerAvailable()`. Add inputs for: GitHub enabled + remote URL + branch; Drive enabled + rclone remote; include/exclude multiline textboxes (newline-separated); frequency combo + time; a "Save & register schedule" button that writes `BackupConfig` to `BackupConfig.DefaultPath()` and calls `BackupTaskManager.Register(schedule)`; a "Back up now" button calling `BackupTaskManager.RunNow()`. Load current values from `BackupConfig.Load(BackupConfig.DefaultPath())`.

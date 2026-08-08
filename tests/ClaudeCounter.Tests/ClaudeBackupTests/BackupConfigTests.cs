@@ -1,6 +1,5 @@
-// tests/ClaudeCounter.Tests/backup/BackupConfigTests.cs
-extern alias ClaudeBackupLib;
-using BackupConfig = ClaudeBackupLib::ClaudeBackup.BackupConfig;
+// tests/ClaudeCounter.Tests/ClaudeBackupTests/BackupConfigTests.cs
+using ClaudeBackup;
 using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;

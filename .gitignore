@@ -262,9 +262,6 @@ Generated_Code/
 # because we have git ;-)
 _UpgradeReport_Files/
 Backup*/
-# Not a VS upgrade backup folder - this is the ClaudeBackup test namespace.
-!tests/ClaudeCounter.Tests/backup/
-!tests/ClaudeCounter.Tests/backup/**
 UpgradeLog*.XML
 UpgradeLog*.htm
 ServiceFabricBackup/

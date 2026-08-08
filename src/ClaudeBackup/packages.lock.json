@@ -1,6 +1,16 @@
 {
   "version": 1,
   "dependencies": {
-    "net8.0": {}
+    "net8.0": {
+      "claudecounter.core": {
+        "type": "Project"
+      },
+      "claudecounter.shared": {
+        "type": "Project",
+        "dependencies": {
+          "ClaudeCounter.Core": "[0.0.0-dev, )"
+        }
+      }
+    }
   }
 }

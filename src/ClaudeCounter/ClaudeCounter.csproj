@@ -45,6 +45,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+    <ProjectReference Include="..\ClaudeCounter.Shared\ClaudeCounter.Shared.csproj" />
   </ItemGroup>
 
 </Project>

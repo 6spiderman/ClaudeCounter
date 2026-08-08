@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeCounter.Shared</AssemblyName>
+    <RootNamespace>ClaudeCounter.Core</RootNamespace>
+    <AssemblyTitle>ClaudeCounter.Shared</AssemblyTitle>
+    <Product>ClaudeCounter</Product>
+    <Description>Code shared between the ClaudeCounter tray app and the ClaudeBackup worker</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ClaudeCounter.Core owns the single ClaudeCounter.Core.Log type. -->
+    <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+  </ItemGroup>
+
+</Project>

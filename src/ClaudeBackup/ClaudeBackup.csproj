@@ -14,8 +14,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Share the tray app's logger without a WinForms dependency. -->
-    <Compile Include="..\ClaudeCounter\Core\Log.cs" Link="Core\Log.cs" />
+    <!-- Shares ClaudeCounter.Core.Log with the tray app without a WinForms dependency. -->
+    <ProjectReference Include="..\ClaudeCounter.Shared\ClaudeCounter.Shared.csproj" />
   </ItemGroup>
 
 </Project>
