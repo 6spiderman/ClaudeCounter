@@ -121,19 +121,42 @@ public class FileSelectorTests : IDisposable
 
     // Companion to the above: a pattern that DOES end in "**" (so it truly
     // implies every descendant also matches) must still prune the whole
-    // subtree, and do so without even visiting files under it.
+    // subtree. "**/cache/**" also matches "plugins/cache/blob.json" directly
+    // at the per-file exclude step, so DoesNotContain alone cannot tell
+    // "pruned before enumeration" apart from "filtered per file" - both
+    // mechanisms would pass that assertion. The Log.Info hook FileSelector
+    // emits on every prune is what actually distinguishes them: it only
+    // fires from the directory-pruning path, so asserting on it proves the
+    // subtree was skipped wholesale rather than merely filtered file by file.
     [Fact]
-    public void CacheDirectoryGlobstarPatternStillPrunesWholeSubtree()
+    public void CacheDirectoryGlobstarPatternPrunesBeforeEnumeratingNotJustPerFile()
     {
         Directory.CreateDirectory(Path.Combine(_root, "plugins", "cache"));
         File.WriteAllText(Path.Combine(_root, "plugins", "cache", "blob.json"), "x");
         File.WriteAllText(Path.Combine(_root, "plugins", "keep.json"), "{}");
 
+        var before = ReadLog().Length;
         var sel = new FileSelector();
         var result = sel.Select(_root, new[] { "plugins/**" }, new[] { "**/cache/**" });
+        var written = ReadLog()[before..];
 
         Assert.Contains("plugins/keep.json", result);
         Assert.DoesNotContain("plugins/cache/blob.json", result);
+        Assert.Contains("pruning directory 'plugins/cache'", written);
+        Assert.Contains("**/cache/**", written);
+    }
+
+    private static string ReadLog()
+    {
+        if (Log.FilePath is not { } path || !File.Exists(path))
+            return string.Empty;
+
+        // Opened share-all: the logger may be touched by other tests running
+        // in parallel (see Auth/SecretLeakTests.cs for the same pattern).
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     // C2 (Fix round 1): "?" must behave as a glob single-character wildcard,
