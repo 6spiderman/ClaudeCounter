@@ -9,6 +9,13 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _criticalInput;
     private readonly CheckBox _autostartCheck;
     private readonly CheckBox _updateCheck;
+    private readonly CheckBox _criticalAlerts;
+    private readonly CheckBox _maxedAlerts;
+    private readonly CheckBox _alertFiveHour;
+    private readonly CheckBox _alertSevenDay;
+    private readonly CheckBox _alertOpus;
+    private readonly CheckBox _alertSonnet;
+    private readonly ComboBox _placement;
 
     public SettingsForm(AppSettings current)
     {
@@ -17,7 +24,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(360, 250);
+        ClientSize = new Size(360, 470);
         Font = new Font("Segoe UI", 9f);
         ShowInTaskbar = true;
         Icon = Shell.AppIcon();
@@ -26,7 +33,7 @@ public sealed class SettingsForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 7,
+            RowCount = 13,
             Padding = new Padding(12),
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -70,6 +77,52 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_updateCheck, 0, 5);
         layout.SetColumnSpan(_updateCheck, 2);
 
+        var alertsHeader = new Label
+        {
+            Text = "Alerts",
+            AutoSize = true,
+            Font = new Font(Font, FontStyle.Bold),
+        };
+        layout.Controls.Add(alertsHeader, 0, 6);
+        layout.SetColumnSpan(alertsHeader, 2);
+
+        _criticalAlerts = new CheckBox
+        {
+            Text = "Popup when a window hits the critical threshold",
+            AutoSize = true,
+            Checked = current.CriticalAlertsEnabled,
+        };
+        layout.Controls.Add(_criticalAlerts, 0, 7);
+        layout.SetColumnSpan(_criticalAlerts, 2);
+
+        _maxedAlerts = new CheckBox
+        {
+            Text = "Popup when a window hits 100%",
+            AutoSize = true,
+            Checked = current.MaxedAlertsEnabled,
+        };
+        layout.Controls.Add(_maxedAlerts, 0, 8);
+        layout.SetColumnSpan(_maxedAlerts, 2);
+
+        _alertFiveHour = new CheckBox { Text = "5-hour session", AutoSize = true, Checked = current.AlertFiveHour };
+        layout.Controls.Add(_alertFiveHour, 0, 9);
+
+        _alertSevenDay = new CheckBox { Text = "Weekly (all models)", AutoSize = true, Checked = current.AlertSevenDay };
+        layout.Controls.Add(_alertSevenDay, 1, 9);
+
+        _alertOpus = new CheckBox { Text = "Weekly (Opus)", AutoSize = true, Checked = current.AlertSevenDayOpus };
+        layout.Controls.Add(_alertOpus, 0, 10);
+
+        _alertSonnet = new CheckBox { Text = "Weekly (Sonnet)", AutoSize = true, Checked = current.AlertSevenDaySonnet };
+        layout.Controls.Add(_alertSonnet, 1, 10);
+
+        layout.Controls.Add(new Label { Text = "Popup placement", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 11);
+        _placement = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+        _placement.Items.Add("Near tray");
+        _placement.Items.Add("Centered");
+        _placement.SelectedIndex = current.PopupPlacement == PopupPlacement.Centered ? 1 : 0;
+        layout.Controls.Add(_placement, 1, 11);
+
         var buttons = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
@@ -80,7 +133,7 @@ public sealed class SettingsForm : Form
         okButton.Click += OnOk;
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(okButton);
-        layout.Controls.Add(buttons, 0, 6);
+        layout.Controls.Add(buttons, 0, 12);
         layout.SetColumnSpan(buttons, 2);
 
         Controls.Add(layout);
@@ -116,5 +169,13 @@ public sealed class SettingsForm : Form
         settings.CriticalThreshold = (int)_criticalInput.Value;
         settings.AutostartEnabled = _autostartCheck.Checked;
         settings.CheckForUpdates = _updateCheck.Checked;
+        settings.CriticalAlertsEnabled = _criticalAlerts.Checked;
+        settings.MaxedAlertsEnabled = _maxedAlerts.Checked;
+        settings.AlertFiveHour = _alertFiveHour.Checked;
+        settings.AlertSevenDay = _alertSevenDay.Checked;
+        settings.AlertSevenDayOpus = _alertOpus.Checked;
+        settings.AlertSevenDaySonnet = _alertSonnet.Checked;
+        settings.PopupPlacement = _placement.SelectedIndex == 1
+            ? PopupPlacement.Centered : PopupPlacement.NearTray;
     }
 }
