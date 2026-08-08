@@ -51,7 +51,13 @@ public sealed class BackupConfig
         {
             "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/*.json",
         },
-        Exclude = new() { "projects/**", "statsig/**", "**/*cache*", "**/cache/**" },
+        // "**/*cache*" only ever constrains a file's own name (it does not
+        // end in "**", so FileSelector will not prune a whole directory on
+        // its account) and was measured to remove almost nothing on a real
+        // machine, so it is gone entirely rather than left as dead weight -
+        // "**/cache/**" is the pattern that actually prunes a cache
+        // directory's contents.
+        Exclude = new() { "projects/**", "statsig/**", "**/cache/**" },
     };
 
     public static BackupConfig Load(string path)

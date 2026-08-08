@@ -25,6 +25,10 @@ public static class SecretDenylist
         ".credentials.json", "session.dat",
         ".env", ".netrc", "_netrc", ".npmrc", ".git-credentials", ".pgpass",
         "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+        // known_hosts is host-inventory recon (public host keys), not key
+        // material - but nothing in a Claude config backup legitimately
+        // needs it, and flagging it costs one string with no false-drop risk.
+        "known_hosts",
     };
 
     private static readonly string[] Substrings =

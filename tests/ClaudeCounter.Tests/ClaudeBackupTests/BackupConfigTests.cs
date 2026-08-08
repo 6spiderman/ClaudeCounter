@@ -21,6 +21,15 @@ public class BackupConfigTests
     // reaches the top-level plugin manifests. "**/*cache*" only matched the
     // final path segment, so a directory named e.g. "plugins/cache" survived
     // untouched - "**/cache/**" prunes the whole subtree.
+    //
+    // Fix round 2: "**/*cache*" was dropped entirely rather than kept
+    // alongside "**/cache/**". FileSelector now only prunes a directory
+    // wholesale for an exclude pattern that ends in literal "**" (see its
+    // doc comment) - "**/*cache*" does not end in "**", so it was never
+    // eligible to prune directories, only to match individual file names,
+    // and it was already measured to remove almost nothing that way. Keeping
+    // it as a shipped default was dead weight with a subtly misleading name
+    // ("looks like it prunes cache dirs, does not").
     [Fact]
     public void DefaultDoesNotDeepIncludePluginTreeAndPrunesCacheDirectories()
     {
@@ -28,6 +37,7 @@ public class BackupConfigTests
         Assert.Contains("plugins/*.json", c.Include);
         Assert.DoesNotContain("plugins/**/*.json", c.Include);
         Assert.Contains("**/cache/**", c.Exclude);
+        Assert.DoesNotContain("**/*cache*", c.Exclude);
     }
 
     [Fact]

@@ -17,10 +17,21 @@ namespace ClaudeBackup;
 /// so it can refuse to follow reparse points (symlinks/junctions) - those can
 /// point outside <c>root</c>, and a per-file FileInfo.ResolveLinkTarget check
 /// is not enough because a file *inside* a linked directory is not itself a
-/// link. A directory whose own path matches an exclude pattern is pruned
-/// before its contents are enumerated, both for performance (a large excluded
-/// subtree like "projects/**" is never walked) and so an unreadable directory
-/// under it cannot abort the whole selection.
+/// link. This is the actual containment mechanism: a directory that is a
+/// reparse point is simply never entered, so nothing under it is ever
+/// visited. (A same-volume NTFS *hard link* to a file outside root is not a
+/// reparse point and is not caught by this - closing that would need a
+/// file-ID/volume check, which is out of scope here; call this containment
+/// against symlinks/junctions specifically, not an absolute guarantee.)
+///
+/// A directory is pruned (its contents never enumerated) only when an
+/// exclude pattern that ends in literal "**" matches the directory's own
+/// relative path - that suffix is what guarantees every possible descendant
+/// also matches the same pattern, so pruning cannot silently drop a file the
+/// pattern would not otherwise have excluded. A pattern that does not end in
+/// "**" (e.g. "**/*cache*", which only constrains a file's own name) is left
+/// to per-file matching instead. Every prune is logged so a future mistake
+/// in this reasoning is observable rather than silent data loss.
 /// </summary>
 public sealed class FileSelector
 {
@@ -47,8 +58,8 @@ public sealed class FileSelector
     {
         withheldBySecretDenylist = new List<string>();
 
-        var includePatterns = include.Select(ToRegex).ToList();
-        var excludePatterns = exclude.Select(ToRegex).ToList();
+        var includePatterns = include.Select(Compile).ToList();
+        var excludePatterns = exclude.Select(Compile).ToList();
 
         if (includePatterns.Count == 0 || !Directory.Exists(root))
             return Array.Empty<string>();
@@ -86,8 +97,11 @@ public sealed class FileSelector
                     continue;
 
                 var subRel = ToRelative(realRoot, sub);
-                if (excludePatterns.Any(p => SafeIsMatch(p, subRel, timeoutMeansMatch: true)))
-                    continue; // pruned: nothing under an excluded directory can be selected
+                if (TryFindPruningExclude(excludePatterns, subRel, out var matchedGlob))
+                {
+                    Log.Info($"FileSelector: pruning directory '{subRel}' (matched exclude pattern '{matchedGlob}').");
+                    continue;
+                }
 
                 stack.Push(sub);
             }
@@ -99,16 +113,18 @@ public sealed class FileSelector
 
                 var full = Path.GetFullPath(file);
 
-                // Defense in depth: even though reparse points are already
-                // skipped above, refuse anything that resolves outside root.
+                // Cheap backstop, not the primary defense: containment is
+                // actually enforced by never entering a reparse-point
+                // directory above. This just refuses anything that somehow
+                // resolved outside root anyway.
                 if (!full.StartsWith(realRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 var rel = ToRelative(realRoot, full);
 
-                if (!includePatterns.Any(p => SafeIsMatch(p, rel, timeoutMeansMatch: false)))
+                if (!includePatterns.Any(p => SafeIsMatch(p.Regex, rel, timeoutMeansMatch: false)))
                     continue;
-                if (excludePatterns.Any(p => SafeIsMatch(p, rel, timeoutMeansMatch: true)))
+                if (excludePatterns.Any(p => SafeIsMatch(p.Regex, rel, timeoutMeansMatch: true)))
                     continue;
 
                 if (SecretDenylist.IsSecret(rel))
@@ -124,6 +140,33 @@ public sealed class FileSelector
         results.Sort(StringComparer.Ordinal);
         withheldBySecretDenylist.Sort(StringComparer.Ordinal);
         return results;
+    }
+
+    /// <summary>
+    /// A directory can only be pruned wholesale by an exclude pattern whose
+    /// text ends in literal "**" - that is exactly the shape that guarantees
+    /// every descendant also matches the pattern. "**/*cache*" ends in
+    /// "cache*", not "**": it constrains a file's own name, so a directory
+    /// whose name merely contains "cache" (e.g. "cache-helpers") must NOT be
+    /// pruned by it - files under it that do not themselves match get kept,
+    /// exactly as round-0's flat enumeration did.
+    /// </summary>
+    private static bool TryFindPruningExclude(
+        List<CompiledPattern> excludePatterns, string subRel, out string matchedGlob)
+    {
+        foreach (var p in excludePatterns)
+        {
+            if (!p.Glob.EndsWith("**", StringComparison.Ordinal))
+                continue;
+            if (SafeIsMatch(p.Regex, subRel, timeoutMeansMatch: true))
+            {
+                matchedGlob = p.Glob;
+                return true;
+            }
+        }
+
+        matchedGlob = "";
+        return false;
     }
 
     private static string ToRelative(string root, string fullPath) =>
@@ -169,9 +212,20 @@ public sealed class FileSelector
     // a single-character "?", or any other regex-meaningful character that
     // needs escaping. Ordering the alternation this way means the
     // multi-character globstar forms are consumed whole before the
-    // single-"*"/"?" cases ever get a chance to split them apart.
+    // single-"*"/"?" cases ever get a chance to split them apart. Pattern
+    // text here is our own small, fixed, quantifier-free alternation of
+    // ASCII literals - not user input - so it carries no match timeout.
     private static readonly Regex TokenRegex =
         new(@"\*\*/|/\*\*|\*\*|\*|\?|[.+^$(){}|\[\]]", RegexOptions.Compiled);
+
+    private readonly record struct CompiledPattern(string Glob, Regex Regex);
+
+    /// <summary>Normalizes and compiles one glob pattern, keeping the original text alongside the Regex.</summary>
+    private static CompiledPattern Compile(string glob)
+    {
+        var normalized = glob.Replace('\\', '/');
+        return new CompiledPattern(normalized, ToRegex(normalized));
+    }
 
     /// <summary>
     /// Translates one glob pattern into an anchored, case-insensitive Regex.
@@ -181,14 +235,14 @@ public sealed class FileSelector
     /// matches "projects" itself as well as everything under it). A single
     /// "*" matches within one path segment only; "?" matches exactly one
     /// non-"/" character. Everything else is literal. The pattern is
-    /// pre-normalized to forward slashes, so a literal backslash never
-    /// reaches the translator - there is nothing left needing a backslash
-    /// escape rule.
+    /// expected pre-normalized to forward slashes, so a literal backslash
+    /// never reaches the translator - there is nothing left needing a
+    /// backslash escape rule. User-supplied text from backup.json, so the
+    /// resulting Regex carries a match timeout (see SafeIsMatch).
     /// </summary>
-    private static Regex ToRegex(string glob)
+    private static Regex ToRegex(string normalizedGlob)
     {
-        var normalized = glob.Replace('\\', '/');
-        var pattern = TokenRegex.Replace(normalized, m => m.Value switch
+        var pattern = TokenRegex.Replace(normalizedGlob, m => m.Value switch
         {
             "**/" => "(?:.*/)?",
             "/**" => "(?:/.*)?",

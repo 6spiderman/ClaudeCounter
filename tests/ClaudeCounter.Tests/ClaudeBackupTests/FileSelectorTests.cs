@@ -1,7 +1,9 @@
 // tests/ClaudeCounter.Tests/ClaudeBackupTests/FileSelectorTests.cs
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Threading;
 using ClaudeBackup;
+using ClaudeCounter.Core;
 using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;
@@ -20,7 +22,29 @@ public class FileSelectorTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "projects", "x", "big.log"), "log");
     }
 
-    public void Dispose() => Directory.Delete(_root, true);
+    public void Dispose()
+    {
+        // Best-effort cleanup: a transiently locked file must not fail the
+        // test, but a real failure to clean up should still be visible
+        // rather than a silently leaked %TEMP% directory.
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                Directory.Delete(_root, true);
+                return;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 3)
+                {
+                    Log.Warn($"FileSelectorTests: failed to clean up temp root '{_root}' after {attempt} attempts: {e.Message}");
+                    return;
+                }
+                Thread.Sleep(50);
+            }
+        }
+    }
 
     [Fact]
     public void IncludesMatchesAndExcludesProjectsAndSecrets()
@@ -72,6 +96,44 @@ public class FileSelectorTests : IDisposable
         Assert.Contains("plugins/top.json", result);
         Assert.Contains("plugins/my-server/manifest.json", result);
         Assert.DoesNotContain("plugins/my-server/api_token.json", result);
+    }
+
+    // Fix round 2 regression: round 1's directory pruning treated ANY
+    // exclude pattern matching a directory's own path as license to skip
+    // its entire contents. "**/*cache*" compiles to
+    // "^(?:.*/)?[^/]*cache[^/]*$", which matches a directory literally named
+    // "cache-helpers" - but that pattern only ever constrains a FILE's own
+    // name, not "everything under a matching directory". Pruning on it
+    // silently dropped commands/cache-helpers/foo.md even though the
+    // pattern does not match that file's path at all. Only a pattern whose
+    // text ends in "**" may prune a directory now.
+    [Fact]
+    public void DirectoryNameContainingCacheIsNotWhollyPrunedByNameOnlyPattern()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "commands", "cache-helpers"));
+        File.WriteAllText(Path.Combine(_root, "commands", "cache-helpers", "foo.md"), "x");
+
+        var sel = new FileSelector();
+        var result = sel.Select(_root, new[] { "commands/**" }, new[] { "**/*cache*" });
+
+        Assert.Contains("commands/cache-helpers/foo.md", result);
+    }
+
+    // Companion to the above: a pattern that DOES end in "**" (so it truly
+    // implies every descendant also matches) must still prune the whole
+    // subtree, and do so without even visiting files under it.
+    [Fact]
+    public void CacheDirectoryGlobstarPatternStillPrunesWholeSubtree()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "plugins", "cache"));
+        File.WriteAllText(Path.Combine(_root, "plugins", "cache", "blob.json"), "x");
+        File.WriteAllText(Path.Combine(_root, "plugins", "keep.json"), "{}");
+
+        var sel = new FileSelector();
+        var result = sel.Select(_root, new[] { "plugins/**" }, new[] { "**/cache/**" });
+
+        Assert.Contains("plugins/keep.json", result);
+        Assert.DoesNotContain("plugins/cache/blob.json", result);
     }
 
     // C2 (Fix round 1): "?" must behave as a glob single-character wildcard,
@@ -202,10 +264,20 @@ public class FileSelectorTests : IDisposable
             linkCreated = TryCreateJunction(linkPath, outside);
             if (!linkCreated)
             {
-                // Could not create a junction in this environment (e.g. a
-                // locked-down CI sandbox). Not asserting anything here is
-                // deliberate - see the report for why this case is unproven
-                // rather than claiming coverage that was never exercised.
+                if (OperatingSystem.IsWindows())
+                {
+                    // Junctions require no elevation on NTFS. If creation
+                    // failed here anyway, this test's coverage of the C1 fix
+                    // would otherwise evaporate silently - fail loudly
+                    // instead of returning green with nothing exercised.
+                    Assert.Fail("Could not create an NTFS junction on Windows; " +
+                        "the junction-escape regression coverage did not run.");
+                }
+
+                // Non-Windows: junctions are not an NTFS concept here, so
+                // this scenario does not apply. Still make the skip
+                // observable rather than a quiet no-op.
+                Log.Warn("FileSelectorTests: skipping junction-escape coverage - not running on Windows.");
                 return;
             }
 

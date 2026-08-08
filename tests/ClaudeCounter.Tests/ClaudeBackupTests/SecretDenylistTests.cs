@@ -76,6 +76,10 @@ public class SecretDenylistTests
     public void FlagsDecoratedExactNameMatches(string path) => Assert.True(SecretDenylist.IsSecret(path));
 
     // I5 (Fix round 1): common secret carriers the original list missed.
+    // known_hosts added in Fix round 2 - it is technically host-inventory
+    // recon (public host keys) rather than key material, but nothing in a
+    // Claude config backup legitimately needs it and the false-drop risk of
+    // flagging it is nil.
     [Theory]
     [InlineData(".env")]
     [InlineData(".netrc")]
@@ -87,6 +91,7 @@ public class SecretDenylistTests
     [InlineData("id_ed25519")]
     [InlineData("id_ecdsa")]
     [InlineData("id_dsa")]
+    [InlineData("known_hosts")]
     [InlineData("client.pfx")]
     [InlineData("keystore.p12")]
     [InlineData("release.jks")]
