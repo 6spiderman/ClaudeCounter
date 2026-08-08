@@ -89,13 +89,23 @@ jobs:
             throw "Publish did not produce smoke/ClaudeCounter.exe"
           }
 
+          dotnet publish src/ClaudeBackup/ClaudeBackup.csproj `
+            -c Release -r win-x64 --self-contained true --no-restore `
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none `
+            -o smoke
+          if (-not (Test-Path smoke/ClaudeBackup.exe)) {
+            throw "Publish did not produce smoke/ClaudeBackup.exe"
+          }
+
           # "Single file" must mean it. The Windows Desktop runtime pack drops
           # WPF's native DLLs beside the exe unless
           # IncludeNativeLibrariesForSelfExtract is on, and someone who copies
           # only the exe out of the portable zip then gets a broken app.
-          $stray = Get-ChildItem smoke -File | Where-Object Name -ne 'ClaudeCounter.exe'
+          $allowed = @('ClaudeCounter.exe', 'ClaudeBackup.exe')
+          $stray = Get-ChildItem smoke -File | Where-Object { $allowed -notcontains $_.Name }
           if ($stray) {
-            throw "Publish left files beside the exe: $($stray.Name -join ', ')"
+            throw "Publish left files beside the exes: $($stray.Name -join ', ')"
           }
           Get-ChildItem smoke | Format-Table Name, Length
 

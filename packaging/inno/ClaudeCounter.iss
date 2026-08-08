@@ -87,8 +87,15 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+; Optional component. No [Types] section is defined, so this entry with no
+; Types renders unchecked on the Components page unless the user ticks it -
+; the backup worker is opt-in, not part of a default/full install.
+[Components]
+Name: "backup"; Description: "Backup tools (ClaudeBackup)"
+
 [Files]
 Source: "{#SourceDir}\{#AppName}.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\ClaudeBackup.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: backup
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -118,9 +125,18 @@ Type: filesandordirs; Name: "{localappdata}\{#AppName}"
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    // Remove the backup component's scheduled task, if it was ever created.
+    // schtasks exits non-zero when the task does not exist (component was
+    // never installed, or backup was never configured) - that is expected
+    // and must not block or warn during uninstall, so the result is ignored.
+    Exec('schtasks.exe', '/Delete /F /TN "ClaudeCounter Backup"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
     if DirExists(ExpandConstant('{userappdata}\{#AppName}')) then
     begin
       if SuppressibleMsgBox(

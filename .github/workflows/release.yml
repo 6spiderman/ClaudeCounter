@@ -75,12 +75,20 @@ jobs:
               -o "dist/$rid"
             if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
 
-            # A single-file publish should leave exactly one file. A stray .dll
-            # means something did not get embedded and the portable zip would
-            # be broken for anyone who unzips only the exe.
-            $stray = Get-ChildItem "dist/$rid" -File | Where-Object Name -ne 'ClaudeCounter.exe'
+            dotnet publish src/ClaudeBackup/ClaudeBackup.csproj `
+              -c Release -r $rid --self-contained true --no-restore `
+              -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
+              -p:DebugType=none -p:Version=$env:VERSION `
+              -o "dist/$rid"
+            if ($LASTEXITCODE -ne 0) { throw "worker publish failed for $rid" }
+
+            # A single-file publish should leave exactly one file per exe. A
+            # stray .dll means something did not get embedded and the
+            # portable zip would be broken for anyone who unzips only the exe.
+            $allowed = @('ClaudeCounter.exe', 'ClaudeBackup.exe')
+            $stray = Get-ChildItem "dist/$rid" -File | Where-Object { $allowed -notcontains $_.Name }
             if ($stray) {
-              throw "Unexpected files alongside the exe for ${rid}: $($stray.Name -join ', '). Add -p:IncludeNativeLibrariesForSelfExtract=true."
+              throw "Unexpected files alongside the exes for ${rid}: $($stray.Name -join ', '). Add -p:IncludeNativeLibrariesForSelfExtract=true."
             }
           }
 
@@ -122,6 +130,7 @@ jobs:
             $staging = "dist/portable-$arch"
             New-Item -ItemType Directory -Force $staging | Out-Null
             Copy-Item "dist/win-$arch/ClaudeCounter.exe" $staging
+            Copy-Item "dist/win-$arch/ClaudeBackup.exe" $staging
             Copy-Item LICENSE   "$staging/LICENSE.txt"
             Copy-Item README.md $staging
             Compress-Archive -Path "$staging/*" `
