@@ -114,4 +114,37 @@ public class BackupTaskManagerTests
         Assert.DoesNotContain("/RU", args);
         Assert.DoesNotContain("/S ", args);
     }
+
+    // Time reaches BuildSchtasksArgs as free text from a Settings textbox.
+    // Without strict HH:mm validation, a crafted value could splice extra
+    // schtasks arguments (e.g. a second /TR) into the command line.
+    [Theory]
+    [InlineData("09:00\" /TR \"calc.exe")]
+    [InlineData("9:00")]           // hour must be two digits
+    [InlineData("09:0")]           // minute must be two digits
+    [InlineData("24:00")]          // hour out of range
+    [InlineData("09:60")]          // minute out of range
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("09:00 ")]         // trailing content, even whitespace, is refused
+    [InlineData("not a time")]
+    public void RejectsAnyTimeThatIsNotStrictTwentyFourHourHhMm(string time)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => BackupTaskManager.BuildSchtasksArgs(
+            new ScheduleConfig { Frequency = "daily", Time = time },
+            @"C:\apps\ClaudeBackup.exe"));
+        Assert.Contains(time, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("00:00")]
+    [InlineData("23:59")]
+    [InlineData("09:05")]
+    public void AcceptsValidTwentyFourHourHhMm(string time)
+    {
+        var args = BackupTaskManager.BuildSchtasksArgs(
+            new ScheduleConfig { Frequency = "daily", Time = time },
+            @"C:\apps\ClaudeBackup.exe");
+        Assert.Contains($"/ST {time}", args);
+    }
 }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using ClaudeBackup;
 using ClaudeCounter.Core;
 
@@ -8,8 +9,15 @@ namespace ClaudeCounter.Settings;
 /// Bridges the tray app to the standalone ClaudeBackup.exe worker: detects
 /// whether it is installed alongside the tray exe, launches it on demand, and
 /// registers/unregisters a per-user Windows Task Scheduler entry that runs it
-/// on a schedule. Never runs the worker in-process - only its config types
-/// (ClaudeBackup.BackupConfig / ScheduleConfig) are referenced directly.
+/// on a schedule. Never runs the worker in-process, and this project carries
+/// no ProjectReference to ClaudeBackup.csproj at all - detection is a plain
+/// File.Exists check. The config types (ClaudeBackup.BackupConfig /
+/// ScheduleConfig / GitTarget / DriveTarget) used below live in
+/// ClaudeCounter.Shared, which both this project and the worker reference; do
+/// not re-add a reference to ClaudeBackup.csproj to "simplify" this - that
+/// drags the worker's own RID-specific publish graph into the tray's
+/// single-file publish and breaks it (see the release workflow's publish
+/// smoke test).
 /// </summary>
 public static class BackupTaskManager
 {
@@ -57,8 +65,19 @@ public static class BackupTaskManager
     /// can tell where the executable path ends). This is the standard schtasks
     /// idiom for a /TR value that contains spaces.
     /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="schedule"/>'s Time is not a strict 24-hour "HH:mm" value.
+    /// Time reaches here as free text from a Settings textbox; without this
+    /// check a value like <c>09:00" /TR "calc.exe</c> would splice extra
+    /// arguments into the schtasks command line.
+    /// </exception>
     public static string BuildSchtasksArgs(ScheduleConfig schedule, string workerPath)
     {
+        if (!TimeOnly.TryParseExact(schedule.Time, "HH:mm", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out _))
+            throw new ArgumentException(
+                $"Schedule time '{schedule.Time}' is not a valid 24-hour HH:mm value.", nameof(schedule));
+
         var sc = schedule.Frequency.ToLowerInvariant() switch
         {
             "hourly" => "HOURLY",
@@ -70,18 +89,33 @@ public static class BackupTaskManager
         return $"/Create /F /TN \"{TaskName}\" /TR \"\\\"{workerPath}\\\"\" /SC {sc} /ST {schedule.Time}";
     }
 
-    /// <summary>Registers (or replaces) the scheduled task. Never throws; failures are logged.</summary>
-    public static void Register(ScheduleConfig schedule)
+    /// <summary>
+    /// Registers (or replaces) the scheduled task. Never throws; returns false
+    /// on any failure (worker absent, invalid schedule, or a non-zero
+    /// schtasks exit), with the reason logged via Log.Warn.
+    /// </summary>
+    public static bool Register(ScheduleConfig schedule)
     {
         if (WorkerPath() is not { } path)
-            return;
-        Run(BuildSchtasksArgs(schedule, path));
+            return false;
+
+        string args;
+        try
+        {
+            args = BuildSchtasksArgs(schedule, path);
+        }
+        catch (ArgumentException e)
+        {
+            Log.Warn($"Refused to register the backup schedule: {e.Message}");
+            return false;
+        }
+        return Run(args);
     }
 
-    /// <summary>Removes the scheduled task, if any. Never throws; failures are logged.</summary>
-    public static void Unregister() => Run($"/Delete /F /TN \"{TaskName}\"");
+    /// <summary>Removes the scheduled task, if any. Never throws; returns false on failure.</summary>
+    public static bool Unregister() => Run($"/Delete /F /TN \"{TaskName}\"");
 
-    private static void Run(string args)
+    private static bool Run(string args)
     {
         try
         {
@@ -94,12 +128,19 @@ public static class BackupTaskManager
             };
             using var p = Process.Start(psi);
             p?.WaitForExit();
-            if (p is { ExitCode: not 0 })
+            if (p is null)
+                return false;
+            if (p.ExitCode != 0)
+            {
                 Log.Warn($"schtasks exited {p.ExitCode}: {p.StandardError.ReadToEnd().Trim()}");
+                return false;
+            }
+            return true;
         }
         catch (Exception e)
         {
             Log.Warn($"schtasks failed: {e.Message}");
+            return false;
         }
     }
 }

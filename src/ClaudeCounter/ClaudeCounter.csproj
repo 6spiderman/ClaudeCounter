@@ -45,10 +45,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+    <!-- Also carries the backup config types (BackupConfig, ScheduleConfig, ...)
+         used by BackupTaskManager and SettingsForm. The tray never references
+         ClaudeBackup.csproj itself - see the note on BackupTaskManager. -->
     <ProjectReference Include="..\ClaudeCounter.Shared\ClaudeCounter.Shared.csproj" />
-    <!-- Only the config types (BackupConfig, ScheduleConfig, ...) are used here;
-         the worker itself always runs out-of-process via BackupTaskManager. -->
-    <ProjectReference Include="..\ClaudeBackup\ClaudeBackup.csproj" />
   </ItemGroup>
 
 </Project>

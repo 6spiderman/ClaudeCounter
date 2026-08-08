@@ -11,6 +11,8 @@
           "ClaudeCounter.Core": "[0.0.0-dev, )"
         }
       }
-    }
+    },
+    "net8.0/win-arm64": {},
+    "net8.0/win-x64": {}
   }
 }

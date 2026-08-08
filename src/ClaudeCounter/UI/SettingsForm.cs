@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClaudeBackup;
 using ClaudeCounter.Settings;
 
@@ -5,7 +6,17 @@ namespace ClaudeCounter.UI;
 
 public sealed class SettingsForm : Form
 {
-    private static readonly string[] BackupFrequencyValues = ["daily", "weekly", "hourly"];
+    // Single source of truth for the frequency combo: index i's Display is
+    // shown in the UI and its Value is what is persisted to ScheduleConfig.
+    // Keeping them paired (rather than two parallel arrays matched only by
+    // SelectedIndex) means reordering an entry cannot silently corrupt saved
+    // config.
+    private static readonly (string Value, string Display)[] BackupFrequencies =
+    [
+        ("daily", "Daily"),
+        ("weekly", "Weekly"),
+        ("hourly", "Hourly"),
+    ];
 
     private readonly ComboBox _intervalCombo;
     private readonly NumericUpDown _warnInput;
@@ -22,7 +33,11 @@ public sealed class SettingsForm : Form
 
     // Only created when BackupTaskManager.WorkerAvailable() - the Backup group
     // is entirely absent (fields stay null) when ClaudeBackup.exe is not
-    // installed next to the tray exe.
+    // installed next to the tray exe. This project has no ProjectReference to
+    // ClaudeBackup.csproj - the ClaudeBackup types used below (BackupConfig,
+    // ScheduleConfig, ...) live in ClaudeCounter.Shared instead. Do not add a
+    // reference to ClaudeBackup.csproj here; it drags the worker's RID-specific
+    // publish graph into the tray's single-file publish and breaks it.
     private CheckBox? _backupGithubEnabled;
     private TextBox? _backupGithubUrl;
     private TextBox? _backupGithubBranch;
@@ -41,7 +56,20 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
         var backupAvailable = BackupTaskManager.WorkerAvailable();
-        ClientSize = backupAvailable ? new Size(420, 860) : new Size(360, 470);
+        if (backupAvailable)
+        {
+            // The Backup group's natural height (860) can exceed a small
+            // laptop's working area, which would push the OK/Cancel row (and
+            // "Save and register schedule") off-screen on a FixedDialog that
+            // cannot be resized. Clamp to the screen and let the layout panel
+            // scroll for whatever does not fit.
+            var screenHeight = Screen.PrimaryScreen?.WorkingArea.Height ?? 860;
+            ClientSize = new Size(420, Math.Min(860, screenHeight - 80));
+        }
+        else
+        {
+            ClientSize = new Size(360, 470);
+        }
         Font = new Font("Segoe UI", 9f);
         ShowInTaskbar = true;
         Icon = Shell.AppIcon();
@@ -49,6 +77,7 @@ public sealed class SettingsForm : Form
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
+            AutoScroll = true,
             ColumnCount = 2,
             RowCount = 13,
             Padding = new Padding(12),
@@ -257,10 +286,10 @@ public sealed class SettingsForm : Form
 
         layout.Controls.Add(new Label { Text = "Frequency", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
         _backupFrequency = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
-        _backupFrequency.Items.Add("Daily");
-        _backupFrequency.Items.Add("Weekly");
-        _backupFrequency.Items.Add("Hourly");
-        var freqIndex = Array.IndexOf(BackupFrequencyValues, config.Schedule.Frequency.ToLowerInvariant());
+        foreach (var freq in BackupFrequencies)
+            _backupFrequency.Items.Add(freq.Display);
+        var freqIndex = Array.FindIndex(BackupFrequencies,
+            f => f.Value == config.Schedule.Frequency.ToLowerInvariant());
         _backupFrequency.SelectedIndex = Math.Max(0, freqIndex);
         layout.Controls.Add(_backupFrequency, 1, row);
         row++;
@@ -290,6 +319,14 @@ public sealed class SettingsForm : Form
 
     private void OnSaveBackupSchedule(object? sender, EventArgs e)
     {
+        var time = _backupTime!.Text.Trim();
+        if (!TimeOnly.TryParseExact(time, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+        {
+            MessageBox.Show(this, "Time must be a 24-hour value in HH:mm format, e.g. 09:00.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         var config = BackupConfig.Load(BackupConfig.DefaultPath());
         config.Github.Enabled = _backupGithubEnabled!.Checked;
         config.Github.RemoteUrl = _backupGithubUrl!.Text.Trim();
@@ -298,18 +335,40 @@ public sealed class SettingsForm : Form
         config.Drive.RcloneRemote = _backupDriveRemote!.Text.Trim();
         config.Include = SplitLines(_backupInclude!.Text);
         config.Exclude = SplitLines(_backupExclude!.Text);
-        config.Schedule.Frequency = BackupFrequencyValues[_backupFrequency!.SelectedIndex];
-        config.Schedule.Time = _backupTime!.Text.Trim();
+        config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
+        config.Schedule.Time = time;
 
         config.Save(BackupConfig.DefaultPath());
-        BackupTaskManager.Register(config.Schedule);
 
-        MessageBox.Show(this, "Backup settings saved and the schedule registered.",
-            "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        // Unticking both destinations and saving must not silently recreate a
+        // task that would run a backup nobody asked for anymore.
+        var destinationEnabled = config.Github.Enabled || config.Drive.Enabled;
+        var ok = destinationEnabled
+            ? BackupTaskManager.Register(config.Schedule)
+            : BackupTaskManager.Unregister();
+
+        string message;
+        var icon = MessageBoxIcon.Information;
+        if (!destinationEnabled)
+        {
+            message = ok
+                ? "Backup settings saved. No destination is enabled, so the schedule was removed."
+                : "Backup settings saved, but removing the existing schedule failed. See the log for details.";
+        }
+        else
+        {
+            message = ok
+                ? "Backup settings saved and the schedule registered."
+                : "Backup settings saved, but registering the schedule failed. See the log for details.";
+        }
+        if (!ok)
+            icon = MessageBoxIcon.Warning;
+
+        MessageBox.Show(this, message, "ClaudeCounter", MessageBoxButtons.OK, icon);
     }
 
     private static List<string> SplitLines(string text) =>
-        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     protected override void OnShown(EventArgs e)
     {
