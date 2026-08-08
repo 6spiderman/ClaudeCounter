@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Alert popups.** A configurable popup when a usage window crosses your
+  critical threshold or hits 100%, independently for the 5-hour session, the
+  rolling 7-day window, and the per-model (Opus/Sonnet) windows. Placement is
+  near the tray or centered on screen, all configurable (or turned off
+  entirely) in Settings.
+- **ClaudeBackup**, an optional install component: a standalone worker that
+  backs up a subset of your Claude config (settings, CLAUDE.md, commands,
+  agents, top-level plugin manifests) to a private GitHub repo and/or Google
+  Drive (via rclone) on a schedule you set, or on demand from the tray menu
+  or Settings. Never sends anything to more than one destination without your
+  say-so, never backs up credential-shaped files (a denylist is applied
+  before anything is read), and never writes a secret to `backup.json` or any
+  log. The GitHub repo you point it at **must be private** - ClaudeCounter
+  has no way to verify that automatically, so it warns in the log and says so
+  in Settings. Opt-in at install time; the tray hides every backup control
+  when the worker is not installed.
+- "Back up now" (tray menu and Settings) now waits for the backup to finish
+  and reports the result - previously it fired the worker and forgot about
+  it, so a failing backup looked identical to a successful one.
+
+### Fixed
+
+- A repointed GitHub remote or a changed backup branch now actually takes
+  effect on the next scheduled or manual run, instead of silently continuing
+  to push to whichever remote/branch was configured the very first time.
+- Two backup runs (a scheduled run racing a manual "back up now", or two
+  triggers close together) can no longer interleave against the same staging
+  repo and delete each other's files from the remote backup - ClaudeBackup.exe
+  now takes a single-instance lock, the same way the tray app already does.
+
 ## [1.1.1] - 2026-10-06
 
 ### Fixed (Linux)

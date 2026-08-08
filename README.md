@@ -201,6 +201,13 @@ to Claude...**
 - **Alert popups** when a window crosses your critical threshold or hits 100%,
   placed near the tray or centered on screen, each configurable (or turned off)
   independently in Settings.
+- **Backup** (optional install component, `ClaudeBackup.exe`): scheduled or
+  on-demand backup of a subset of your Claude config to a private GitHub repo
+  and/or Google Drive (via rclone). Not installed by default - tick "Backup
+  tools" on the installer's Components page to include it, or it stays
+  entirely absent and every backup control in Settings stays hidden. The
+  GitHub repo you configure **must be private**; ClaudeCounter cannot verify
+  that automatically, so it warns you in Settings and in the log instead.
 - Single instance (a named mutex, on both platforms), single self-contained
   executable, no telemetry.
 
