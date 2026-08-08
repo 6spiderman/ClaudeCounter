@@ -55,6 +55,20 @@ public sealed class ThresholdTracker
         // WarnThreshold rather than CriticalThreshold so an ordinary dip just
         // under critical (e.g. 91 -> 80) does not look like a collapse/reset -
         // only a drop all the way past the warn line counts as "sharp".
+        //
+        // resets_at changing is the primary reset signal; the sharp-drop clause
+        // below is only a fallback for windows whose timestamp does not move on
+        // rollover. Known limitation: if such a window rolls over AND its first
+        // reported utilization in the new window lands in [WarnThreshold,
+        // CriticalThreshold) - e.g. a fresh window instantly read at 80% - that
+        // rollover is missed, and a later re-crossing of CriticalThreshold in the
+        // new window stays suppressed until a real dip below WarnThreshold or a
+        // resets_at change occurs. This is accepted: a genuine rollover starts a
+        // window at (near) zero usage, which is always well below WarnThreshold
+        // and so is always caught; a rollover that instantly reads 80% does not
+        // correspond to any real-world usage pattern. See
+        // ResetLandingBetweenWarnAndCriticalIsNotDetected, which pins this down
+        // as documented current behavior rather than a silently rediscovered bug.
         var resetsAtChanged = state.LastResetsAt != window.ResetsAt;
         var sharpDrop = state.LastAlertedLevel >= AlertLevel.Critical
                         && window.Utilization < settings.WarnThreshold;

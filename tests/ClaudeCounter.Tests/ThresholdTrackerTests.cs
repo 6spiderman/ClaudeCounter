@@ -77,6 +77,25 @@ public class ThresholdTrackerTests
     }
 
     [Fact]
+    public void ResetLandingBetweenWarnAndCriticalIsNotDetected()
+    {
+        // Documents a known limitation, not desired behavior: a genuine window
+        // reset whose resets_at does not change and whose post-reset reading
+        // lands in [WarnThreshold, CriticalThreshold) - here 80, with the
+        // default WarnThreshold of 75 and CriticalThreshold of 90 - is not
+        // recognized as a reset. LastAlertedLevel stays Critical from the prior
+        // cycle, so a subsequent climb back to Critical in what is actually a
+        // new window is silently suppressed. Real-world rollovers start near
+        // zero (well below WarnThreshold) and are always caught; this gap only
+        // applies to the unrealistic case of a fresh window instantly reading
+        // 80%. See the reset-detection comment in ThresholdTracker.Eval.
+        var t = new ThresholdTracker();
+        t.Evaluate(FiveHour(95, R1), Settings());
+        Assert.Empty(t.Evaluate(FiveHour(80, R1), Settings())); // same resets_at, lands between warn and critical
+        Assert.Empty(t.Evaluate(FiveHour(95, R1), Settings())); // gap: re-crossing critical is suppressed
+    }
+
+    [Fact]
     public void DisabledWindowEmitsNothing()
     {
         var t = new ThresholdTracker();
