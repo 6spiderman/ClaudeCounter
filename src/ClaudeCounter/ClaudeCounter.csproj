@@ -46,6 +46,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
     <ProjectReference Include="..\ClaudeCounter.Shared\ClaudeCounter.Shared.csproj" />
+    <!-- Only the config types (BackupConfig, ScheduleConfig, ...) are used here;
+         the worker itself always runs out-of-process via BackupTaskManager. -->
+    <ProjectReference Include="..\ClaudeBackup\ClaudeBackup.csproj" />
   </ItemGroup>
 
 </Project>

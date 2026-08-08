@@ -1,9 +1,12 @@
+using ClaudeBackup;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
 
 public sealed class SettingsForm : Form
 {
+    private static readonly string[] BackupFrequencyValues = ["daily", "weekly", "hourly"];
+
     private readonly ComboBox _intervalCombo;
     private readonly NumericUpDown _warnInput;
     private readonly NumericUpDown _criticalInput;
@@ -17,6 +20,19 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _alertSonnet;
     private readonly ComboBox _placement;
 
+    // Only created when BackupTaskManager.WorkerAvailable() - the Backup group
+    // is entirely absent (fields stay null) when ClaudeBackup.exe is not
+    // installed next to the tray exe.
+    private CheckBox? _backupGithubEnabled;
+    private TextBox? _backupGithubUrl;
+    private TextBox? _backupGithubBranch;
+    private CheckBox? _backupDriveEnabled;
+    private TextBox? _backupDriveRemote;
+    private TextBox? _backupInclude;
+    private TextBox? _backupExclude;
+    private ComboBox? _backupFrequency;
+    private TextBox? _backupTime;
+
     public SettingsForm(AppSettings current)
     {
         Text = "ClaudeCounter Settings";
@@ -24,7 +40,8 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(360, 470);
+        var backupAvailable = BackupTaskManager.WorkerAvailable();
+        ClientSize = backupAvailable ? new Size(420, 860) : new Size(360, 470);
         Font = new Font("Segoe UI", 9f);
         ShowInTaskbar = true;
         Icon = Shell.AppIcon();
@@ -123,6 +140,10 @@ public sealed class SettingsForm : Form
         _placement.SelectedIndex = current.PopupPlacement == PopupPlacement.Centered ? 1 : 0;
         layout.Controls.Add(_placement, 1, 11);
 
+        var row = 12;
+        if (backupAvailable)
+            row = BuildBackupGroup(layout, row);
+
         var buttons = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
@@ -133,13 +154,162 @@ public sealed class SettingsForm : Form
         okButton.Click += OnOk;
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(okButton);
-        layout.Controls.Add(buttons, 0, 12);
+        layout.Controls.Add(buttons, 0, row);
         layout.SetColumnSpan(buttons, 2);
+        layout.RowCount = row + 1;
 
         Controls.Add(layout);
         AcceptButton = okButton;
         CancelButton = cancelButton;
     }
+
+    /// <summary>
+    /// Adds the Backup group starting at <paramref name="row"/> and returns the
+    /// next free row. Only called when BackupTaskManager.WorkerAvailable() -
+    /// current values are loaded from BackupConfig.DefaultPath().
+    /// </summary>
+    private int BuildBackupGroup(TableLayoutPanel layout, int row)
+    {
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+
+        var header = new Label { Text = "Backup", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+        layout.Controls.Add(header, 0, row);
+        layout.SetColumnSpan(header, 2);
+        row++;
+
+        _backupGithubEnabled = new CheckBox
+        {
+            Text = "Back up to a GitHub repo",
+            AutoSize = true,
+            Checked = config.Github.Enabled,
+        };
+        layout.Controls.Add(_backupGithubEnabled, 0, row);
+        layout.SetColumnSpan(_backupGithubEnabled, 2);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "Remote URL", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
+        row++;
+        _backupGithubUrl = new TextBox
+        {
+            Text = config.Github.RemoteUrl,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
+        };
+        layout.Controls.Add(_backupGithubUrl, 0, row);
+        layout.SetColumnSpan(_backupGithubUrl, 2);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "Branch", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
+        _backupGithubBranch = new TextBox { Text = config.Github.Branch, Width = 130, Anchor = AnchorStyles.Left };
+        layout.Controls.Add(_backupGithubBranch, 1, row);
+        row++;
+
+        _backupDriveEnabled = new CheckBox
+        {
+            Text = "Back up to Google Drive (rclone)",
+            AutoSize = true,
+            Checked = config.Drive.Enabled,
+        };
+        layout.Controls.Add(_backupDriveEnabled, 0, row);
+        layout.SetColumnSpan(_backupDriveEnabled, 2);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "Rclone remote", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
+        _backupDriveRemote = new TextBox
+        {
+            Text = config.Drive.RcloneRemote,
+            Width = 130,
+            Anchor = AnchorStyles.Left,
+        };
+        layout.Controls.Add(_backupDriveRemote, 1, row);
+        row++;
+
+        var includeLabel = new Label { Text = "Include (one pattern per line)", AutoSize = true, Anchor = AnchorStyles.Left };
+        layout.Controls.Add(includeLabel, 0, row);
+        layout.SetColumnSpan(includeLabel, 2);
+        row++;
+        _backupInclude = new TextBox
+        {
+            Text = string.Join(Environment.NewLine, config.Include),
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical,
+            Height = 55,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        layout.Controls.Add(_backupInclude, 0, row);
+        layout.SetColumnSpan(_backupInclude, 2);
+        row++;
+
+        var excludeLabel = new Label { Text = "Exclude (one pattern per line)", AutoSize = true, Anchor = AnchorStyles.Left };
+        layout.Controls.Add(excludeLabel, 0, row);
+        layout.SetColumnSpan(excludeLabel, 2);
+        row++;
+        _backupExclude = new TextBox
+        {
+            Text = string.Join(Environment.NewLine, config.Exclude),
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical,
+            Height = 55,
+            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+        };
+        layout.Controls.Add(_backupExclude, 0, row);
+        layout.SetColumnSpan(_backupExclude, 2);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "Frequency", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
+        _backupFrequency = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
+        _backupFrequency.Items.Add("Daily");
+        _backupFrequency.Items.Add("Weekly");
+        _backupFrequency.Items.Add("Hourly");
+        var freqIndex = Array.IndexOf(BackupFrequencyValues, config.Schedule.Frequency.ToLowerInvariant());
+        _backupFrequency.SelectedIndex = Math.Max(0, freqIndex);
+        layout.Controls.Add(_backupFrequency, 1, row);
+        row++;
+
+        layout.Controls.Add(new Label { Text = "Time (24h HH:mm)", AutoSize = true, Anchor = AnchorStyles.Left }, 0, row);
+        _backupTime = new TextBox { Text = config.Schedule.Time, Width = 80, Anchor = AnchorStyles.Left };
+        layout.Controls.Add(_backupTime, 1, row);
+        row++;
+
+        var backupButtons = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
+        };
+        var runNowButton = new Button { Text = "Back up now", AutoSize = true };
+        runNowButton.Click += (_, _) => BackupTaskManager.RunNow();
+        var saveScheduleButton = new Button { Text = "Save and register schedule", AutoSize = true };
+        saveScheduleButton.Click += OnSaveBackupSchedule;
+        backupButtons.Controls.Add(runNowButton);
+        backupButtons.Controls.Add(saveScheduleButton);
+        layout.Controls.Add(backupButtons, 0, row);
+        layout.SetColumnSpan(backupButtons, 2);
+        row++;
+
+        return row;
+    }
+
+    private void OnSaveBackupSchedule(object? sender, EventArgs e)
+    {
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        config.Github.Enabled = _backupGithubEnabled!.Checked;
+        config.Github.RemoteUrl = _backupGithubUrl!.Text.Trim();
+        config.Github.Branch = _backupGithubBranch!.Text.Trim();
+        config.Drive.Enabled = _backupDriveEnabled!.Checked;
+        config.Drive.RcloneRemote = _backupDriveRemote!.Text.Trim();
+        config.Include = SplitLines(_backupInclude!.Text);
+        config.Exclude = SplitLines(_backupExclude!.Text);
+        config.Schedule.Frequency = BackupFrequencyValues[_backupFrequency!.SelectedIndex];
+        config.Schedule.Time = _backupTime!.Text.Trim();
+
+        config.Save(BackupConfig.DefaultPath());
+        BackupTaskManager.Register(config.Schedule);
+
+        MessageBox.Show(this, "Backup settings saved and the schedule registered.",
+            "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private static List<string> SplitLines(string text) =>
+        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     protected override void OnShown(EventArgs e)
     {

@@ -115,6 +115,7 @@
       "claudecounter": {
         "type": "Project",
         "dependencies": {
+          "ClaudeBackup": "[0.0.0-dev, )",
           "ClaudeCounter.Core": "[0.0.0-dev, )",
           "ClaudeCounter.Shared": "[0.0.0-dev, )",
           "System.Security.Cryptography.ProtectedData": "[8.0.0, )"

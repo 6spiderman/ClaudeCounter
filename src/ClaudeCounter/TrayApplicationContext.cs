@@ -84,6 +84,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Refresh now", null, (_, _) => _polling.TriggerNow());
         menu.Items.Add(_signInItem);
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+        if (BackupTaskManager.WorkerAvailable())
+            menu.Items.Add("Back up now", null, (_, _) => BackupTaskManager.RunNow());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_updateItem);
         menu.Items.Add("Open log folder", null, (_, _) => Shell.ShowLogFolder());
