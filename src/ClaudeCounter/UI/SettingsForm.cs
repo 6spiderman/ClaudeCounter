@@ -343,28 +343,31 @@ public sealed class SettingsForm : Form
         // Unticking both destinations and saving must not silently recreate a
         // task that would run a backup nobody asked for anymore.
         var destinationEnabled = config.Github.Enabled || config.Drive.Enabled;
-        var ok = destinationEnabled
-            ? BackupTaskManager.Register(config.Schedule)
-            : BackupTaskManager.Unregister();
-
+        bool ok;
         string message;
-        var icon = MessageBoxIcon.Information;
-        if (!destinationEnabled)
+        if (destinationEnabled)
         {
-            message = ok
-                ? "Backup settings saved. No destination is enabled, so the schedule was removed."
-                : "Backup settings saved, but removing the existing schedule failed. See the log for details.";
-        }
-        else
-        {
+            ok = BackupTaskManager.Register(config.Schedule);
             message = ok
                 ? "Backup settings saved and the schedule registered."
                 : "Backup settings saved, but registering the schedule failed. See the log for details.";
         }
-        if (!ok)
-            icon = MessageBoxIcon.Warning;
+        else
+        {
+            var outcome = BackupTaskManager.Unregister();
+            ok = outcome != UnregisterOutcome.Failed;
+            message = outcome switch
+            {
+                UnregisterOutcome.Removed =>
+                    "Backup settings saved. No destination is enabled, so the schedule was removed.",
+                UnregisterOutcome.NotFound =>
+                    "Backup settings saved. No destination is enabled; there was no schedule to remove.",
+                _ => "Backup settings saved, but removing the existing schedule failed. See the log for details.",
+            };
+        }
 
-        MessageBox.Show(this, message, "ClaudeCounter", MessageBoxButtons.OK, icon);
+        MessageBox.Show(this, message, "ClaudeCounter", MessageBoxButtons.OK,
+            ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
     private static List<string> SplitLines(string text) =>

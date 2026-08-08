@@ -147,4 +147,29 @@ public class BackupTaskManagerTests
             @"C:\apps\ClaudeBackup.exe");
         Assert.Contains($"/ST {time}", args);
     }
+
+    // BuildQueryArgs backs Unregister()'s "does the task even exist" check
+    // (schtasks /Query, exit code only, no text parsing). Query/Register both
+    // use the fixed task name, so it must be quoted the same way in both.
+    [Fact]
+    public void QueryArgsUseQueryFlag()
+    {
+        var args = BackupTaskManager.BuildQueryArgs();
+        Assert.Contains("/Query", args);
+    }
+
+    [Fact]
+    public void QueryArgsQuoteTheTaskNameBecauseItContainsASpace()
+    {
+        var args = BackupTaskManager.BuildQueryArgs();
+        Assert.Contains("/TN \"ClaudeCounter Backup\"", args);
+    }
+
+    [Fact]
+    public void QueryArgsDoNotIncludeCreateOrDeleteFlags()
+    {
+        var args = BackupTaskManager.BuildQueryArgs();
+        Assert.DoesNotContain("/Create", args);
+        Assert.DoesNotContain("/Delete", args);
+    }
 }

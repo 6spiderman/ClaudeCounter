@@ -112,8 +112,60 @@ public static class BackupTaskManager
         return Run(args);
     }
 
-    /// <summary>Removes the scheduled task, if any. Never throws; returns false on failure.</summary>
-    public static bool Unregister() => Run($"/Delete /F /TN \"{TaskName}\"");
+    /// <summary>
+    /// Removes the scheduled task. Distinguishes "there was nothing to
+    /// remove" from a genuine failure so a caller does not have to report a
+    /// fresh install's default (both destinations disabled) as an error the
+    /// first time a user touches the Save button. Never throws.
+    /// </summary>
+    public static UnregisterOutcome Unregister()
+    {
+        // schtasks /Delete on a task that was never created exits non-zero,
+        // which would otherwise look identical to a real deletion failure.
+        // Query first (exit code only - never parse schtasks' locale-
+        // dependent text output) and only attempt /Delete when the task is
+        // known to exist. If the query itself could not be answered (null:
+        // schtasks failed to launch), fall through to attempting /Delete
+        // anyway rather than silently assuming "nothing to remove" - a
+        // genuine environment problem must still surface as a failure.
+        if (QueryTaskExists() == false)
+            return UnregisterOutcome.NotFound;
+        return Run($"/Delete /F /TN \"{TaskName}\"") ? UnregisterOutcome.Removed : UnregisterOutcome.Failed;
+    }
+
+    /// <summary>
+    /// Builds the schtasks.exe command-line argument string for checking
+    /// whether the scheduled task exists. Pure and unit-testable - performs
+    /// no I/O.
+    /// </summary>
+    public static string BuildQueryArgs() => $"/Query /TN \"{TaskName}\"";
+
+    /// <summary>
+    /// True if the task exists, false if it does not, or null if this could
+    /// not be determined (schtasks itself failed to launch). Relies solely on
+    /// the exit code - never parses schtasks' locale-dependent text output.
+    /// </summary>
+    private static bool? QueryTaskExists()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("schtasks.exe", BuildQueryArgs())
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var p = Process.Start(psi);
+            p?.WaitForExit();
+            return p is null ? null : p.ExitCode == 0;
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"schtasks query failed: {e.Message}");
+            return null;
+        }
+    }
 
     private static bool Run(string args)
     {
@@ -143,4 +195,17 @@ public static class BackupTaskManager
             return false;
         }
     }
+}
+
+/// <summary>Outcome of BackupTaskManager.Unregister().</summary>
+public enum UnregisterOutcome
+{
+    /// <summary>A task existed and was successfully deleted.</summary>
+    Removed,
+
+    /// <summary>No task existed - nothing needed to happen. Not an error.</summary>
+    NotFound,
+
+    /// <summary>A task existed (or its existence could not be determined) and deletion failed.</summary>
+    Failed,
 }
