@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeBackup</AssemblyName>
+    <RootNamespace>ClaudeBackup</RootNamespace>
+    <AssemblyTitle>ClaudeBackup</AssemblyTitle>
+    <Product>ClaudeCounter</Product>
+    <Description>Scheduled backup worker for Claude configuration</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Share the tray app's logger without a WinForms dependency. -->
+    <Compile Include="..\ClaudeCounter\Core\Log.cs" Link="Core\Log.cs" />
+  </ItemGroup>
+
+</Project>
