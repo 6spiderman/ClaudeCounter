@@ -1,5 +1,7 @@
 // tests/ClaudeCounter.Tests/ClaudeBackupTests/RcloneBackendTests.cs
+using System.IO.Compression;
 using ClaudeBackup;
+using ClaudeCounter.Core;
 using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;
@@ -12,12 +14,41 @@ public class RcloneBackendTests : IDisposable
         public bool RclonePresent { get; set; } = true;
         public bool CopyShouldFail { get; set; }
         public string CopyStdErr { get; set; } = "";
+
+        // Populated the moment "rclone copy" is invoked, by actually opening
+        // the zip at that path - the same moment a real rclone would read it,
+        // and before RcloneBackend's finally block deletes it. This is what
+        // proves the zip was not empty (I-4) and that a guard rejecting an
+        // entry actually kept it out (I-3), rather than merely proving
+        // Run() called something named "rclone copy".
+        public List<string>? ZipEntriesAtCopyTime { get; private set; }
+
+        // When set, "rclone copy" opens the zip with a share mode that
+        // excludes FileShare.Delete and keeps the handle open past the
+        // call - simulating an AV scanner or indexer holding a lock on a
+        // just-written file, the real-world cause of RcloneBackend's own
+        // File.Delete failing in its finally block. The test that uses this
+        // must dispose it once done asserting.
+        public bool LockZipDuringCopy { get; set; }
+        public FileStream? HeldLock { get; private set; }
+
         public bool Exists(string file) => file == "rclone" ? RclonePresent : true;
+
         public ProcessResult Run(string file, IReadOnlyList<string> args, string? wd = null)
         {
             Calls.Add($"{file} {string.Join(' ', args)}");
-            if (args.Count > 0 && args[0] == "copy" && CopyShouldFail)
-                return new ProcessResult(1, "", CopyStdErr);
+
+            if (args.Count > 1 && args[0] == "copy")
+            {
+                using (var zip = ZipFile.OpenRead(args[1]))
+                    ZipEntriesAtCopyTime = zip.Entries.Select(e => e.FullName).ToList();
+
+                if (LockZipDuringCopy)
+                    HeldLock = new FileStream(args[1], FileMode.Open, FileAccess.Read, FileShare.Read);
+
+                if (CopyShouldFail)
+                    return new ProcessResult(1, "", CopyStdErr);
+            }
             return new ProcessResult(0, "", "");
         }
     }
@@ -55,6 +86,43 @@ public class RcloneBackendTests : IDisposable
             .Run(_root, new[] { "settings.json" }, new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
         Assert.True(result.Ok);
         Assert.Contains(runner.Calls, c => c.StartsWith("rclone copy"));
+    }
+
+    // I-3/I-4 combined: creates a REAL escaping file on disk (unlike the old
+    // version of this test, which passed "../escape.json" without ever
+    // creating it, so the guard being deleted entirely still passed via
+    // File.Exists(src) == false), plus a real nested file, and inspects the
+    // zip's actual entries at the moment rclone would read them - not just
+    // that "rclone copy" was called. This fails if RelativePathGuard is
+    // removed (escape.json now exists on disk, so an unguarded backend would
+    // archive it under an escaping name) and fails if the zip were empty or
+    // missing the legitimate nested entry.
+    [Fact]
+    public void ZipContainsExactlyTheSafeSelectedFilesNotAnEscapingOne()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "commands"));
+        File.WriteAllText(Path.Combine(_root, "commands", "a.md"), "hello");
+
+        var escapePath = Path.Combine(Path.GetDirectoryName(_root)!, "escape.json");
+        File.WriteAllText(escapePath, "should never be archived");
+        try
+        {
+            var runner = new FakeRunner();
+            var result = new RcloneBackend(runner, _tmp).Run(
+                _root,
+                new[] { "settings.json", "commands/a.md", "../escape.json" },
+                new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+            Assert.True(result.Ok);
+            Assert.NotNull(runner.ZipEntriesAtCopyTime);
+            Assert.Equal(
+                new[] { "commands/a.md", "settings.json" },
+                runner.ZipEntriesAtCopyTime!.OrderBy(e => e, StringComparer.Ordinal));
+        }
+        finally
+        {
+            File.Delete(escapePath);
+        }
     }
 
     // A leftover zip is a plaintext copy of the user's Claude config sitting
@@ -107,18 +175,128 @@ public class RcloneBackendTests : IDisposable
         Assert.Contains("example.com", result.Message);
     }
 
-    // Defense in depth, mirroring GitBackend: an unsafe relative path (here,
-    // one escaping the source root) must be skipped rather than either
-    // throwing or being written into the zip under an unexpected name.
+    // Fail-closed backstop at the point of write (mirrors GitBackend's
+    // MirrorFiles check): FileSelector and BackupRunner both already filter
+    // secrets out upstream, but Run is public and takes an arbitrary file
+    // list, so a secret-named entry reaching this loop directly must never
+    // be archived.
     [Fact]
-    public void RefusesUnsafeRelativePathWithoutThrowing()
+    public void RefusesToArchiveSecretNamedFileEvenIfPassedDirectly()
     {
+        File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
         var runner = new FakeRunner();
-        var result = new RcloneBackend(runner, _tmp)
-            .Run(_root, new[] { "settings.json", "../escape.json" },
-                new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+        var result = new RcloneBackend(runner, _tmp).Run(
+            _root,
+            new[] { "settings.json", ".credentials.json" },
+            new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
 
         Assert.True(result.Ok);
-        Assert.Contains(runner.Calls, c => c.StartsWith("rclone copy"));
+        Assert.NotNull(runner.ZipEntriesAtCopyTime);
+        Assert.DoesNotContain(".credentials.json", runner.ZipEntriesAtCopyTime);
+    }
+
+    // M-2: Run is public and takes an arbitrary file list - two entries that
+    // collide on the same zip entry name must not silently overwrite one
+    // archive entry with another.
+    [Fact]
+    public void RefusesDuplicateZipEntryName()
+    {
+        var runner = new FakeRunner();
+
+        var result = new RcloneBackend(runner, _tmp).Run(
+            _root,
+            new[] { "settings.json", "settings.json" },
+            new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+        Assert.True(result.Ok);
+        Assert.NotNull(runner.ZipEntriesAtCopyTime);
+        Assert.Single(runner.ZipEntriesAtCopyTime!, e => e == "settings.json");
+    }
+
+    // I-2: a zip left behind by a previous run (its own delete having
+    // failed) must not linger forever - the next Run call sweeps it away
+    // before writing a new one.
+    [Fact]
+    public void SweepsStaleZipFromPreviousRunBeforeWritingNewOne()
+    {
+        Directory.CreateDirectory(_tmp);
+        var stale = Path.Combine(_tmp, "claude-backup-20200101-000000-deadbeefdeadbeefdeadbeefdeadbeef.zip");
+        File.WriteAllText(stale, "leftover plaintext from a previous run");
+
+        var runner = new FakeRunner();
+        var result = new RcloneBackend(runner, _tmp)
+            .Run(_root, new[] { "settings.json" }, new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+        Assert.True(result.Ok);
+        Assert.False(File.Exists(stale));
+        Assert.Empty(Directory.GetFiles(_tmp));
+    }
+
+    // M-1: two zips created in the same wall-clock second (e.g. a scheduled
+    // run racing a tray "back up now") must not collide on file name - a
+    // collision would make the second ZipFile.Open throw, and would risk the
+    // first run's finally block deleting the SECOND run's still-uploading
+    // zip out from under it. Simulated here by running twice back to back
+    // and asserting both succeed and the directory ends up clean, which
+    // would not hold if the second run's zip creation threw because the
+    // first run's file (if not yet deleted) still occupied the same name.
+    [Fact]
+    public void ConsecutiveRunsInTheSameSecondDoNotCollideOnZipName()
+    {
+        var runner = new FakeRunner();
+        var backend = new RcloneBackend(runner, _tmp);
+        var target = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" };
+
+        var first = backend.Run(_root, new[] { "settings.json" }, target);
+        var second = backend.Run(_root, new[] { "settings.json" }, target);
+
+        Assert.True(first.Ok);
+        Assert.True(second.Ok);
+        Assert.Empty(Directory.GetFiles(_tmp));
+    }
+
+    // I-2: a failed temp-zip delete must be loud, not swallowed - it is the
+    // one failure in this class that most needs to be visible, since the
+    // file left behind is a plaintext copy of the user's Claude config.
+    [Fact]
+    public void FailedZipDeleteIsLoggedLoudlyAndDoesNotOverrideTheUploadResult()
+    {
+        var runner = new FakeRunner { LockZipDuringCopy = true };
+        var backend = new RcloneBackend(runner, _tmp);
+        var target = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" };
+
+        var before = ReadLog().Length;
+        try
+        {
+            var result = backend.Run(_root, new[] { "settings.json" }, target);
+            var written = ReadLog()[before..];
+
+            // The upload itself succeeded; only cleanup failed - Run's
+            // result must reflect the former, not the latter.
+            Assert.True(result.Ok);
+            Assert.Single(Directory.GetFiles(_tmp)); // delete failed -> zip still present
+            Assert.Contains("failed to delete temp zip", written);
+            Assert.Contains("plaintext copy of the backup remains", written);
+        }
+        finally
+        {
+            runner.HeldLock?.Dispose();
+            foreach (var leftover in Directory.GetFiles(_tmp))
+                File.Delete(leftover);
+        }
+    }
+
+    private static string ReadLog()
+    {
+        if (Log.FilePath is not { } path || !File.Exists(path))
+            return string.Empty;
+
+        // Opened share-all: the logger may be touched by other tests running
+        // in parallel (see FileSelectorTests.cs for the same pattern).
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 }

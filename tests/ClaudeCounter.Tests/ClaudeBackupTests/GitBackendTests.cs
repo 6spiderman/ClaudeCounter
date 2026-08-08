@@ -181,6 +181,25 @@ public class GitBackendTests : IDisposable
         Assert.False(result.Ok);
     }
 
+    // Fail-closed backstop at the point of write: FileSelector and
+    // BackupRunner both already filter secrets out upstream, but Run is
+    // public and takes an arbitrary file list, so a secret-named entry
+    // reaching MirrorFiles directly must never be staged.
+    [Fact]
+    public void RefusesToStageSecretNamedFileEvenIfPassedDirectly()
+    {
+        File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
+        var runner = new FakeRunner();
+        var backend = new GitBackend(runner, _staging);
+        var target = new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "main" };
+
+        var result = backend.Run(_root, new[] { "settings.json", ".credentials.json" }, target);
+
+        Assert.True(result.Ok);
+        Assert.True(File.Exists(Path.Combine(_staging, "settings.json")));
+        Assert.False(File.Exists(Path.Combine(_staging, ".credentials.json")));
+    }
+
     // Security: a path escaping the staging directory (e.g. via ".." even
     // though FileSelector should never emit one) must never be written
     // outside the staging directory, and must not throw - it should be

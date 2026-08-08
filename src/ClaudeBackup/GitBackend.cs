@@ -130,9 +130,22 @@ public sealed class GitBackend
             // root-relative, forward-slashed paths with no ".." segment, but
             // this backend must not assume that - a path that could escape
             // the staging directory must never be written anywhere.
-            if (!IsSafeRelativePath(rel))
+            if (!RelativePathGuard.IsSafe(rel))
             {
                 Log.Warn($"GitBackend: refusing unsafe relative path '{rel}'.");
+                continue;
+            }
+
+            // Fail-closed backstop at the actual point of write: FileSelector
+            // already strips anything SecretDenylist flags before Run is ever
+            // called, and BackupRunner re-checks the whole selection before
+            // invoking any backend - but Run takes an arbitrary file list as
+            // public API, so a secret-named entry reaching this method
+            // directly (a future caller, a test, a bug upstream) must still
+            // never be staged.
+            if (SecretDenylist.IsSecret(rel))
+            {
+                Log.Warn($"GitBackend: refusing to stage secret-named file (denylist backstop): '{rel}'.");
                 continue;
             }
 
@@ -140,9 +153,9 @@ public sealed class GitBackend
             var src = Path.Combine(sourceRoot, relForFs);
             var dst = Path.Combine(_stagingDir, relForFs);
 
-            // Belt-and-braces alongside IsSafeRelativePath: resolve the
+            // Belt-and-braces alongside RelativePathGuard.IsSafe: resolve the
             // actual destination and verify it is still under the staging
-            // directory before writing anything. Given IsSafeRelativePath's
+            // directory before writing anything. Given IsSafe's
             // segment-based checks, nothing it accepts can currently make it
             // here and still resolve outside stagingFull - see
             // GitBackendTests.IsWithinDirectoryDetectsEscapes, which tests
@@ -167,26 +180,6 @@ public sealed class GitBackend
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
             File.Copy(src, dst, overwrite: true);
         }
-    }
-
-    /// <summary>
-    /// Rejects absolute paths, empty segments, and ".." segments so a
-    /// malformed or malicious relative path can never write outside the
-    /// staging directory (belt-and-braces alongside <see cref="IsWithinDirectory"/>
-    /// in <see cref="MirrorFiles"/>).
-    /// </summary>
-    private static bool IsSafeRelativePath(string rel)
-    {
-        if (string.IsNullOrWhiteSpace(rel)) return false;
-        if (Path.IsPathRooted(rel)) return false;
-        if (rel.Contains('\\')) return false;
-
-        foreach (var segment in rel.Split('/'))
-        {
-            if (segment.Length == 0 || segment == "." || segment == "..")
-                return false;
-        }
-        return true;
     }
 
     /// <summary>

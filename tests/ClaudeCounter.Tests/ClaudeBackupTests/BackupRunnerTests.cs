@@ -35,6 +35,26 @@ public class BackupRunnerTests : IDisposable
         }
     }
 
+    // Exists("git") throws instead of returning false - simulates a
+    // misbehaving IProcessRunner (e.g. a future tray-supplied one). Proves
+    // backend independence is structural: GitHub blowing up must still let
+    // Drive run, and the process must not crash.
+    private sealed class GitExistsThrowsRunner : IProcessRunner
+    {
+        public List<string> Calls { get; } = new();
+        public bool Exists(string file)
+        {
+            if (file == "git")
+                throw new InvalidOperationException("simulated Exists() failure");
+            return true;
+        }
+        public ProcessResult Run(string f, IReadOnlyList<string> a, string? wd = null)
+        {
+            Calls.Add($"{f} {string.Join(' ', a)}");
+            return new(0, "", "");
+        }
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"brsrc-{Guid.NewGuid():N}");
     private readonly string _stg = Path.Combine(Path.GetTempPath(), $"brstg-{Guid.NewGuid():N}");
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), $"brtmp-{Guid.NewGuid():N}");
@@ -66,6 +86,34 @@ public class BackupRunnerTests : IDisposable
         var c = Config();
         c.Github.Enabled = false;
         Assert.Equal(1, BackupRunner.Run(c, new OkRunner(), _stg, _tmp));
+    }
+
+    // M-3: an enabled destination with no remote configured (the type
+    // default is an empty string for both RemoteUrl and RcloneRemote) is a
+    // configuration mistake, not a backend failure - it must return 1, not
+    // eventually fail a backend and return 2.
+    [Fact]
+    public void EnabledGithubWithoutRemoteUrlIsConfigError()
+    {
+        var c = Config();
+        c.Github.RemoteUrl = "";
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void EnabledDriveWithoutRcloneRemoteIsConfigError()
+    {
+        var c = Config();
+        c.Github.Enabled = false;
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "";
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
     }
 
     [Fact]
@@ -111,8 +159,29 @@ public class BackupRunnerTests : IDisposable
         Assert.Contains(runner.Calls, call => call.StartsWith("rclone copy"));
     }
 
+    // I-1: backend independence must be structural, not incidental on both
+    // backends happening to catch their own exceptions internally. Neither
+    // GitBackend.Run nor RcloneBackend.Run guards its own IProcessRunner.Exists
+    // call inside its try block, so if Exists throws, BackupRunner itself
+    // must be the thing that catches it - otherwise the exception would
+    // propagate past the Drive backend entirely and crash the process
+    // instead of returning exit code 2.
     [Fact]
-    public void DenylistedForcedIncludeAborts()
+    public void GitBackendThrowingDoesNotSkipDriveAndStillReturnsTwo()
+    {
+        var c = Config();
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        var runner = new GitExistsThrowsRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(2, code);
+        Assert.Contains(runner.Calls, call => call.StartsWith("rclone copy"));
+    }
+
+    [Fact]
+    public void DenylistedForcedIncludeIsNeverStaged()
     {
         var c = Config();
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
@@ -124,33 +193,29 @@ public class BackupRunnerTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_stg, ".credentials.json")));
     }
 
-    // Direct proof of the fail-closed backstop's own exit code/logging
-    // behavior. FileSelector already strips anything SecretDenylist flags,
-    // so a real offender can never reach BackupRunner.Run's internal
-    // SecretDenylist.Offenders(files) check through the public entry point
-    // (see DenylistedForcedIncludeAborts above) - proving that would require
-    // FileSelector to first fail to do its job, which would mean the first
-    // layer has a hole, not that this backstop works. TryAbortForOffenders
-    // is exercised directly instead, mirroring how GitBackendTests proves
-    // GitBackend.IsWithinDirectory as a second, independent layer.
+    // Direct proof of the offender-abort WIRING: a selector that hands back
+    // a secret-named file (something FileSelector itself would never do,
+    // since it filters through the same SecretDenylist before Run's public
+    // overload ever sees the list) must still make Run abort with exit 1
+    // and must never let either backend touch the process runner. This is
+    // the fact that actually mattered and was previously untested: not
+    // whether SecretDenylist.Offenders reports offenders (SecretDenylistTests
+    // already covers that on an already-public method), but whether Run
+    // calls it, before any backend, and returns the right code when it does.
     [Fact]
-    public void OffenderBackstopAbortsWithExitCodeOneWhenGivenAnOffender()
+    public void OffenderFromSelectorAbortsBeforeAnyBackendRuns()
     {
-        var aborted = BackupRunner.TryAbortForOffenders(
-            new[] { "settings.json", ".credentials.json" }, out var exitCode);
+        var c = Config();
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        var runner = new OkRunner();
 
-        Assert.True(aborted);
-        Assert.Equal(1, exitCode);
-    }
+        var code = BackupRunner.Run(
+            c, runner, _stg, _tmp,
+            _ => (new[] { ".credentials.json" }, new List<string>()));
 
-    [Fact]
-    public void OffenderBackstopDoesNotAbortWhenSelectionIsClean()
-    {
-        var aborted = BackupRunner.TryAbortForOffenders(
-            new[] { "settings.json" }, out var exitCode);
-
-        Assert.False(aborted);
-        Assert.Equal(0, exitCode);
+        Assert.Equal(1, code);
+        Assert.Empty(runner.Calls);
     }
 
     // The 4-arg FileSelector.Select overload must be used (not the 3-arg
