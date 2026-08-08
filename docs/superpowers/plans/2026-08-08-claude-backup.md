@@ -17,6 +17,8 @@
 - Secret exclusion is hard-coded and NOT overridable by config. Fail closed.
 - Text is ASCII only - plain dashes `-`, never em-dashes.
 - No secret is ever written to `backup.json` or any log.
+- **Codebase context (verified 2026-08-08):** the tray app now owns an OAuth sign-in subsystem (`Core/Auth/*`) and stores its own DPAPI-encrypted session at `%LOCALAPPDATA%\ClaudeCounter\session.dat` via `EncryptedSessionStore`. That file is credential material and is already on the denylist - keep it there. `tests/ClaudeCounter.Tests/Auth/SecretLeakTests.cs` is the existing convention for proving secrets never reach the log; follow its style for any backup secret test. Baseline suite is 219 passing tests - never reduce that count.
+- Read any file before editing it; this plan quotes real code but the file may have moved on. Preserve existing behavior you did not come to change.
 
 ## File Structure
 
@@ -1248,14 +1250,17 @@ Then `dotnet restore ClaudeCounter.sln` (updates the tray lock file). This makes
 - [ ] **Step 5: Backup tab in SettingsForm + "Back up now" menu**
 
 - In `SettingsForm`, only build the Backup controls when `BackupTaskManager.WorkerAvailable()`. Add inputs for: GitHub enabled + remote URL + branch; Drive enabled + rclone remote; include/exclude multiline textboxes (newline-separated); frequency combo + time; a "Save & register schedule" button that writes `BackupConfig` to `BackupConfig.DefaultPath()` and calls `BackupTaskManager.Register(schedule)`; a "Back up now" button calling `BackupTaskManager.RunNow()`. Load current values from `BackupConfig.Load(BackupConfig.DefaultPath())`.
-- In `TrayApplicationContext`, add a context-menu item only when `BackupTaskManager.WorkerAvailable()`:
+- In `TrayApplicationContext`, add a context-menu item only when `BackupTaskManager.WorkerAvailable()`.
+  The menu is currently built as: `Refresh now`, `_signInItem`, `Settings...`, separator,
+  `_updateItem`, `Open log folder`, `About ClaudeCounter...`, separator, `Exit`. Insert the
+  backup item directly after `Settings...` and BEFORE the first separator:
 
 ```csharp
+        menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         if (BackupTaskManager.WorkerAvailable())
             menu.Items.Add("Back up now", null, (_, _) => BackupTaskManager.RunNow());
+        menu.Items.Add(new ToolStripSeparator());
 ```
-
-(Place it before the separator/Exit, after "Settings...".)
 
 - [ ] **Step 6: Run tests + build**
 

@@ -16,6 +16,8 @@
 - Locked restore: no dependency changes, so `packages.lock.json` stays untouched.
 - Text is ASCII only - plain dashes `-`, never em-dashes.
 - `PollingService`/`OnPollUpdated` already resume on the WinForms `SynchronizationContext`; all popup work runs on the UI thread with no `Invoke`.
+- **Codebase context (verified 2026-08-08):** the app has since grown an OAuth sign-in subsystem (`Core/Auth/*`, `EncryptedSessionStore`, `TokenProvider`), onboarding, update checking, and an About box. `ProblemKind` now includes `SignInRequired`. `AppSettings` already carries `CheckForUpdates`, `LastUpdateCheckUtc`, `SkippedVersion`, `OnboardingCompleted` - your additions are additive, do not remove them. `Theme.Palette` has exactly `Back, Fore, SubtleFore, BarBack, Border`. `NativeMethods` currently defines only `WS_EX_TOOLWINDOW`. Baseline suite is 219 passing tests - never reduce that count.
+- Read any file before editing it; this plan quotes real code but the file may have moved on. Preserve existing behavior you did not come to change.
 
 ## File Structure
 
@@ -613,7 +615,9 @@ In the constructor, after `_settings` is loaded and before `_polling` is created
 
 - [ ] **Step 2: Show popups in OnPollUpdated**
 
-Replace the body of `OnPollUpdated` with:
+**Do NOT replace the whole method.** `OnPollUpdated` currently ends with an update-check
+piggyback block and also calls `UpdateSignInItem(state)`; both must be preserved. The
+current method is:
 
 ```csharp
     private void OnPollUpdated(PollState state)
@@ -622,13 +626,39 @@ Replace the body of `OnPollUpdated` with:
         var tooltip = BuildTooltip(state);
         _notifyIcon.Text = tooltip;
         _flyout.UpdateState(state);
+        UpdateSignInItem(state);
         Log.Info($"Tooltip: {tooltip.Replace("\n", " | ")}");
 
+        // Piggyback on the first good poll rather than the constructor: no
+        // startup delay, and no pointless GitHub call on a machine that has no
+        // network anyway.
+        if (!_updateCheckStarted && state.Problem == ProblemKind.None)
+        {
+            _updateCheckStarted = true;
+            _ = CheckForUpdatesAsync();
+        }
+    }
+```
+
+Insert a call to a NEW private method at the END of the existing body (after the
+update-check block), leaving every existing line intact:
+
+```csharp
+        EvaluateAlerts(state);
+```
+
+Then add the new method below `OnPollUpdated`:
+
+```csharp
+    private void EvaluateAlerts(PollState state)
+    {
         if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
             return;
 
         var events = _tracker.Evaluate(snapshot, _settings);
-        var shown = false;
+        if (events.Count == 0)
+            return;
+
         foreach (var e in events)
         {
             var enabled = e.Level == AlertLevel.Maxed
@@ -636,18 +666,19 @@ Replace the body of `OnPollUpdated` with:
                 : _settings.CriticalAlertsEnabled;
             if (!enabled)
                 continue;
-            AlertPopupForm.Show(e, _settings.PopupPlacement, GetTrayAnchor());
-            shown = true;
+            Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+            AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position);
         }
-        if (events.Count > 0)
-            SaveSettings(); // persist dedupe state whether or not a popup showed
-        _ = shown;
-    }
 
-    private static Point GetTrayAnchor() => Cursor.Position;
+        // Persist dedupe state whether or not a popup was shown, so a disabled
+        // alert level does not re-fire on every later poll.
+        SaveSettings();
+    }
 ```
 
-> `SaveSettings()` already persists `_settings`. Ensure it writes `NotificationState` too: since `_tracker` was constructed from `_settings.NotificationState` (the same dictionary reference), the state is already current on `_settings`. No extra assignment needed.
+> `SaveSettings()` is `_settingsStore.Save(_settings)`. Because `_tracker` was constructed
+> from `_settings.NotificationState` (the same dictionary reference), the tracker's state is
+> already current on `_settings` - no extra assignment needed.
 
 - [ ] **Step 3: Build and run tests**
 
@@ -678,7 +709,16 @@ git commit -m "Show alert popups on threshold crossings"
 
 - [ ] **Step 1: Add controls**
 
-Grow the dialog and `TableLayoutPanel` row count. Add fields to the class:
+Current state of `SettingsForm` (read it before editing): `ClientSize = new Size(360, 250)`,
+a `TableLayoutPanel` with `RowCount = 7`, and rows already used as - 0: update frequency,
+1: rate-limit note, 2: warn threshold, 3: critical threshold, 4: autostart checkbox,
+5: "Check for updates automatically" checkbox, 6: the OK/Cancel `FlowLayoutPanel`.
+
+Add the alert controls as NEW rows 6-11 and MOVE the buttons panel to the last row
+(`layout.Controls.Add(buttons, 0, 12)`), raising `RowCount` to 13 and `ClientSize` to
+roughly `new Size(360, 470)`. Keep the existing `_updateCheck` row intact.
+
+Add fields to the class:
 
 ```csharp
     private readonly CheckBox _criticalAlerts;
