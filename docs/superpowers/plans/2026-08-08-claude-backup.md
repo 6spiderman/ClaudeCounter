@@ -227,9 +227,9 @@ public sealed class BackupConfig
     {
         Include = new()
         {
-            "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/**/*.json",
+            "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/*.json",
         },
-        Exclude = new() { "projects/**", "statsig/**", "**/*cache*" },
+        Exclude = new() { "projects/**", "statsig/**", "**/cache/**" },
     };
 
     public static BackupConfig Load(string path)
