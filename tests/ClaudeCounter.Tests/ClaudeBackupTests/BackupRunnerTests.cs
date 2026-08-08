@@ -103,6 +103,21 @@ public class BackupRunnerTests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
+    // I5: SettingsForm trims the branch textbox, so clearing it and saving
+    // persists "". Without this guard that reaches 'git init -b ""' and
+    // surfaces as exit 2 ("a backend failed") instead of exit 1 ("fix your
+    // config") - the same category of bug the RemoteUrl guard above fixes.
+    [Fact]
+    public void EnabledGithubWithBlankBranchIsConfigError()
+    {
+        var c = Config();
+        c.Github.Branch = "   ";
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
+    }
+
     [Fact]
     public void EnabledDriveWithoutRcloneRemoteIsConfigError()
     {

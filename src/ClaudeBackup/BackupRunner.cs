@@ -61,6 +61,16 @@ public static class BackupRunner
             Log.Warn("BackupRunner: GitHub backup is enabled but RemoteUrl is not configured.");
             return 1;
         }
+        // Same reasoning as the RemoteUrl guard above: SettingsForm trims the
+        // branch textbox, so clearing it and saving persists "". Without this
+        // check that empty string reaches 'git init -b ""' inside GitBackend,
+        // which fails as a backend error (exit 2) instead of the
+        // configuration error it actually is (exit 1).
+        if (config.Github.Enabled && string.IsNullOrWhiteSpace(config.Github.Branch))
+        {
+            Log.Warn("BackupRunner: GitHub backup is enabled but Branch is not configured.");
+            return 1;
+        }
         if (config.Drive.Enabled && string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
         {
             Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured.");
