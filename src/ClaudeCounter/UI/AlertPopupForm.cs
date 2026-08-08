@@ -19,8 +19,15 @@ public static class AlertContent
 
 public sealed class AlertPopupForm : Form
 {
-    private const int Width_ = 300;
+    private const int PopupWidth = 300;
+    private const int StackGap = 8;
     private static readonly TimeSpan AutoDismiss = TimeSpan.FromSeconds(12);
+
+    // Near-tray popups only, tracked so a later popup in the same poll stacks
+    // above earlier ones instead of drawing on top of them. All access happens
+    // on the UI thread (construction, Place, and OnFormClosed all run there),
+    // so a plain List<> is fine - no locking needed.
+    private static readonly List<AlertPopupForm> NearTrayPopups = new();
 
     private readonly bool _noActivate;
     private readonly System.Windows.Forms.Timer? _dismissTimer;
@@ -34,7 +41,7 @@ public sealed class AlertPopupForm : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
-        Width = Width_;
+        Width = PopupWidth;
         Font = new Font("Segoe UI", 9f);
         StartPosition = FormStartPosition.Manual;
 
@@ -48,6 +55,9 @@ public sealed class AlertPopupForm : Form
 
         if (_noActivate)
         {
+            // Reserve our height for whichever near-tray popup comes next.
+            NearTrayPopups.Add(this);
+
             _dismissTimer = new System.Windows.Forms.Timer { Interval = (int)AutoDismiss.TotalMilliseconds };
             _dismissTimer.Tick += (_, _) => Close();
             _dismissTimer.Start();
@@ -88,6 +98,14 @@ public sealed class AlertPopupForm : Form
         NativeMethods.TryRoundCorners(Handle);
     }
 
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        // Covers both dismissal paths (auto-dismiss timer and the Dismiss
+        // button click) since both just call Close().
+        NearTrayPopups.Remove(this);
+        base.OnFormClosed(e);
+    }
+
     private void BuildContent(string title, string body, AlertLevel level, Palette palette)
     {
         var fore = level == AlertLevel.Maxed ? Color.White : palette.Fore;
@@ -123,17 +141,32 @@ public sealed class AlertPopupForm : Form
 
     private void Place(bool centered, Point trayAnchor)
     {
-        var area = Screen.FromPoint(trayAnchor).WorkingArea;
+        var screen = Screen.FromPoint(trayAnchor);
         if (centered)
         {
-            var full = Screen.FromPoint(trayAnchor).Bounds;
+            var full = screen.Bounds;
             Location = new Point(full.Left + (full.Width - Width) / 2,
                                  full.Top + (full.Height - Height) / 2);
+            return;
         }
-        else
-        {
-            Location = new Point(area.Right - Width - 12, area.Bottom - Height - 12);
-        }
+
+        var area = screen.WorkingArea;
+        var stackOffset = StackOffsetFor(NearTrayPopups.Select(p => p.Height).ToArray(), StackGap);
+        var y = Math.Max(area.Top, area.Bottom - Height - 12 - stackOffset);
+        Location = new Point(area.Right - Width - 12, y);
+    }
+
+    /// <summary>
+    /// How far up (in pixels) a new near-tray popup must sit to clear the
+    /// popups already stacked above the bottom-right corner. Pure and
+    /// side-effect free so it is unit-testable without a Form.
+    /// </summary>
+    public static int StackOffsetFor(IReadOnlyList<int> openHeights, int gap)
+    {
+        var offset = 0;
+        foreach (var height in openHeights)
+            offset += height + gap;
+        return offset;
     }
 
     protected override void Dispose(bool disposing)
