@@ -63,6 +63,34 @@ public sealed class GitBackend
                 Check(_runner.Run("git", new[] { "init", "-b", target.Branch }, _stagingDir), "git init");
                 Check(_runner.Run("git", new[] { "remote", "add", "origin", target.RemoteUrl }, _stagingDir), "git remote add");
             }
+            else
+            {
+                // Reconcile the remote on every later run, not just at init.
+                // 'git remote add' above only ever runs the first time this
+                // staging dir is used - on every subsequent run hasGitDir is
+                // true and that line never executes again. Without this,
+                // repointing target.RemoteUrl in Settings would silently keep
+                // pushing to the FIRST url ever configured, because 'origin'
+                // resolves from backup-repo\.git\config on disk, not from the
+                // live config passed in here. 'remote set-url' fails if no
+                // 'origin' remote exists yet (e.g. the staging dir's .git was
+                // created by something other than this class) - fall back to
+                // 'remote add' in that case rather than treating it as fatal.
+                var setUrl = _runner.Run("git", new[] { "remote", "set-url", "origin", target.RemoteUrl }, _stagingDir);
+                if (!setUrl.Ok)
+                    Check(_runner.Run("git", new[] { "remote", "add", "origin", target.RemoteUrl }, _stagingDir), "git remote add");
+            }
+
+            // Make a branch change take effect too: without this, changing
+            // target.Branch on an existing staging dir would leave the local
+            // checkout on whatever branch 'init -b' created the very first
+            // time, and 'git push origin <newBranch>' would fail with
+            // "src refspec <newBranch> does not match any" because no local
+            // branch by that name exists. '-B' creates the branch if it does
+            // not exist yet or resets it to HEAD if it does, so this is a
+            // no-op in effect when already on target.Branch and otherwise
+            // makes the switch happen before anything is staged.
+            Check(_runner.Run("git", new[] { "checkout", "-B", target.Branch }, _stagingDir), "git checkout");
 
             MirrorFiles(sourceRoot, files);
 
@@ -98,6 +126,12 @@ public sealed class GitBackend
 
             Check(_runner.Run("git", new[] { "push", "origin", target.Branch }, _stagingDir), "git push");
             Log.Info($"GitBackend: push OK to '{RedactRemote(target.RemoteUrl)}' branch '{target.Branch}'.");
+            // I2: this class has no way to call the GitHub API and confirm
+            // the repo is actually private - the security model's guardrail
+            // is a non-negotiable, and the one thing achievable without that
+            // API call is making sure a successful push never implies privacy
+            // was checked.
+            Log.Warn("GitBackend: repo privacy cannot be verified automatically - confirm the remote repo is private.");
             return new BackendResult(true, "GitHub backup complete.");
         }
         catch (Exception ex)

@@ -1,5 +1,6 @@
 // tests/ClaudeCounter.Tests/ClaudeBackupTests/GitBackendTests.cs
 using ClaudeBackup;
+using ClaudeCounter.Core;
 using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;
@@ -275,6 +276,81 @@ public class GitBackendTests : IDisposable
         Assert.False(result.Ok);
         Assert.True(File.Exists(Path.Combine(_staging, "unexpected.txt")));
         Assert.DoesNotContain(runner.Calls, c => c.StartsWith("git init"));
+    }
+
+    // C1 regression: the remote must be reconciled on every run, not just at
+    // init. Without 'remote set-url' on the second and later runs, a user
+    // who repoints RemoteUrl in Settings would keep pushing to the FIRST url
+    // ever configured for this staging dir, silently, forever.
+    [Fact]
+    public void SecondRunWithDifferentRemoteUrlReconciles()
+    {
+        var runner = new FakeRunner();
+        var backend = new GitBackend(runner, _staging);
+        var firstTarget = new GitTarget { Enabled = true, RemoteUrl = "https://github.com/org/first.git", Branch = "main" };
+        backend.Run(_root, new[] { "settings.json" }, firstTarget);
+
+        runner.Calls.Clear();
+        var secondTarget = new GitTarget { Enabled = true, RemoteUrl = "https://github.com/org/second.git", Branch = "main" };
+        var result = backend.Run(_root, new[] { "settings.json" }, secondTarget);
+
+        Assert.True(result.Ok);
+        Assert.Contains(runner.Calls,
+            c => c.Contains("remote set-url origin https://github.com/org/second.git"));
+        Assert.DoesNotContain(runner.Calls, c => c.StartsWith("git init"));
+    }
+
+    // C1: changing Branch on an existing staging dir must actually switch
+    // the local checkout, not just leave it on whatever 'init -b' created
+    // the first time - otherwise 'git push origin <newBranch>' fails with
+    // "src refspec ... does not match any".
+    [Fact]
+    public void SecondRunWithDifferentBranchChecksOutNewBranch()
+    {
+        var runner = new FakeRunner();
+        var backend = new GitBackend(runner, _staging);
+        var firstTarget = new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "main" };
+        backend.Run(_root, new[] { "settings.json" }, firstTarget);
+
+        runner.Calls.Clear();
+        var secondTarget = new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "backup-branch" };
+        var result = backend.Run(_root, new[] { "settings.json" }, secondTarget);
+
+        Assert.True(result.Ok);
+        Assert.Contains(runner.Calls, c => c.Contains("checkout -B backup-branch"));
+        Assert.Contains(runner.Calls, c => c.Contains("push origin backup-branch"));
+    }
+
+    // I2: GitBackend cannot call the GitHub API to confirm a repo is
+    // actually private, so a successful push must still log that privacy was
+    // never verified, rather than implying everything was checked.
+    [Fact]
+    public void SuccessfulPushLogsThatPrivacyIsUnverified()
+    {
+        var runner = new FakeRunner();
+        var backend = new GitBackend(runner, _staging);
+        var target = new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "main" };
+
+        var before = ReadLog().Length;
+        var result = backend.Run(_root, new[] { "settings.json" }, target);
+        var written = ReadLog()[before..];
+
+        Assert.True(result.Ok);
+        Assert.Contains("privacy cannot be verified", written);
+    }
+
+    private static string ReadLog()
+    {
+        if (Log.FilePath is not { } path || !File.Exists(path))
+            return string.Empty;
+
+        // Opened share-all: other tests in this assembly may write to the
+        // same log concurrently - see BackupRunnerTests.ReadLog for the same
+        // pattern.
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     // Does not embed any Claude/Anthropic attribution in generated commit

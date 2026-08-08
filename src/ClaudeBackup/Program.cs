@@ -6,6 +6,27 @@ internal static class Program
 {
     private static int Main()
     {
+        // Single instance: ClaudeBackup.exe has no other concurrency guard.
+        // "Back up now" is reachable from both the tray menu and Settings,
+        // and the scheduled task can fire at any moment - two instances
+        // racing against the same hardcoded staging dir would interleave
+        // GitBackend.MirrorFiles's delete-then-recopy with another
+        // instance's add/commit/push, and because the mirror is deliberately
+        // designed so deletions propagate, the loser's commit would delete
+        // the winner's files from the remote backup, silently, at exit code
+        // 0. Mirrors the tray's own mutex pattern (see
+        // src/ClaudeCounter/Program.cs). The mutex must stay referenced for
+        // the process lifetime, hence `using`. A second instance finding the
+        // mutex already held is an expected, benign race - not a failure -
+        // so it logs and exits 0 rather than reporting exit 1 or 2.
+        using var mutex = new Mutex(initiallyOwned: true,
+            @"Local\ClaudeCounter_Backup_SingleInstance", out var createdNew);
+        if (!createdNew)
+        {
+            Log.Info("ClaudeBackup: another backup is already in progress; exiting.");
+            return 0;
+        }
+
         // Task Scheduler only ever sees this method's return value. Without
         // this guard, anything that escapes BackupConfig.Load or
         // BackupRunner.Run - an UnauthorizedAccessException from an
