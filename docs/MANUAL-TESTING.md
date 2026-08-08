@@ -320,6 +320,38 @@ until someone has ticked these.
 
 ---
 
+## 14. Alert popups
+
+Threshold and 100% popups fire from `EvaluateAlerts` on each poll. Force a
+crossing by lowering the critical threshold in Settings to just below your
+current usage, or wait for a real one.
+
+- [ ] Forcing a window from below critical to above it produces **exactly one**
+      popup for that window
+- [ ] A critical crossing (below 100%) shows the compact tier: normal-size
+      popup, window name and percentage
+- [ ] A crossing to 100% shows the large tier: centered "Time to touch some
+      grass" popup, regardless of the placement setting
+- [ ] With placement set to **Near tray**, a below-100% critical popup appears
+      near the tray corner
+- [ ] With placement set to **Centered**, a below-100% critical popup appears
+      centered on screen instead
+- [ ] The next poll after a popup fires does **not** re-pop the same crossing
+- [ ] Restart the app after a popup has fired -> still does not re-pop the same
+      crossing
+- [ ] Let the window reset (or wait for `resets_at` to change) -> the next
+      crossing of that window alerts again (re-arm)
+- [ ] With a near-tray popup showing, type in another app while it appears ->
+      no keystrokes are lost and focus never leaves the app you were typing in
+- [ ] Force two windows to cross in the same poll -> two popups appear stacked
+      upward from the tray corner with a visible gap between them, and both
+      auto-dismiss on their own after about 12 seconds
+- [ ] Open Settings at 100%, 125% and 150% display scaling -> all alert
+      controls (the enable checkboxes, per-window checkboxes, and placement
+      choice) are fully visible and unclipped at each scale
+
+---
+
 ## 14. Linux (KDE Plasma and GNOME)
 
 On a real desktop session, ideally Kubuntu/KDE Plasma on Wayland plus one

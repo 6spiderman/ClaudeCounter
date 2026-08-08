@@ -278,6 +278,18 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (events.Count == 0)
             return;
 
+        // A modal dialog (onboarding, settings, sign-in, about) runs its own
+        // nested message loop, and poll continuations still run underneath it.
+        // A popup created then is not disabled by that loop and is TopMost - a
+        // Maxed popup even calls Activate() - so it would yank focus off the
+        // dialog the user is in the middle of. Still let the tracker consume
+        // the crossing and still persist state below, so the alert does not
+        // fire late once the dialog closes; just suppress showing it now.
+        var modalActive = !_settings.OnboardingCompleted
+            || _settingsForm is { IsDisposed: false }
+            || _signInForm is { IsDisposed: false }
+            || _aboutForm is { IsDisposed: false };
+
         foreach (var e in events)
         {
             var enabled = e.Level == AlertLevel.Maxed
@@ -285,8 +297,20 @@ public sealed class TrayApplicationContext : ApplicationContext
                 : _settings.CriticalAlertsEnabled;
             if (!enabled)
                 continue;
+            if (modalActive)
+            {
+                Log.Info($"Alert suppressed (modal dialog open): {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+                continue;
+            }
             Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
-            AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position);
+            try
+            {
+                AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Alert popup failed: {ex.Message}");
+            }
         }
 
         // Persist dedupe state whether or not a popup was shown, so a disabled

@@ -51,5 +51,11 @@ public sealed class AppSettings
             WarnThreshold = 75;
             CriticalThreshold = 90;
         }
+        // A settings.json with "NotificationState": null deserializes to a null
+        // dictionary. ThresholdTracker's initialState ?? new(...) fallback would
+        // then allocate its own dictionary instead of aliasing this one, so
+        // SaveSettings() writes null forever and every restart re-pops every
+        // alert. Restore it here, before ThresholdTracker ever sees it.
+        NotificationState ??= new();
     }
 }

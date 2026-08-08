@@ -27,4 +27,17 @@ public class AppSettingsTests
         Assert.Equal(75, s.WarnThreshold);
         Assert.Equal(90, s.CriticalThreshold);
     }
+
+    [Fact]
+    public void NormalizeRestoresNullNotificationState()
+    {
+        // A settings.json containing "NotificationState": null deserializes to a
+        // null dictionary. Left unfixed, ThresholdTracker's initialState ?? new()
+        // fallback allocates its own dictionary instead of aliasing this one, so
+        // every save writes null again and every restart re-pops every alert.
+        var s = new AppSettings { NotificationState = null! };
+        s.Normalize();
+        Assert.NotNull(s.NotificationState);
+        Assert.Empty(s.NotificationState);
+    }
 }

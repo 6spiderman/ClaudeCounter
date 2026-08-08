@@ -32,7 +32,7 @@ public sealed class AlertPopupForm : Form
     private readonly bool _noActivate;
     private readonly System.Windows.Forms.Timer? _dismissTimer;
 
-    private AlertPopupForm(AlertEvent e, PopupPlacement placement, Point trayAnchor)
+    private AlertPopupForm(AlertEvent e, PopupPlacement placement, Point anchor)
     {
         // 100% always takes the center + focus; critical follows the setting.
         var centered = placement == PopupPlacement.Centered || e.Level == AlertLevel.Maxed;
@@ -44,6 +44,7 @@ public sealed class AlertPopupForm : Form
         Width = PopupWidth;
         Font = new Font("Segoe UI", 9f);
         StartPosition = FormStartPosition.Manual;
+        KeyPreview = true;
 
         var palette = Theme.Current();
         BackColor = e.Level == AlertLevel.Maxed
@@ -51,7 +52,16 @@ public sealed class AlertPopupForm : Form
 
         var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
         BuildContent(title, body, e.Level, palette);
-        Place(centered, trayAnchor);
+        Place(centered, anchor);
+
+        // Esc-to-close as a safety valve: the centered/Maxed popup is
+        // chrome-less, TopMost and hidden from Alt+Tab (WS_EX_TOOLWINDOW), with
+        // no auto-dismiss timer - Dismiss is otherwise the only way out.
+        KeyDown += (_, ev) =>
+        {
+            if (ev.KeyCode == Keys.Escape)
+                Close();
+        };
 
         if (_noActivate)
         {
@@ -65,9 +75,9 @@ public sealed class AlertPopupForm : Form
     }
 
     /// <summary>Show a popup for one alert event. Call on the UI thread.</summary>
-    public static void Show(AlertEvent e, PopupPlacement placement, Point trayAnchor)
+    public static void Show(AlertEvent e, PopupPlacement placement, Point anchor)
     {
-        var form = new AlertPopupForm(e, placement, trayAnchor);
+        var form = new AlertPopupForm(e, placement, anchor);
         if (form._noActivate)
             form.Show();      // ShowWithoutActivation keeps focus with the active app
         else
@@ -139,9 +149,9 @@ public sealed class AlertPopupForm : Form
         Height = dismiss.Bottom + pad;
     }
 
-    private void Place(bool centered, Point trayAnchor)
+    private void Place(bool centered, Point anchor)
     {
-        var screen = Screen.FromPoint(trayAnchor);
+        var screen = Screen.FromPoint(anchor);
         if (centered)
         {
             var full = screen.Bounds;

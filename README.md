@@ -198,6 +198,9 @@ to Claude...**
   desktop distros, but not a non-systemd setup).
 - **Update notifications** from GitHub Releases, at most once a day, shown as a
   menu entry rather than a popup. Off with one checkbox.
+- **Alert popups** when a window crosses your critical threshold or hits 100%,
+  placed near the tray or centered on screen, each configurable (or turned off)
+  independently in Settings.
 - Single instance (a named mutex, on both platforms), single self-contained
   executable, no telemetry.
 
