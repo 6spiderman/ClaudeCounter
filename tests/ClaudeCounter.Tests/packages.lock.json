@@ -106,6 +106,9 @@
           "xunit.extensibility.core": "[2.7.0]"
         }
       },
+      "claudebackup": {
+        "type": "Project"
+      },
       "claudecounter": {
         "type": "Project",
         "dependencies": {

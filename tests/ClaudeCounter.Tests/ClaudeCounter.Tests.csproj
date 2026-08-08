@@ -19,6 +19,17 @@
     <ProjectReference Include="..\..\src\ClaudeCounter\ClaudeCounter.csproj" />
     <!-- Explicit, not just transitive via the above, since most tests here exercise Core. -->
     <ProjectReference Include="..\..\src\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+    <!--
+      Aliased: ClaudeBackup links the same Core\Log.cs source as ClaudeCounter,
+      so both assemblies define ClaudeCounter.Core.Log. Without an alias, that
+      type becomes ambiguous for every test file that does "using
+      ClaudeCounter.Core;" and references Log unqualified. The alias keeps
+      ClaudeBackup's types out of global lookup; BackupConfigTests.cs opts in
+      explicitly via "extern alias".
+    -->
+    <ProjectReference Include="..\..\src\ClaudeBackup\ClaudeBackup.csproj">
+      <Aliases>ClaudeBackupLib</Aliases>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>
