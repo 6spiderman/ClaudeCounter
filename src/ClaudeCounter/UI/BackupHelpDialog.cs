@@ -40,7 +40,9 @@ public sealed class BackupHelpDialog : Form
         };
         closeButton.FlatAppearance.BorderColor = palette.Border;
         closeButton.Location = new Point(DialogWidth - Pad - closeButton.Width, (BottomBarHeight - closeButton.Height) / 2);
-        closeButton.Click += (_, _) => Close();
+        // DialogResult.Cancel above is sufficient to close the form on click
+        // (a Form with a DialogResult-bearing button closes itself when that
+        // button is clicked) - no separate Click handler is needed.
 
         var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = BottomBarHeight, BackColor = palette.BarBack };
         bottomBar.Controls.Add(new Panel

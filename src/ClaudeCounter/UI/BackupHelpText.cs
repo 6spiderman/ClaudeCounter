@@ -123,6 +123,6 @@ public static class BackupHelpText
         "RESULTS\r\n" +
         "'Back up now' reports one of three outcomes - complete, 'not run, " +
         "check your settings' (nothing enabled, nothing selected, or a bad " +
-        "setting), or failed (a destination rejected the upload). Details " +
-        "always go to the log.";
+        "setting), or failed (a destination failed - network, auth, disk, " +
+        "or a git/rclone error). Details always go to the log.";
 }

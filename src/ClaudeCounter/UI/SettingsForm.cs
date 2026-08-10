@@ -372,7 +372,11 @@ public sealed class SettingsForm : Form
 
         var helpButton = NewFlatButton("Help", palette);
         helpButton.Location = new Point(PagePadX + fullWidth - helpButton.Width, y);
-        helpButton.Click += (_, _) => new BackupHelpDialog(palette).ShowDialog(this);
+        helpButton.Click += (_, _) =>
+        {
+            using var dlg = new BackupHelpDialog(palette);
+            dlg.ShowDialog(this);
+        };
         page.Controls.Add(helpButton);
         y += helpButton.Height + RowGap;
 
@@ -925,12 +929,16 @@ public sealed class SettingsForm : Form
     /// A small themed "(i)" affordance for a single Backup field's help text.
     /// Drawn entirely with GDI+ primitives (an ellipse plus the letter "i" in
     /// the same font already used everywhere else in this dialog) rather than
-    /// relying on the Unicode U+24D8 CIRCLED LATIN SMALL LETTER I glyph -
-    /// that glyph's coverage varies by font and this app has no way to
-    /// screenshot-verify its rendering at 100/125/150% DPI before shipping,
-    /// so a hand-drawn circle sidesteps the risk entirely rather than
-    /// gambling on it. Click (or Enter/Space when focused) shows the themed,
-    /// non-activating ToolTip owned by the containing SettingsForm.
+    /// relying on the Unicode U+24D8 CIRCLED LATIN SMALL LETTER I glyph.
+    /// Chosen during implementation, not mandated by any design document: the
+    /// glyph's font coverage could not be screenshot-verified at 100/125/150%
+    /// DPI without launching the GUI, which this task's own instructions
+    /// ruled out, and a hand-drawn circle sidesteps that risk entirely rather
+    /// than gambling on it. See
+    /// docs/superpowers/specs/2026-08-10-settings-redesign.md's constraints
+    /// section for where this fallback is recorded. Click (or Enter/Space
+    /// when focused) shows the themed, non-activating ToolTip owned by the
+    /// containing SettingsForm.
     /// </summary>
     private sealed class InfoButton : Control
     {

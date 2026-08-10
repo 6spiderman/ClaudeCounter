@@ -110,7 +110,14 @@ failed (a destination rejected the upload). Details always go to the log.
 
 - No new NuGet packages. `TreatWarningsAsErrors=true`.
 - ASCII only in code and comments. UI strings may use the ⓘ glyph, which is the one
-  deliberate exception and must be verified to render at all DPI settings.
+  deliberate exception and must be verified to render at all DPI settings. If that
+  cannot be verified (e.g. the implementing session cannot launch the GUI to
+  screenshot it at 100/125/150% DPI), the sanctioned fallback is a hand-drawn
+  circled "i" - an ellipse plus the plain ASCII letter "i", drawn with GDI+
+  primitives already used elsewhere in the dialog - rather than a plain "?"
+  button or shipping the glyph unverified. This is what shipped: SettingsForm's
+  `InfoButton` draws its own circle instead of using U+24D8, so no ⓘ glyph
+  actually appears in any UI string.
 - Every existing setting must survive: all `AppSettings` fields currently written by
   `ApplyTo`, and the whole backup config round-trip. Losing one silently is the main
   risk of this change.
