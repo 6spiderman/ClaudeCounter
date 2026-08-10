@@ -515,15 +515,28 @@ public sealed class SettingsForm : Form
 
         var runNowButton = NewFlatButton("Back up now", palette);
         var saveScheduleButton = NewFlatButton("Save and register schedule", palette);
+        // S9b: "Restore..." placed inline on this same row, to the left of
+        // "Save and register schedule" - same NewFlatButton control as its
+        // two neighbours, so (per BuildBackupPage's own layout history for
+        // Help/Advanced above) it adds zero extra row height: the row's
+        // height is already governed by the tallest of the buttons on it,
+        // and all three are the same control type. A new row was not an
+        // option - see SettingsFormHeightStaysWithinTheDisplayBudget and the
+        // design spec's layout constraint.
+        var restoreButton = NewFlatButton("Restore...", palette);
         var runNowX = PagePadX + fullWidth - runNowButton.Width;
         var saveX = runNowX - 8 - saveScheduleButton.Width;
+        var restoreX = saveX - 8 - restoreButton.Width;
         runNowButton.Location = new Point(runNowX, y);
         saveScheduleButton.Location = new Point(saveX, y);
+        restoreButton.Location = new Point(restoreX, y);
         runNowButton.Click += async (_, _) => await RunBackupNowAsync();
         saveScheduleButton.Click += OnSaveBackupSchedule;
+        restoreButton.Click += (_, _) => OnOpenRestoreDialog(palette);
         page.Controls.Add(saveScheduleButton);
         page.Controls.Add(runNowButton);
-        y += Math.Max(runNowButton.Height, saveScheduleButton.Height) + RowGap;
+        page.Controls.Add(restoreButton);
+        y += Math.Max(runNowButton.Height, Math.Max(saveScheduleButton.Height, restoreButton.Height)) + RowGap;
 
         return (page, y + 10);
     }
@@ -689,6 +702,34 @@ public sealed class SettingsForm : Form
         _scheduleRestartCount = dialog.RestartCount;
         _driveKeepLastCount = dialog.KeepLastCount;
         _driveDeleteOlderThanDays = dialog.DeleteOlderThanDays;
+    }
+
+    /// <summary>
+    /// S9b: opens RestoreDialog against whatever is currently SAVED to
+    /// backup.json - not the possibly-unsaved edits sitting in this form's
+    /// own textboxes right now. Mirrors RunBackupNowAsync, which reloads the
+    /// same way for the same reason: "Back up now" launches ClaudeBackup.exe,
+    /// which itself only ever reads backup.json from disk, so restore
+    /// operating on the same saved snapshot of config keeps both actions
+    /// consistent with each other. Refuses to even open the dialog when
+    /// neither destination is enabled, rather than leaving RestoreDialog to
+    /// show an empty "no destination" state - a quick, purely informational
+    /// MessageBox reads better than an empty dialog for the common case
+    /// (nothing configured yet) this guards against.
+    /// </summary>
+    private void OnOpenRestoreDialog(Palette palette)
+    {
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        if (!config.Github.Enabled && !config.Drive.Enabled)
+        {
+            MessageBox.Show(this,
+                "No backup destination is enabled. Enable and configure GitHub or Google Drive backup first.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        using var dialog = new RestoreDialog(palette, config, new ProcessRunner());
+        dialog.ShowDialog(this);
     }
 
     /// <summary>

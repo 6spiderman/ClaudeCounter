@@ -152,6 +152,131 @@ public class SettingsFormSmokeTests
         Assert.Null(error);
     }
 
+    // S9b: fake IProcessRunner for RestoreDialogConstructsWithAPopulatedSnapshotListWithoutThrowing
+    // below - handles just enough of "git" (clone/fetch/log) and "rclone"
+    // (lsjson) to make RestoreGitSource.ListSnapshots and
+    // RestoreZipSource.ListSnapshots each return one real snapshot, so the
+    // dialog constructs with something actually populated in its snapshot
+    // list rather than only the trivial empty case. Never a real process:
+    // see RestoreGitSourceTests.FakeRunner / RestoreZipSourceTests.FakeRunner
+    // for the same pattern used to test the engine itself.
+    private sealed class FakeRestoreRunner : IProcessRunner
+    {
+        public bool Exists(string file) => true;
+
+        public ProcessResult Run(string file, IReadOnlyList<string> args, string? workingDir = null)
+        {
+            if (args.Count > 0 && args[0] == "clone")
+            {
+                if (workingDir is not null)
+                    Directory.CreateDirectory(Path.Combine(workingDir, ".git"));
+                return new ProcessResult(0, "", "");
+            }
+            if (args.Count > 0 && args[0] == "fetch")
+                return new ProcessResult(0, "", "");
+            if (args.Count > 0 && args[0] == "log")
+            {
+                const string sha = "1111111111111111111111111111111111aaaa";
+                var timestamp = new DateTimeOffset(2026, 1, 1, 9, 0, 0, TimeSpan.Zero);
+                return new ProcessResult(0, $"{sha}{timestamp:o}Backup 2026-01-01 09:00:00\n", "");
+            }
+            if (args.Count > 0 && args[0] == "lsjson")
+            {
+                const string json = """
+                    [{"Name":"claude-backup-2026-01-01T090000Z.zip","ModTime":"2026-01-01T09:00:00Z","Size":1234,"IsDir":false}]
+                    """;
+                return new ProcessResult(0, json, "");
+            }
+            return new ProcessResult(0, "", "");
+        }
+    }
+
+    // S9b: the restore dialog is only reachable by clicking "Restore..." on
+    // the Backup tab, so - like BackupPickerDialog and BackupAdvancedDialog
+    // above - it would otherwise never be constructed by any test at all.
+    // Constructed with BOTH destinations enabled (exercises the source
+    // selector combo, not just the single-destination label path) and a
+    // populated snapshot list from each (see FakeRestoreRunner above) -
+    // RestoreDialog lists synchronously during construction specifically so
+    // this is possible without any message-pump gymnastics. scratchRoot
+    // redirects the git-clone side effect LoadSnapshots triggers into a temp
+    // directory instead of the real user's %LOCALAPPDATA%\ClaudeCounter -
+    // see RestoreDialog's own doc comment on that constructor parameter.
+    [Fact]
+    public void RestoreDialogConstructsWithAPopulatedSnapshotListWithoutThrowing()
+    {
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
+        var config = new BackupConfig
+        {
+            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+            Drive = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:ClaudeBackups" },
+        };
+        var runner = new FakeRestoreRunner();
+
+        try
+        {
+            var error = ConstructOnStaThread(() => new RestoreDialog(Theme.Current(), config, runner, scratchRoot));
+            Assert.Null(error);
+        }
+        finally
+        {
+            try { Directory.Delete(scratchRoot, true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+    }
+
+    // Same construction, but with only ONE destination enabled - exercises
+    // the "Restoring from X" label path (no combo box) rather than the
+    // selector.
+    [Fact]
+    public void RestoreDialogConstructsWithASingleDestinationWithoutThrowing()
+    {
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
+        var config = new BackupConfig
+        {
+            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+        };
+        var runner = new FakeRestoreRunner();
+
+        try
+        {
+            var error = ConstructOnStaThread(() => new RestoreDialog(Theme.Current(), config, runner, scratchRoot));
+            Assert.Null(error);
+        }
+        finally
+        {
+            try { Directory.Delete(scratchRoot, true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+    }
+
+    // No destination enabled at all - RestoreDialog must degrade to an
+    // informational state rather than crash (SettingsForm's own
+    // OnOpenRestoreDialog guards against this case before ever constructing
+    // the dialog, but the dialog itself must not assume that guard is
+    // always in front of it). Still passes a scratchRoot even though this
+    // path never lists anything (no destination to list) - construction
+    // computes the staging paths unconditionally, and this keeps every
+    // RestoreDialog construction in this suite off the real
+    // %LOCALAPPDATA%\ClaudeCounter, with nothing left depending on whether
+    // Dispose() happens to raise FormClosed.
+    [Fact]
+    public void RestoreDialogConstructsWithNoDestinationEnabledWithoutThrowing()
+    {
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
+        try
+        {
+            var error = ConstructOnStaThread(() =>
+                new RestoreDialog(Theme.Current(), new BackupConfig(), new FakeRestoreRunner(), scratchRoot));
+            Assert.Null(error);
+        }
+        finally
+        {
+            try { Directory.Delete(scratchRoot, true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+    }
+
     // S6: re-measure after adding the Backup tab's "Choose files..." button
     // inline on the Include row (see SettingsForm.AddChooseFilesButton) - the
     // Backup tab was 654px against a ~687px budget on a 1366x768 display
