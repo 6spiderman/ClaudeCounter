@@ -77,10 +77,15 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 
-; Detect a running instance so an upgrade prompts the user to close it rather
-; than failing on a locked executable. The mutex name must match the one
-; Program.cs takes for single-instance enforcement.
-AppMutex=Local\ClaudeCounter_SingleInstance
+; Close a running instance automatically for an upgrade, instead of failing on
+; a locked executable.
+;
+; Deliberately NO AppMutex. AppMutex only DETECTS a named mutex and shows a
+; "please close all instances now" prompt - it cannot close anything - and it
+; is checked before the Restart Manager step, so it short-circuits
+; CloseApplications entirely and the user is left closing the app by hand.
+; Restart Manager does the job properly; TrayApplicationContext.Shutdown()
+; handles its close request and disposes the tray icon so no ghost is left.
 CloseApplications=yes
 RestartApplications=no
 

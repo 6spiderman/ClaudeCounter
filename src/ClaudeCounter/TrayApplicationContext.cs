@@ -40,6 +40,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private Icon? _currentIcon;
     private (string Text, Band Band)? _iconKey;
     private bool _updateCheckStarted;
+    private bool _shutdownDone;
     private string? _updateUrl;
     private System.Windows.Forms.Timer? _onboardingTimer;
 
@@ -109,6 +110,18 @@ public sealed class TrayApplicationContext : ApplicationContext
         // on wake the tray shows stale data until the (delayed) timer fires. Force
         // an immediate refresh on resume instead.
         Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
+        // Close cleanly whoever asks: Windows ending the session, or the
+        // installer's Restart Manager closing us for an upgrade. Without these
+        // the tray icon is never disposed on those paths and a ghost lingers.
+        //
+        // Create the flyout's window handle up front, here on the UI thread.
+        // It is never shown until the user clicks the tray icon, but it is the
+        // marshaling target OnSessionEnding posts the exit to, and BeginInvoke
+        // requires a handle that already exists.
+        _ = _flyout.Handle;
+        Microsoft.Win32.SystemEvents.SessionEnding += OnSessionEnding;
+        Application.ApplicationExit += OnApplicationExit;
 
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started.");
 
@@ -471,10 +484,24 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void SaveSettings() => _settingsStore.Save(_settings);
 
-    private void ExitApplication()
+    /// <summary>
+    /// Releases everything the tray owns. Idempotent, because it is reachable
+    /// from three directions: the Exit menu item, Windows ending the session
+    /// (logoff or shutdown), and the installer's Restart Manager asking us to
+    /// close for an upgrade. Only the first of those runs our own code path -
+    /// the other two used to skip it entirely, which left a ghost tray icon
+    /// sitting in the notification area until the user moused over it.
+    /// </summary>
+    private void Shutdown()
     {
+        if (_shutdownDone)
+            return;
+        _shutdownDone = true;
+
         Log.Info("ClaudeCounter exiting.");
         Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
+        Application.ApplicationExit -= OnApplicationExit;
         _onboardingTimer?.Dispose();
         _lifetime.Cancel();
         // Dispose the icon before exiting or a ghost icon lingers until mouse-over.
@@ -488,6 +515,43 @@ public sealed class TrayApplicationContext : ApplicationContext
         _updates.Dispose();
         _flyout.Dispose();
         _lifetime.Dispose();
+    }
+
+    private void OnApplicationExit(object? sender, EventArgs e) => Shutdown();
+
+    /// <summary>
+    /// Windows is ending the session, or the installer's Restart Manager is
+    /// asking us to close for an upgrade. Restart Manager waits for the PROCESS
+    /// to terminate, so we do have to exit - but NOT from this thread.
+    ///
+    /// SystemEvents raises this on its own dedicated thread while Windows is
+    /// still waiting for that window procedure to return. Doing the work here
+    /// deadlocks: disposing UI-thread-owned objects hangs, and even a bare
+    /// Environment.Exit never completes. Both were observed - the log stopped
+    /// mid-handler and the process sat alive until Setup gave up.
+    ///
+    /// So post the exit to the UI thread and return immediately. The UI thread
+    /// runs the normal ExitApplication path (full disposal, tray icon removed,
+    /// message loop ended), and the process exits on its own terms.
+    /// </summary>
+    private void OnSessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e)
+    {
+        Log.Info($"Session ending ({e.Reason}) - posting exit to the UI thread.");
+        try
+        {
+            // _flyout's handle is created in the constructor precisely so this
+            // marshaling target always exists, even though it is never shown.
+            _flyout.BeginInvoke(new Action(ExitApplication));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not post the exit request: {ex.Message}");
+        }
+    }
+
+    private void ExitApplication()
+    {
+        Shutdown();
         ExitThread();
     }
 }
