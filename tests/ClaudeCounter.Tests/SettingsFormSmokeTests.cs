@@ -162,6 +162,12 @@ public class SettingsFormSmokeTests
     // for the same pattern used to test the engine itself.
     private sealed class FakeRestoreRunner : IProcessRunner
     {
+        // Fix round 1 (review): simulates a `git log` call throwing (rather
+        // than returning a non-zero ProcessResult) AFTER a successful clone
+        // has already populated the staging directory - the exact scenario
+        // the review flagged for RestoreDialog.LoadSnapshots' exception guard.
+        public bool ThrowOnLog { get; set; }
+
         public bool Exists(string file) => true;
 
         public ProcessResult Run(string file, IReadOnlyList<string> args, string? workingDir = null)
@@ -176,6 +182,8 @@ public class SettingsFormSmokeTests
                 return new ProcessResult(0, "", "");
             if (args.Count > 0 && args[0] == "log")
             {
+                if (ThrowOnLog)
+                    throw new InvalidOperationException("simulated git log failure");
                 const string sha = "1111111111111111111111111111111111aaaa";
                 var timestamp = new DateTimeOffset(2026, 1, 1, 9, 0, 0, TimeSpan.Zero);
                 return new ProcessResult(0, $"{sha}{timestamp:o}Backup 2026-01-01 09:00:00\n", "");
@@ -242,6 +250,45 @@ public class SettingsFormSmokeTests
         {
             var error = ConstructOnStaThread(() => new RestoreDialog(Theme.Current(), config, runner, scratchRoot));
             Assert.Null(error);
+        }
+        finally
+        {
+            try { Directory.Delete(scratchRoot, true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+    }
+
+    // Fix round 1 (review): the scenario the reviewer specifically called
+    // out - EnsureRepo's `git clone` succeeds (so _gitStagingDir is already
+    // a real, populated git checkout on disk) and the SUBSEQUENT `git log`
+    // call throws instead of returning a failing ProcessResult. Before the
+    // fix, this exception was unguarded in LoadSnapshots (called
+    // synchronously from the constructor), so it would have propagated out
+    // of `new RestoreDialog(...)` entirely, leaving nothing to ever Dispose
+    // or fire FormClosed - and therefore never running
+    // CleanupStagingDirectories - so the cloned staging directory would be
+    // left on disk indefinitely. Asserts both that construction survives
+    // (the crash is gone) AND that the clone's directory genuinely exists
+    // afterwards (proving this test exercises the "already populated before
+    // the throw" case the reviewer described, not a trivial empty one).
+    [Fact]
+    public void RestoreDialogConstructsWhenListingThrowsAfterASuccessfulCloneWithoutThrowing()
+    {
+        var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
+        var config = new BackupConfig
+        {
+            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+        };
+        var runner = new FakeRestoreRunner { ThrowOnLog = true };
+
+        try
+        {
+            var error = ConstructOnStaThread(() => new RestoreDialog(Theme.Current(), config, runner, scratchRoot));
+            Assert.Null(error);
+
+            var expectedGitStagingDir = Path.Combine(scratchRoot, "ClaudeCounter", "restore-git-repo");
+            Assert.True(Directory.Exists(Path.Combine(expectedGitStagingDir, ".git")),
+                "the fake clone should have populated the staging directory before `git log` threw");
         }
         finally
         {

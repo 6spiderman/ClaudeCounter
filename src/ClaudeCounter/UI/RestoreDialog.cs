@@ -1,4 +1,5 @@
 using ClaudeBackup;
+using ClaudeCounter.Core;
 
 namespace ClaudeCounter.UI;
 
@@ -108,6 +109,19 @@ public sealed class RestoreDialog : Form
     /// user's %LOCALAPPDATA%\ClaudeCounter - a bare fake IProcessRunner
     /// alone would not be enough to prevent that, since the directory PATH
     /// itself is what needs to be test-isolated, not just what runs inside it.
+    ///
+    /// The same reasoning that motivates isolating this path in tests is
+    /// also why LoadSnapshots and OnPreviewClicked (fix round 1, review)
+    /// never let an exception from listing/materialising/classifying escape
+    /// uncaught: whatever this constructor points _gitStagingDir/_stagedRoot
+    /// at (real %LOCALAPPDATA% for every real caller) can end up holding a
+    /// full, plaintext, multi-version copy of the user's Claude config the
+    /// moment `git clone` succeeds - an uncaught exception anywhere after
+    /// that point would crash the whole app (Application.ThreadException ->
+    /// Environment.Exit) before FormClosed ever runs
+    /// CleanupStagingDirectories, leaving that copy on disk indefinitely.
+    /// This is a real-caller data-hygiene concern, not just a test-isolation
+    /// one.
     /// </summary>
     public RestoreDialog(Palette palette, BackupConfig config, IProcessRunner runner, string? scratchRoot = null)
     {
@@ -268,6 +282,16 @@ public sealed class RestoreDialog : Form
     /// comment for why (a short blocking round trip here, unlike materialise/
     /// classify/apply, is what makes "construct with an already-populated
     /// snapshot list" possible for a smoke test with a fake IProcessRunner).
+    ///
+    /// Fix round 1 (review): this runs synchronously from the constructor -
+    /// an exception escaping it would leave a half-constructed Form that
+    /// never reaches FormClosed, and therefore never runs
+    /// CleanupStagingDirectories, even though RestoreGitSource.ListSnapshots'
+    /// own EnsureRepo step can already have cloned a full, plaintext copy of
+    /// every backed-up version into _gitStagingDir by the time a LATER call
+    /// (e.g. `git log` itself) throws. Catching here and treating it exactly
+    /// like a normal RestoreListResult.Failure keeps the dialog fully
+    /// constructed either way, so it still closes and cleans up normally.
     /// </summary>
     private void LoadSnapshots(Source source)
     {
@@ -282,6 +306,12 @@ public sealed class RestoreDialog : Form
             result = source == Source.Github
                 ? _gitSource.ListSnapshots(_config.Github)
                 : _zipSource.ListSnapshots(_config.Drive);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"RestoreDialog: listing snapshots failed unexpectedly: {ex}");
+            SetSourceError($"Could not list backups: {ex.Message}");
+            return;
         }
         finally
         {
@@ -628,7 +658,36 @@ public sealed class RestoreDialog : Form
             }
 
             SetBusy(true, "Comparing against your live configuration...");
-            var entries = await Task.Run(() => RestoreClassifier.Classify(_stagedRoot, _liveRoot));
+            // Fix round 1 (review): unlike Materialize (both RestoreZipSource
+            // and RestoreGitSource wrap their own bodies and return Ok=false
+            // on failure) and RestoreApplier.Apply (same), RestoreClassifier.
+            // Classify has only PER-FILE IOException/UnauthorizedAccessException
+            // handling, no top-level catch - anything else it throws would
+            // otherwise escape this await, unwind out of this async void
+            // handler, and reach Application.ThreadException, which shows an
+            // error and calls Environment.Exit(1) - terminating before
+            // FormClosed ever fires, leaving the materialised snapshot (a
+            // plaintext copy of the user's Claude config) on disk
+            // indefinitely instead of being cleaned up. Caught here and
+            // reported the same way a materialize failure already is, so a
+            // classify failure degrades to a message instead of a crash.
+            IReadOnlyList<RestoreFileEntry> entries;
+            try
+            {
+                entries = await Task.Run(() => RestoreClassifier.Classify(_stagedRoot, _liveRoot));
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"RestoreDialog: classifying the staged snapshot failed unexpectedly: {ex}");
+                if (!IsDisposed)
+                {
+                    MessageBox.Show(this,
+                        $"Could not compare the staged snapshot against your live configuration: {ex.Message}\n\n" +
+                        "See the log for details.",
+                        "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                return;
+            }
             if (IsDisposed) return;
 
             _rows = RestoreDisplayModel.BuildRows(entries);
