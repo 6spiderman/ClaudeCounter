@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ClaudeBackup;
@@ -111,12 +112,17 @@ public sealed class SettingsForm : Form
         var bottomBar = BuildBottomBar(palette, out var okButton, out var cancelButton);
         var contentHost = new Panel { Dock = DockStyle.Fill, BackColor = palette.Back };
 
-        // Fill must be added last: with exactly one control docked to each of
-        // Top/Bottom and Fill added after both, the remaining client area goes
-        // to contentHost unambiguously.
-        Controls.Add(tabStrip);
-        Controls.Add(bottomBar);
+        // WinForms resolves Dock by walking the Controls collection from the
+        // LAST index backwards, so whichever control is added LAST is laid out
+        // FIRST and gets first claim on the client area - and, being at the
+        // lowest z-order/highest index, paints UNDER everything added before
+        // it. Fill must therefore be added first (so Top/Bottom, laid out
+        // after it, carve their strips out of what is left) and it must also
+        // end up visually behind the edge bars, which this same ordering
+        // achieves for free.
         Controls.Add(contentHost);
+        Controls.Add(bottomBar);
+        Controls.Add(tabStrip);
 
         var tabs = new List<(TabButton Button, Panel Page)>();
 
@@ -140,6 +146,19 @@ public sealed class SettingsForm : Form
                 Size = new Size(TabButtonWidth, TabStripHeight - 1),
             };
             tabButton.Click += (_, _) => SelectTab(tabButton);
+            // Bonus, not required: Left/Right cycles focus (and selection)
+            // between tabs without needing to Tab back out to the strip.
+            tabButton.KeyDown += (_, args) =>
+            {
+                if (args.KeyCode is not (Keys.Left or Keys.Right))
+                    return;
+                var from = tabs.FindIndex(t => ReferenceEquals(t.Button, tabButton));
+                var delta = args.KeyCode == Keys.Right ? 1 : -1;
+                var next = tabs[(from + delta + tabs.Count) % tabs.Count].Button;
+                SelectTab(next);
+                next.Focus();
+                args.Handled = true;
+            };
             tabStrip.Controls.Add(tabButton);
             tabs.Add((tabButton, page));
             contentHost.Controls.Add(page);
@@ -446,15 +465,18 @@ public sealed class SettingsForm : Form
         BorderStyle = BorderStyle.FixedSingle,
     };
 
-    private static CheckBox NewCheckBox(string text, bool @checked, Palette palette) => new()
+    // A stock CheckBox with FlatStyle.Flat still renders its indicator box
+    // using colors it cannot be told about - on the dark palette that draws a
+    // dark box with no visible border and no visible check glyph, so ticked
+    // and unticked look identical. ThemedCheckBox (below) replaces only the
+    // painting; Checked, click-to-toggle, Space-to-toggle and AutoSize all
+    // still come from the base CheckBox class.
+    private static CheckBox NewCheckBox(string text, bool @checked, Palette palette) => new ThemedCheckBox(palette)
     {
         Text = text,
         AutoSize = true,
         Checked = @checked,
         Font = BaseFont,
-        ForeColor = palette.Fore,
-        BackColor = Color.Transparent,
-        FlatStyle = FlatStyle.Flat,
     };
 
     private static TextBox NewTextBox(string text, Palette palette, int width, bool multiline = false, int height = 23)
@@ -673,6 +695,10 @@ public sealed class SettingsForm : Form
     /// A single flat, themed tab button. A plain Control (not a Button) so it
     /// can be fully custom-painted - the active tab is marked with a solid
     /// underline plus a brighter foreground rather than any 3D chrome.
+    /// Focusable via Tab, and Enter/Space activates it the same as a click -
+    /// without this a keyboard user could never reach Alerts or Backup, which
+    /// would be a reach regression versus the old single-page dialog where
+    /// every control was plain Tab-order reachable.
     /// </summary>
     private sealed class TabButton : Control
     {
@@ -686,8 +712,38 @@ public sealed class SettingsForm : Form
             Text = text;
             BackColor = palette.BarBack;
             Cursor = Cursors.Hand;
+            TabStop = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer, true);
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
+        }
+
+        // Without claiming Enter and Space as input keys here, Enter would be
+        // swallowed by the Form's AcceptButton (OK) before this control ever
+        // sees it, and Space is not guaranteed to reach a plain Control's
+        // OnKeyDown either - both need to activate the focused tab instead.
+        protected override bool IsInputKey(Keys keyData) =>
+            keyData is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode is Keys.Enter or Keys.Space)
+            {
+                e.Handled = true;
+                OnClick(EventArgs.Empty);
+            }
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -701,6 +757,84 @@ public sealed class SettingsForm : Form
                 using var brush = new SolidBrush(_palette.Fore);
                 e.Graphics.FillRectangle(brush, 0, Height - 3, Width, 3);
             }
+            // Distinct from the active-tab underline: this marks keyboard
+            // focus, which can land on an inactive tab (e.g. tabbing onto
+            // Alerts while General is still the shown page, before Enter/
+            // Space is pressed) and must stay visibly different from it.
+            if (Focused)
+                ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
+        }
+    }
+
+    /// <summary>
+    /// A checkbox with a fully custom-painted indicator box, themed via
+    /// Palette. Subclassing CheckBox itself (rather than a plain Control, as
+    /// TabButton does) keeps all of the base class's input handling for
+    /// free - click-to-toggle, Space-to-toggle, Checked/CheckedChanged and
+    /// Tab-order participate exactly as on a stock CheckBox; only painting
+    /// and preferred-size are overridden.
+    /// </summary>
+    private sealed class ThemedCheckBox : CheckBox
+    {
+        private const int BoxSize = 16;
+        private const int BoxTextGap = 8;
+
+        private readonly Palette _palette;
+
+        public ThemedCheckBox(Palette palette)
+        {
+            _palette = palette;
+            FlatStyle = FlatStyle.Flat; // GDI+-rendered, not FlatStyle.System - required for OnPaint to be honored
+            BackColor = Color.Transparent;
+            ForeColor = palette.Fore;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
+                     ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            var textSize = TextRenderer.MeasureText(Text, Font);
+            return new Size(
+                BoxSize + BoxTextGap + textSize.Width + 2,
+                Math.Max(BoxSize, textSize.Height) + 4);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent?.BackColor ?? _palette.Back);
+
+            var boxRect = new Rectangle(0, (Height - BoxSize) / 2, BoxSize, BoxSize);
+            using (var fillBrush = new SolidBrush(Checked ? _palette.Fore : _palette.Back))
+                e.Graphics.FillRectangle(fillBrush, boxRect);
+            using (var borderPen = new Pen(_palette.Border))
+                e.Graphics.DrawRectangle(borderPen, boxRect.X, boxRect.Y, boxRect.Width - 1, boxRect.Height - 1);
+
+            if (Checked)
+            {
+                // Drawn in the palette's Back color against the Fore-filled
+                // box: the same figure/ground pair as the rest of the theme,
+                // just inverted, so it reads clearly in both light and dark.
+                using var tickPen = new Pen(_palette.Back, 2f)
+                {
+                    StartCap = LineCap.Round,
+                    EndCap = LineCap.Round,
+                    LineJoin = LineJoin.Round,
+                };
+                Point[] tick =
+                [
+                    new Point(boxRect.X + 3, boxRect.Y + 8),
+                    new Point(boxRect.X + 6, boxRect.Y + 11),
+                    new Point(boxRect.X + 13, boxRect.Y + 4),
+                ];
+                e.Graphics.DrawLines(tickPen, tick);
+            }
+
+            var textRect = new Rectangle(BoxSize + BoxTextGap, 0, Width - BoxSize - BoxTextGap, Height);
+            TextRenderer.DrawText(e.Graphics, Text, Font, textRect, _palette.Fore,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+            if (Focused)
+                ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
         }
     }
 }
