@@ -41,8 +41,14 @@ public sealed class SettingsStore
         }
         catch (Exception e) when (e is JsonException or IOException)
         {
-            // Never crash a tray app over a corrupt settings file.
-            return (new AppSettings(), false);
+            // Never crash a tray app over a corrupt settings file. Still
+            // normalize the fallback object, same as the other two return
+            // paths - Normalize() is the one place every field-level invariant
+            // (including the NotificationStateVersion stamp) is enforced, and
+            // this path must not be the one exception to that.
+            var fallback = new AppSettings();
+            fallback.Normalize();
+            return (fallback, false);
         }
     }
 

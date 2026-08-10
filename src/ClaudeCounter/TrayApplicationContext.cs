@@ -54,9 +54,18 @@ public sealed class TrayApplicationContext : ApplicationContext
             if (_settings.AutostartEnabled)
                 AutostartManager.Enable();
         }
-        else if (_settings.AutostartEnabled)
+        else
         {
-            AutostartManager.EnsurePathCurrent();
+            if (_settings.AutostartEnabled)
+                AutostartManager.EnsurePathCurrent();
+
+            // Normalize() (called inside Load()) may have just bumped
+            // NotificationStateVersion and cleared stale dedupe state in
+            // memory. Persist that immediately rather than waiting for some
+            // unrelated later SaveSettings() call - Normalize() itself does
+            // no I/O, so this is the one place that decision belongs.
+            if (_settings.NotificationStateJustMigrated)
+                _settingsStore.Save(_settings);
         }
 
         _refresher = new OAuthTokenRefresher(_tokenEndpoint);

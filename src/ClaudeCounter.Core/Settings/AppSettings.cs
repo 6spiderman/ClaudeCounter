@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeCounter.Notifications;
 
 namespace ClaudeCounter.Settings;
@@ -42,6 +43,18 @@ public sealed class AppSettings
     /// <summary>Current schema version for <see cref="NotificationState"/>. Bump when AlertLevel's int encoding changes again.</summary>
     public const int CurrentNotificationStateVersion = 1;
 
+    /// <summary>
+    /// True when the most recent <see cref="Normalize"/> call found a stale
+    /// <see cref="NotificationStateVersion"/> and cleared <see cref="NotificationState"/>.
+    /// Transient (not persisted, not written by JSON deserialization) - exists
+    /// only so a caller such as <c>TrayApplicationContext</c> can tell "the
+    /// version was just bumped in memory" from "it was already current" and
+    /// persist the bump immediately, rather than leaving it to reach disk via
+    /// some unrelated later save. <see cref="Normalize"/> itself does no I/O.
+    /// </summary>
+    [JsonIgnore]
+    public bool NotificationStateJustMigrated { get; private set; }
+
     /// <summary>Ask GitHub once a day whether a newer release exists.</summary>
     public bool CheckForUpdates { get; set; } = true;
 
@@ -85,6 +98,7 @@ public sealed class AppSettings
         {
             NotificationState.Clear();
             NotificationStateVersion = CurrentNotificationStateVersion;
+            NotificationStateJustMigrated = true;
         }
     }
 }
