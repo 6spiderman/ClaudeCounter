@@ -44,15 +44,19 @@ public static class BackupHelpText
 
     public const string Include =
         "Glob patterns (one per line), relative to ~/.claude, for what gets " +
-        "copied - e.g. commands/**. Files that are never backed up " +
-        "(credentials, keys, tokens - see Help) are skipped even if a " +
-        "pattern here would otherwise match them.";
+        "copied - e.g. commands/**. GitHub and Google Drive each have their " +
+        "own Include list - use the selector above to switch which one you " +
+        "are editing. Files that are never backed up (credentials, keys, " +
+        "tokens - see Help) are skipped even if a pattern here would " +
+        "otherwise match them.";
 
     public const string Exclude =
         "Glob patterns (one per line), relative to ~/.claude, for what to " +
-        "skip, checked after Include. Files that are never backed up " +
-        "(credentials, keys, tokens - see Help) are always skipped " +
-        "regardless of this list.";
+        "skip, checked after Include. GitHub and Google Drive each have " +
+        "their own Exclude list - use the selector above to switch which " +
+        "one you are editing. Files that are never backed up (credentials, " +
+        "keys, tokens - see Help) are always skipped regardless of this " +
+        "list.";
 
     /// <summary>
     /// Every field that has an info popup, keyed by a short identifier.
@@ -93,11 +97,19 @@ public static class BackupHelpText
         "\r\n" +
         "WHAT IS BACKED UP BY DEFAULT\r\n" +
         "settings.json, CLAUDE.md, commands/, agents/, and top-level " +
-        "plugins/*.json.\r\n" +
+        "plugins/*.json - the same defaults for both destinations until you " +
+        "change one of them.\r\n" +
         "\r\n" +
         "WHAT IS EXCLUDED BY DEFAULT\r\n" +
         "projects/ (session history, large and regenerable), statsig/, and " +
         "any cache/ directory.\r\n" +
+        "\r\n" +
+        "GITHUB AND DRIVE HAVE SEPARATE SELECTIONS\r\n" +
+        "Include and Exclude are independent per destination - the selector " +
+        "above the boxes picks which one you are editing. A private git " +
+        "repo and a Drive zip can reasonably hold different things; " +
+        "changing GitHub's selection does not touch Drive's, or vice " +
+        "versa.\r\n" +
         "\r\n" +
         "WHAT IS NEVER BACKED UP, WHATEVER YOU CONFIGURE\r\n" +
         ".credentials.json (live OAuth tokens), session.dat (this app's " +
@@ -122,7 +134,11 @@ public static class BackupHelpText
         "\r\n" +
         "RESULTS\r\n" +
         "'Back up now' reports one of three outcomes - complete, 'not run, " +
-        "check your settings' (nothing enabled, nothing selected, or a bad " +
-        "setting), or failed (a destination failed - network, auth, disk, " +
-        "or a git/rclone error). Details always go to the log.";
+        "check your settings' (nothing enabled, nothing selected on ANY " +
+        "enabled destination, or a bad setting), or failed (a destination " +
+        "failed - network, auth, disk, or a git/rclone error). One " +
+        "destination with an empty selection does not stop another enabled " +
+        "destination that does have files - that destination still runs, " +
+        "and the empty one is skipped and logged. Details always go to the " +
+        "log.";
 }

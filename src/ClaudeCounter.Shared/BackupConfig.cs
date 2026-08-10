@@ -7,12 +7,20 @@ public sealed class GitTarget
     public bool Enabled { get; set; }
     public string RemoteUrl { get; set; } = "";
     public string Branch { get; set; } = "main";
+
+    /// <summary>GitHub's own include/exclude selection - independent of <see cref="DriveTarget"/>'s.</summary>
+    public List<string> Include { get; set; } = new();
+    public List<string> Exclude { get; set; } = new();
 }
 
 public sealed class DriveTarget
 {
     public bool Enabled { get; set; }
     public string RcloneRemote { get; set; } = "";
+
+    /// <summary>Drive's own include/exclude selection - independent of <see cref="GitTarget"/>'s.</summary>
+    public List<string> Include { get; set; } = new();
+    public List<string> Exclude { get; set; } = new();
 }
 
 public sealed class ScheduleConfig
@@ -25,11 +33,41 @@ public sealed class BackupConfig
 {
     public string SourceRoot { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+
+    /// <summary>
+    /// Legacy pre-per-destination include/exclude selection, shared by both
+    /// destinations before <see cref="GitTarget.Include"/> / <see
+    /// cref="DriveTarget.Include"/> existed. Deserialize-only: kept on the
+    /// type purely so a backup.json written before <see
+    /// cref="BackupConfigVersion"/> 1 still parses instead of throwing out of
+    /// <see cref="Load"/>. <see cref="Load"/> migrates a non-empty legacy
+    /// selection onto BOTH <see cref="Github"/> and <see cref="Drive"/> the
+    /// first time such a file is read (see the private migration helper) and
+    /// clears these two lists as part of that. Never populated by <see
+    /// cref="Default"/>, and never intentionally written to again after
+    /// migration - do not read these directly; use <see
+    /// cref="GitTarget.Include"/> / <see cref="DriveTarget.Include"/>
+    /// instead.
+    /// </summary>
     public List<string> Include { get; set; } = new();
     public List<string> Exclude { get; set; } = new();
+
     public GitTarget Github { get; set; } = new();
     public DriveTarget Drive { get; set; } = new();
     public ScheduleConfig Schedule { get; set; } = new();
+
+    /// <summary>
+    /// Schema version for where Include/Exclude live. 0 (the type default)
+    /// means "written before per-destination selection existed" - Include/
+    /// Exclude lived directly on BackupConfig, shared by both destinations.
+    /// Bumped to <see cref="CurrentBackupConfigVersion"/> by <see cref="Load"/>
+    /// once a stale file has been migrated. Modeled on AppSettings'
+    /// NotificationStateVersion.
+    /// </summary>
+    public int BackupConfigVersion { get; set; }
+
+    /// <summary>Current schema version. Bump when the Include/Exclude shape changes again.</summary>
+    public const int CurrentBackupConfigVersion = 1;
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
@@ -37,7 +75,7 @@ public sealed class BackupConfig
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "ClaudeCounter", "backup.json");
 
-    public static BackupConfig Default() => new()
+    public static BackupConfig Default()
     {
         // plugins/*.json (not plugins/**/*.json): the only irreplaceable
         // state under plugins/ is the top-level manifests (installed_plugins.json,
@@ -47,18 +85,32 @@ public sealed class BackupConfig
         // "Authorization" fields) that the file-name denylist cannot see
         // inside. A user who wants the full plugin tree backed up can opt in
         // explicitly; it should not be a silent default.
-        Include = new()
-        {
-            "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/*.json",
-        },
+        var include = new List<string> { "settings.json", "CLAUDE.md", "commands/**", "agents/**", "plugins/*.json" };
         // "**/*cache*" only ever constrains a file's own name (it does not
         // end in "**", so FileSelector will not prune a whole directory on
         // its account) and was measured to remove almost nothing on a real
         // machine, so it is gone entirely rather than left as dead weight -
         // "**/cache/**" is the pattern that actually prunes a cache
         // directory's contents.
-        Exclude = new() { "projects/**", "statsig/**", "**/cache/**" },
-    };
+        var exclude = new List<string> { "projects/**", "statsig/**", "**/cache/**" };
+
+        // Both destinations get the SAME defaults today - a brand new user
+        // has never configured anything to diverge, and giving GitHub and
+        // Drive independent lists of the same content is what makes editing
+        // just one of them later (via the Backup tab's destination selector)
+        // a real, isolated change instead of secretly touching both.
+        return new BackupConfig
+        {
+            // A freshly created config is already at the current shape, so a
+            // later Load() of what this writes never mistakes it for a
+            // pre-migration file (mirrors SettingsStore's fresh.Normalize()
+            // stamping NotificationStateVersion before a fresh AppSettings'
+            // first save, for the identical reason).
+            BackupConfigVersion = CurrentBackupConfigVersion,
+            Github = new GitTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
+            Drive = new DriveTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
+        };
+    }
 
     public static BackupConfig Load(string path)
     {
@@ -66,11 +118,64 @@ public sealed class BackupConfig
             return Default();
         try
         {
-            return JsonSerializer.Deserialize<BackupConfig>(File.ReadAllText(path)) ?? Default();
+            var config = JsonSerializer.Deserialize<BackupConfig>(File.ReadAllText(path)) ?? Default();
+            config.MigrateLegacySelection(path);
+            return config;
         }
         catch (Exception e) when (e is JsonException or IOException)
         {
             return Default();
+        }
+    }
+
+    /// <summary>
+    /// One-time migration from the pre-per-destination shape: a backup.json
+    /// at BackupConfigVersion 0 with a non-empty legacy Include/Exclude had
+    /// that ONE list shared by both destinations. Copying it onto BOTH
+    /// Github and Drive here preserves exactly what an existing user's
+    /// backup used to select - nothing they configured changes meaning, on
+    /// purpose; this is not the place to "improve" on it. Persists
+    /// immediately so a second Load() of the same file sees
+    /// BackupConfigVersion already current and never re-enters this method's
+    /// copy branch.
+    ///
+    /// Gated on the legacy lists actually being non-empty, not just the
+    /// version being stale: a file at version 0 with empty legacy lists (a
+    /// user who cleared both boxes before this feature existed) has nothing
+    /// to copy, and Github.Include/Drive.Include already deserialize to
+    /// empty lists on their own (the type's field initializer), which is the
+    /// exact same end state copying empty lists onto them would produce -
+    /// so skipping the copy (and the version bump, and the save) in that
+    /// case changes nothing observable.
+    /// </summary>
+    private void MigrateLegacySelection(string path)
+    {
+        // A JSON payload with an explicit null for any of these (rather than
+        // the field simply being absent) would otherwise NRE below - see
+        // AppSettings.NotificationState's "??= new()" for the same
+        // defensive pattern after a real bug from exactly this shape.
+        Include ??= new();
+        Exclude ??= new();
+        Github ??= new();
+        Drive ??= new();
+        Github.Include ??= new();
+        Github.Exclude ??= new();
+        Drive.Include ??= new();
+        Drive.Exclude ??= new();
+
+        if (BackupConfigVersion >= CurrentBackupConfigVersion)
+            return;
+
+        if (Include.Count > 0 || Exclude.Count > 0)
+        {
+            Github.Include = new List<string>(Include);
+            Github.Exclude = new List<string>(Exclude);
+            Drive.Include = new List<string>(Include);
+            Drive.Exclude = new List<string>(Exclude);
+            Include.Clear();
+            Exclude.Clear();
+            BackupConfigVersion = CurrentBackupConfigVersion;
+            Save(path);
         }
     }
 

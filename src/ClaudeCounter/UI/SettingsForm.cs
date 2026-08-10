@@ -77,13 +77,26 @@ public sealed class SettingsForm : Form
     // instead. Do not add a reference to ClaudeBackup.csproj here; it drags the
     // worker's RID-specific publish graph into the tray's single-file publish
     // and breaks it.
+    // S5, fix round 1: GitHub's and Drive's connection fields plus their own
+    // Include/Exclude now live in two separate blocks (see BuildGithubBlock /
+    // BuildDriveBlock) that are both always constructed, with only one ever
+    // Visible - _backupSelectionTarget (GitHub / Google Drive) controls
+    // which. Every field below is therefore a genuinely separate Control per
+    // destination (not a single shared control whose content gets swapped),
+    // so OnSaveBackupSchedule can read both destinations' values directly at
+    // any time regardless of which block currently happens to be on screen.
     private CheckBox? _backupGithubEnabled;
     private TextBox? _backupGithubUrl;
     private TextBox? _backupGithubBranch;
+    private TextBox? _backupGithubInclude;
+    private TextBox? _backupGithubExclude;
     private CheckBox? _backupDriveEnabled;
     private TextBox? _backupDriveRemote;
-    private TextBox? _backupInclude;
-    private TextBox? _backupExclude;
+    private TextBox? _backupDriveInclude;
+    private TextBox? _backupDriveExclude;
+    private ComboBox? _backupSelectionTarget;
+    private Panel? _backupGithubBlock;
+    private Panel? _backupDriveBlock;
     private ComboBox? _backupFrequency;
     private TextBox? _backupTime;
 
@@ -347,9 +360,23 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// GitHub group, Drive group, Include/Exclude, Frequency/Time, action
-    /// buttons. Only called when BackupTaskManager.WorkerAvailable() - current
-    /// values are loaded from BackupConfig.DefaultPath().
+    /// Destination selector, Frequency/Time, action buttons - all shared,
+    /// visible regardless of which destination is selected. The GitHub and
+    /// Drive connection fields (enable checkbox, remote URL/branch or rclone
+    /// remote) plus that destination's own Include/Exclude live in two
+    /// separate blocks (see BuildGithubBlock / BuildDriveBlock) that are
+    /// both built and added to the page up front, but only one is ever
+    /// Visible at a time - see the selector's SelectedIndexChanged handler
+    /// below. Fix round 1: this used to show BOTH destinations' connection
+    /// fields simultaneously with only the Include/Exclude boxes switching,
+    /// which made the Backup tab tall enough (705px) to run off the bottom
+    /// of a 1366x768 display at 100% DPI. Showing only one destination's
+    /// fields at a time both fixes the height and makes "which destination
+    /// am I editing" unambiguous without any extra dynamic labeling - the
+    /// visible block IS the answer.
+    ///
+    /// Only called when BackupTaskManager.WorkerAvailable() - current values
+    /// are loaded from BackupConfig.DefaultPath().
     /// </summary>
     private (Panel Page, int Height) BuildBackupPage(Palette palette)
     {
@@ -380,70 +407,40 @@ public sealed class SettingsForm : Form
         page.Controls.Add(helpButton);
         y += helpButton.Height + RowGap;
 
-        _backupGithubEnabled = NewCheckBox("Back up to a GitHub repo", config.Github.Enabled, palette);
-        _backupGithubEnabled.Location = new Point(PagePadX, y);
-        page.Controls.Add(_backupGithubEnabled);
-        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.GithubEnabled);
-        y += _backupGithubEnabled.Height + RowGap;
+        var selectorLabel = NewSectionLabel("Editing settings for", palette, y);
+        page.Controls.Add(selectorLabel);
+        y += selectorLabel.PreferredHeight + 2;
 
-        var urlLabel = NewSectionLabel("Remote URL", palette, y);
-        page.Controls.Add(urlLabel);
-        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.RemoteUrl);
-        y += urlLabel.PreferredHeight + 2;
+        _backupSelectionTarget = NewCombo(palette, 150);
+        _backupSelectionTarget.Location = new Point(PagePadX, y);
+        _backupSelectionTarget.Items.Add("GitHub");
+        _backupSelectionTarget.Items.Add("Google Drive");
+        _backupSelectionTarget.SelectedIndex = 0;
+        page.Controls.Add(_backupSelectionTarget);
+        y += _backupSelectionTarget.Height + RowGap;
 
-        _backupGithubUrl = NewTextBox(config.Github.RemoteUrl, palette, fullWidth);
-        _backupGithubUrl.Location = new Point(PagePadX, y);
-        page.Controls.Add(_backupGithubUrl);
-        y += _backupGithubUrl.Height + RowGap;
-
-        // I2: the security model's non-negotiable guardrail - ClaudeCounter
-        // has no way to call the GitHub API and check a repo's visibility, so
-        // it cannot enforce privacy. The one thing it can do is make sure the
-        // user is not left assuming it was checked for them.
-        var privacyCaption = NewSubtleLabel(
-            "This repo must be private. ClaudeCounter cannot verify that automatically.",
-            palette, fullWidth);
-        privacyCaption.Location = new Point(PagePadX, y);
-        page.Controls.Add(privacyCaption);
-        y += privacyCaption.PreferredHeight + RowGap;
-
-        page.Controls.Add(NewFieldLabel("Branch", palette, y));
-        _backupGithubBranch = NewTextBox(config.Github.Branch, palette, 130);
-        _backupGithubBranch.Location = new Point(FieldX, y);
-        page.Controls.Add(_backupGithubBranch);
-        AddInfoButton(page, palette, FieldX + 130 + 8, y + 3, BackupHelpText.Branch);
-        y += _backupGithubBranch.Height + RowGap;
-
-        _backupDriveEnabled = NewCheckBox("Back up to Google Drive (rclone)", config.Drive.Enabled, palette);
-        _backupDriveEnabled.Location = new Point(PagePadX, y);
-        page.Controls.Add(_backupDriveEnabled);
-        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
-        y += _backupDriveEnabled.Height + RowGap;
-
-        page.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
-        _backupDriveRemote = NewTextBox(config.Drive.RcloneRemote, palette, 130);
-        _backupDriveRemote.Location = new Point(FieldX, y);
-        page.Controls.Add(_backupDriveRemote);
-        AddInfoButton(page, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
-        y += _backupDriveRemote.Height + RowGap;
-
-        var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
-        page.Controls.Add(includeLabel);
-        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.Include);
-        y += includeLabel.PreferredHeight + 2;
-        _backupInclude = NewTextBox(string.Join(Environment.NewLine, config.Include), palette, fullWidth, multiline: true, height: 55);
-        _backupInclude.Location = new Point(PagePadX, y);
-        page.Controls.Add(_backupInclude);
-        y += _backupInclude.Height + RowGap;
-
-        var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
-        page.Controls.Add(excludeLabel);
-        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.Exclude);
-        y += excludeLabel.PreferredHeight + 2;
-        _backupExclude = NewTextBox(string.Join(Environment.NewLine, config.Exclude), palette, fullWidth, multiline: true, height: 55);
-        _backupExclude.Location = new Point(PagePadX, y);
-        page.Controls.Add(_backupExclude);
-        y += _backupExclude.Height + RowGap;
+        var (githubBlock, githubBlockHeight) = BuildGithubBlock(config.Github, palette, fullWidth, rightEdgeX);
+        var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, palette, fullWidth, rightEdgeX);
+        githubBlock.Location = new Point(0, y);
+        driveBlock.Location = new Point(0, y);
+        githubBlock.Visible = true;
+        driveBlock.Visible = false;
+        // Both blocks are added regardless of the selector's starting value -
+        // only Visible toggles thereafter - so every control inside both
+        // (including the ones not currently shown) is fully constructed and
+        // reachable by OnSaveBackupSchedule the whole time the dialog is
+        // open, not just while its block happens to be on screen.
+        page.Controls.Add(driveBlock);
+        page.Controls.Add(githubBlock);
+        _backupGithubBlock = githubBlock;
+        _backupDriveBlock = driveBlock;
+        _backupSelectionTarget.SelectedIndexChanged += (_, _) =>
+        {
+            var showGithub = _backupSelectionTarget.SelectedIndex == 0;
+            _backupGithubBlock!.Visible = showGithub;
+            _backupDriveBlock!.Visible = !showGithub;
+        };
+        y += Math.Max(githubBlockHeight, driveBlockHeight) + RowGap;
 
         page.Controls.Add(NewFieldLabel("Frequency", palette, y));
         _backupFrequency = NewCombo(palette, 130);
@@ -478,9 +475,126 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
+    /// GitHub's connection fields (enable, remote URL, privacy caption,
+    /// branch) plus GitHub's own Include/Exclude. A plain Panel (not
+    /// Dock = Fill) sized to exactly its own content, positioned by the
+    /// caller (BuildBackupPage) at the shared Y where the destination
+    /// blocks begin - its children use the same PagePadX/FieldX offsets
+    /// every other page uses, since the panel's own Location.X is 0 and
+    /// therefore does not shift their absolute position.
+    /// </summary>
+    private (Panel Block, int Height) BuildGithubBlock(GitTarget target, Palette palette, int fullWidth, int rightEdgeX)
+    {
+        var block = new Panel { BackColor = palette.Back };
+        var y = 0;
+
+        _backupGithubEnabled = NewCheckBox("Back up to a GitHub repo", target.Enabled, palette);
+        _backupGithubEnabled.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupGithubEnabled);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.GithubEnabled);
+        y += _backupGithubEnabled.Height + RowGap;
+
+        var urlLabel = NewSectionLabel("Remote URL", palette, y);
+        block.Controls.Add(urlLabel);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.RemoteUrl);
+        y += urlLabel.PreferredHeight + 2;
+
+        _backupGithubUrl = NewTextBox(target.RemoteUrl, palette, fullWidth);
+        _backupGithubUrl.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupGithubUrl);
+        y += _backupGithubUrl.Height + RowGap;
+
+        // I2: the security model's non-negotiable guardrail - ClaudeCounter
+        // has no way to call the GitHub API and check a repo's visibility, so
+        // it cannot enforce privacy. The one thing it can do is make sure the
+        // user is not left assuming it was checked for them.
+        var privacyCaption = NewSubtleLabel(
+            "This repo must be private. ClaudeCounter cannot verify that automatically.",
+            palette, fullWidth);
+        privacyCaption.Location = new Point(PagePadX, y);
+        block.Controls.Add(privacyCaption);
+        y += privacyCaption.PreferredHeight + RowGap;
+
+        block.Controls.Add(NewFieldLabel("Branch", palette, y));
+        _backupGithubBranch = NewTextBox(target.Branch, palette, 130);
+        _backupGithubBranch.Location = new Point(FieldX, y);
+        block.Controls.Add(_backupGithubBranch);
+        AddInfoButton(block, palette, FieldX + 130 + 8, y + 3, BackupHelpText.Branch);
+        y += _backupGithubBranch.Height + RowGap;
+
+        var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
+        block.Controls.Add(includeLabel);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
+        y += includeLabel.PreferredHeight + 2;
+        _backupGithubInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
+        _backupGithubInclude.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupGithubInclude);
+        y += _backupGithubInclude.Height + RowGap;
+
+        var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
+        block.Controls.Add(excludeLabel);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Exclude);
+        y += excludeLabel.PreferredHeight + 2;
+        _backupGithubExclude = NewTextBox(string.Join(Environment.NewLine, target.Exclude), palette, fullWidth, multiline: true, height: 55);
+        _backupGithubExclude.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupGithubExclude);
+        y += _backupGithubExclude.Height + RowGap;
+
+        block.Size = new Size(fullWidth + PagePadX * 2, y);
+        return (block, y);
+    }
+
+    /// <summary>
+    /// Drive's connection fields (enable, rclone remote) plus Drive's own
+    /// Include/Exclude. See BuildGithubBlock's doc comment for the layout
+    /// reasoning - identical here, just for the Drive target.
+    /// </summary>
+    private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, Palette palette, int fullWidth, int rightEdgeX)
+    {
+        var block = new Panel { BackColor = palette.Back };
+        var y = 0;
+
+        _backupDriveEnabled = NewCheckBox("Back up to Google Drive (rclone)", target.Enabled, palette);
+        _backupDriveEnabled.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupDriveEnabled);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
+        y += _backupDriveEnabled.Height + RowGap;
+
+        block.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
+        _backupDriveRemote = NewTextBox(target.RcloneRemote, palette, 130);
+        _backupDriveRemote.Location = new Point(FieldX, y);
+        block.Controls.Add(_backupDriveRemote);
+        AddInfoButton(block, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
+        y += _backupDriveRemote.Height + RowGap;
+
+        var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
+        block.Controls.Add(includeLabel);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
+        y += includeLabel.PreferredHeight + 2;
+        _backupDriveInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
+        _backupDriveInclude.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupDriveInclude);
+        y += _backupDriveInclude.Height + RowGap;
+
+        var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
+        block.Controls.Add(excludeLabel);
+        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Exclude);
+        y += excludeLabel.PreferredHeight + 2;
+        _backupDriveExclude = NewTextBox(string.Join(Environment.NewLine, target.Exclude), palette, fullWidth, multiline: true, height: 55);
+        _backupDriveExclude.Location = new Point(PagePadX, y);
+        block.Controls.Add(_backupDriveExclude);
+        y += _backupDriveExclude.Height + RowGap;
+
+        block.Size = new Size(fullWidth + PagePadX * 2, y);
+        return (block, y);
+    }
+
+    /// <summary>
     /// Adds a small themed info button at (x, y) that shows <paramref
     /// name="text"/> in the shared _helpTip on click. Only called from
-    /// BuildBackupPage, which creates _helpTip before the first call.
+    /// BuildBackupPage (directly) and BuildGithubBlock/BuildDriveBlock
+    /// (for a block Panel), both of which run after BuildBackupPage has
+    /// created _helpTip.
     /// </summary>
     private void AddInfoButton(Panel page, Palette palette, int x, int y, string text)
     {
@@ -653,14 +767,22 @@ public sealed class SettingsForm : Form
             return;
         }
 
+        // S5, fix round 1: GitHub's and Drive's fields are now two genuinely
+        // separate blocks of controls (both always constructed, only one
+        // ever Visible - see BuildBackupPage/BuildGithubBlock/
+        // BuildDriveBlock), so both can be read directly here regardless of
+        // which one the user currently has on screen. No flush-from-whichever-
+        // is-visible step is needed any more.
         var config = BackupConfig.Load(BackupConfig.DefaultPath());
         config.Github.Enabled = _backupGithubEnabled!.Checked;
         config.Github.RemoteUrl = remoteUrl;
         config.Github.Branch = _backupGithubBranch!.Text.Trim();
+        config.Github.Include = SplitLines(_backupGithubInclude!.Text);
+        config.Github.Exclude = SplitLines(_backupGithubExclude!.Text);
         config.Drive.Enabled = _backupDriveEnabled!.Checked;
         config.Drive.RcloneRemote = rcloneRemote;
-        config.Include = SplitLines(_backupInclude!.Text);
-        config.Exclude = SplitLines(_backupExclude!.Text);
+        config.Drive.Include = SplitLines(_backupDriveInclude!.Text);
+        config.Drive.Exclude = SplitLines(_backupDriveExclude!.Text);
         config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
         config.Schedule.Time = time;
 

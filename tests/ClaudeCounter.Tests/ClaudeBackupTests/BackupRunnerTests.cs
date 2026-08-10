@@ -71,13 +71,16 @@ public class BackupRunnerTests : IDisposable
             if (Directory.Exists(d)) Directory.Delete(d, true);
     }
 
+    // Both targets get the same "settings.json" selection by default,
+    // mirroring what the old single shared Include/Exclude used to produce
+    // for both destinations - most of the existing tests below only care
+    // about one destination at a time and should not have to think about
+    // the other's selection to keep passing.
     private BackupConfig Config() => new()
     {
         SourceRoot = _root,
-        Include = new() { "settings.json" },
-        Exclude = new(),
-        Github = new() { Enabled = true, RemoteUrl = "url", Branch = "main" },
-        Drive = new() { Enabled = false },
+        Github = new() { Enabled = true, RemoteUrl = "url", Branch = "main", Include = new() { "settings.json" }, Exclude = new() },
+        Drive = new() { Enabled = false, Include = new() { "settings.json" }, Exclude = new() },
     };
 
     [Fact]
@@ -141,8 +144,64 @@ public class BackupRunnerTests : IDisposable
     public void NothingSelectedIsConfigError()
     {
         var c = Config();
-        c.Include = new() { "does-not-exist/**" };
+        c.Github.Include = new() { "does-not-exist/**" };
         Assert.Equal(1, BackupRunner.Run(c, new OkRunner(), _stg, _tmp));
+    }
+
+    // S5: with both destinations enabled but empty selections, the run must
+    // still fail closed - "nothing selected on any enabled destination" is
+    // exit 1 regardless of how many destinations are enabled.
+    [Fact]
+    public void BothDestinationsEnabledButNothingSelectedAnywhereIsConfigError()
+    {
+        var c = Config();
+        c.Github.Include = new() { "does-not-exist/**" };
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "also-does-not-exist/**" };
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
+    }
+
+    // S5: the core per-destination behaviour - GitHub's own selection is
+    // empty (a GitHub-side config mistake) while Drive's selection has
+    // files. This must NOT fail the whole run: Drive still runs and
+    // succeeds, GitHub is skipped, and the run exits 0.
+    [Fact]
+    public void GithubEmptySelectionDoesNotFailDriveWhichStillRuns()
+    {
+        var c = Config();
+        c.Github.Include = new() { "does-not-exist/**" };
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "settings.json" };
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        Assert.Contains(runner.Calls, call => call.StartsWith("rclone copy"));
+        Assert.DoesNotContain(runner.Calls, call => call.StartsWith("git push"));
+    }
+
+    // S5, the reverse of the above: Drive's own selection is empty while
+    // GitHub's has files. GitHub still runs; Drive is skipped; exit 0.
+    [Fact]
+    public void DriveEmptySelectionDoesNotFailGithubWhichStillRuns()
+    {
+        var c = Config();
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "does-not-exist/**" };
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        Assert.Contains(runner.Calls, call => call.StartsWith("git push"));
+        Assert.DoesNotContain(runner.Calls, call => call.StartsWith("rclone copy"));
     }
 
     [Fact]
@@ -200,7 +259,7 @@ public class BackupRunnerTests : IDisposable
     {
         var c = Config();
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
-        c.Include.Add(".credentials.json");
+        c.Github.Include.Add(".credentials.json");
         // Selector already drops secrets; the pre-flight scan is the backstop.
         // Force the scenario by asserting no secret is ever staged: run returns 0
         // and the staging dir must not contain the secret.
@@ -227,7 +286,34 @@ public class BackupRunnerTests : IDisposable
 
         var code = BackupRunner.Run(
             c, runner, _stg, _tmp,
-            _ => (new[] { ".credentials.json" }, new List<string>()));
+            (_, _, _) => (new[] { ".credentials.json" }, new List<string>()));
+
+        Assert.Equal(1, code);
+        Assert.Empty(runner.Calls);
+    }
+
+    // S5: the offender backstop must fire per destination, not just once
+    // against whichever destination happens to be checked first. This fake
+    // selector returns a clean GitHub selection but an offender-bearing
+    // Drive selection (distinguished by which Include list it is handed) -
+    // if the backstop were ever collapsed back to a single check (e.g. only
+    // re-checking GitHub's result), this offender would slip through and the
+    // run would incorrectly proceed to run Drive's backend.
+    [Fact]
+    public void OffenderInDriveOnlySelectionStillAbortsTheWholeRun()
+    {
+        var c = Config();
+        c.Github.Include = new() { "github-clean-marker" };
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "drive-offender-marker" };
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(
+            c, runner, _stg, _tmp,
+            (_, include, _) => include.Contains("drive-offender-marker")
+                ? (new[] { "session.dat" }, new List<string>())
+                : (new[] { "settings.json" }, new List<string>()));
 
         Assert.Equal(1, code);
         Assert.Empty(runner.Calls);
@@ -242,14 +328,34 @@ public class BackupRunnerTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
         var c = Config();
-        c.Include.Add(".credentials.json");
+        c.Github.Include.Add(".credentials.json");
 
         var before = ReadLog().Length;
         BackupRunner.Run(c, new OkRunner(), _stg, _tmp);
         var written = ReadLog()[before..];
 
-        Assert.Contains("withheld by the secret denylist", written);
+        Assert.Contains("withheld from GitHub by the secret denylist", written);
         Assert.Contains(".credentials.json", written);
+    }
+
+    // S5: the withheld-files log line must name which destination it
+    // applies to - a user with different GitHub and Drive selections cannot
+    // otherwise tell which backup a withheld file was omitted from.
+    [Fact]
+    public void WithheldFilesLogLineNamesDriveWhenWithheldFromDrive()
+    {
+        File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
+        var c = Config();
+        c.Github.Enabled = false;
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include.Add(".credentials.json");
+
+        var before = ReadLog().Length;
+        BackupRunner.Run(c, new OkRunner(), _stg, _tmp);
+        var written = ReadLog()[before..];
+
+        Assert.Contains("withheld from Google Drive by the secret denylist", written);
     }
 
     private static string ReadLog()

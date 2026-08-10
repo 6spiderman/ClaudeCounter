@@ -6,17 +6,25 @@ using ClaudeCounter.Core;
 namespace ClaudeBackup;
 
 /// <summary>
-/// Orchestrates one backup run: select files, log what the secret denylist
-/// withheld, re-assert the denylist as a fail-closed backstop, then run each
-/// enabled backend independently so one backend failing (or throwing) does
-/// not prevent the other from running.
+/// Orchestrates one backup run: select files PER ENABLED DESTINATION (GitHub
+/// and Drive each own an independent include/exclude selection - see
+/// GitTarget.Include / DriveTarget.Include), log what the secret denylist
+/// withheld per destination, re-assert the denylist as a fail-closed
+/// backstop against EACH destination's selection independently, then run
+/// each enabled backend independently so one backend failing (or throwing,
+/// or having nothing to upload) does not prevent the other from running.
 ///
 /// Exit codes (meaningful to Task Scheduler, which records them):
-///   0 - success: every enabled backend succeeded.
+///   0 - success: every enabled destination that had anything to upload
+///       succeeded.
 ///   1 - configuration/selection error: no destination enabled, an enabled
-///       destination is not configured, nothing selected, or a denylist
-///       offender detected in the selection.
-///   2 - at least one enabled backend failed.
+///       destination is not configured, a denylist offender detected in
+///       either destination's selection, or NO enabled destination had
+///       anything selected to upload. One destination selecting nothing
+///       while another selects files is NOT this case - see the per-
+///       destination "nothing selected" handling below.
+///   2 - at least one enabled destination that had something to upload
+///       actually failed to upload it.
 /// </summary>
 public static class BackupRunner
 {
@@ -29,20 +37,26 @@ public static class BackupRunner
     /// SecretDenylist.Offenders(files) reports offenders correctly (that is
     /// SecretDenylistTests' job, on an already-public, already-tested
     /// method), but whether THIS method calls it, before either backend
-    /// runs, and returns the right exit code when it does. FileSelector
-    /// itself never hands back a secret (it filters via the same
-    /// SecretDenylist before Run's public overload ever sees the list), so
-    /// there is no way to prove that wiring by calling the public overload
-    /// with real files - a fake selector is the only way to put a
-    /// known-bad list in front of the check without needing FileSelector to
-    /// first fail at its own job.
+    /// runs, for EACH destination's selection independently, and returns
+    /// the right exit code when it does. FileSelector itself never hands
+    /// back a secret (it filters via the same SecretDenylist before Run's
+    /// public overload ever sees the list), so there is no way to prove
+    /// that wiring by calling the public overload with real files - a fake
+    /// selector is the only way to put a known-bad list in front of the
+    /// check without needing FileSelector to first fail at its own job.
+    ///
+    /// The delegate mirrors FileSelector.Select's own (root, include,
+    /// exclude) shape rather than taking the whole BackupConfig, precisely
+    /// so it can be called once per destination with that destination's own
+    /// Include/Exclude - a delegate keyed on the whole config would tempt a
+    /// caller into forgetting which target's lists it was supposed to read.
     /// </summary>
     internal static int Run(
         BackupConfig config,
         IProcessRunner runner,
         string stagingDir,
         string tempDir,
-        Func<BackupConfig, (IReadOnlyList<string> Files, List<string> Withheld)> select)
+        Func<string, IEnumerable<string>, IEnumerable<string>, (IReadOnlyList<string> Files, List<string> Withheld)> select)
     {
         if (!config.Github.Enabled && !config.Drive.Enabled)
         {
@@ -77,18 +91,121 @@ public static class BackupRunner
             return 1;
         }
 
+        // Each enabled destination is selected against its OWN Include/
+        // Exclude and independently re-checked against the secret denylist
+        // below - collapsing this back to a single selection/check (as a
+        // single shared Include/Exclude used to allow) would silently stop
+        // covering whichever destination's selection was not the one
+        // checked.
+        //
+        // DELIBERATE: TrySelect returning false here (an offender found)
+        // aborts the WHOLE run (return 1) immediately, before the other
+        // destination is even selected, let alone either backend runs - it
+        // is NOT scoped to just the offending destination. This is
+        // intentional and must stay this way: FileSelector already strips
+        // anything SecretDenylist flags, so Offenders() firing at all means
+        // that invariant was somehow violated - something is genuinely
+        // broken, not merely misconfigured. The conservative reaction to an
+        // assumption breaking is to upload nothing anywhere, not to proceed
+        // with whichever destination happens to look clean via a selection
+        // pipeline that just proved it cannot be trusted. Do not "fix" this
+        // into per-destination scoping.
+        IReadOnlyList<string> githubFiles = Array.Empty<string>();
+        if (config.Github.Enabled)
+        {
+            if (!TrySelect(select, "GitHub", config.SourceRoot, config.Github.Include, config.Github.Exclude, out githubFiles))
+                return 1;
+        }
+
+        IReadOnlyList<string> driveFiles = Array.Empty<string>();
+        if (config.Drive.Enabled)
+        {
+            if (!TrySelect(select, "Google Drive", config.SourceRoot, config.Drive.Include, config.Drive.Exclude, out driveFiles))
+                return 1;
+        }
+
+        // "Nothing selected" is only a whole-run failure when NO enabled
+        // destination has anything to upload. One destination with an empty
+        // selection while another has files is that destination's own
+        // config mistake (logged below, per destination), not grounds to
+        // fail a run that can otherwise proceed.
+        var githubHasFiles = config.Github.Enabled && githubFiles.Count > 0;
+        var driveHasFiles = config.Drive.Enabled && driveFiles.Count > 0;
+        if (!githubHasFiles && !driveHasFiles)
+        {
+            Log.Warn("BackupRunner: nothing selected to back up on any enabled destination.");
+            return 1;
+        }
+
+        var anyFailed = false;
+
+        if (config.Github.Enabled)
+        {
+            if (githubFiles.Count == 0)
+            {
+                Log.Warn("BackupRunner: nothing selected for GitHub; skipping this destination.");
+            }
+            else
+            {
+                var ok = RunBackend("GitHub",
+                    () => new GitBackend(runner, stagingDir).Run(config.SourceRoot, githubFiles, config.Github));
+                anyFailed |= !ok;
+            }
+        }
+
+        // Deliberately not an "else if" and not short-circuited by the
+        // GitHub result above: each enabled backend must get a chance to
+        // run regardless of whether the other one failed, threw, or had
+        // nothing selected.
+        if (config.Drive.Enabled)
+        {
+            if (driveFiles.Count == 0)
+            {
+                Log.Warn("BackupRunner: nothing selected for Google Drive; skipping this destination.");
+            }
+            else
+            {
+                var ok = RunBackend("Google Drive",
+                    () => new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive));
+                anyFailed |= !ok;
+            }
+        }
+
+        return anyFailed ? 2 : 0;
+    }
+
+    /// <summary>
+    /// Runs the selection delegate for one destination, logs what the secret
+    /// denylist withheld (named, and naming the destination it applies to -
+    /// a bare count would not let a user tell which backup a withheld file
+    /// was omitted from), and re-asserts the fail-closed
+    /// SecretDenylist.Offenders backstop against the result. Returns false
+    /// (having already logged why) when an offender is found, which the
+    /// caller treats as an immediate whole-run abort - the same fail-closed
+    /// behaviour the pre-per-destination single-selection check had, just
+    /// now performed once per destination instead of once overall.
+    /// </summary>
+    private static bool TrySelect(
+        Func<string, IEnumerable<string>, IEnumerable<string>, (IReadOnlyList<string> Files, List<string> Withheld)> select,
+        string destinationName,
+        string sourceRoot,
+        IEnumerable<string> include,
+        IEnumerable<string> exclude,
+        out IReadOnlyList<string> files)
+    {
         // Always use the 4-arg FileSelector.Select overload (via the real
         // SelectFiles delegate below): the 3-arg convenience overload
         // discards the withheld list, which makes silently omitting files
         // the user asked for the path of least resistance. A backup tool
         // that silently drops files is a correctness bug, so what the
         // denylist withheld is logged explicitly below.
-        var (files, withheld) = select(config);
+        List<string> withheld;
+        (files, withheld) = select(sourceRoot, include, exclude);
 
         if (withheld.Count > 0)
         {
             Log.Warn(
-                $"BackupRunner: {withheld.Count} file(s) withheld by the secret denylist: " +
+                $"BackupRunner: {withheld.Count} file(s) withheld from {destinationName} by the secret denylist: " +
                 string.Join(", ", withheld));
         }
 
@@ -102,36 +219,12 @@ public static class BackupRunner
         var offenders = SecretDenylist.Offenders(files);
         if (offenders.Count > 0)
         {
-            Log.Error($"BackupRunner: aborting - secret file(s) in selection: {string.Join(", ", offenders)}");
-            return 1;
+            Log.Error(
+                $"BackupRunner: aborting - secret file(s) in {destinationName} selection: {string.Join(", ", offenders)}");
+            return false;
         }
 
-        if (files.Count == 0)
-        {
-            Log.Warn("BackupRunner: nothing selected to back up.");
-            return 1;
-        }
-
-        var anyFailed = false;
-
-        if (config.Github.Enabled)
-        {
-            var ok = RunBackend("GitHub",
-                () => new GitBackend(runner, stagingDir).Run(config.SourceRoot, files, config.Github));
-            anyFailed |= !ok;
-        }
-
-        // Deliberately not an "else if" and not short-circuited by the
-        // GitHub result above: each enabled backend must get a chance to
-        // run regardless of whether the other one failed OR threw.
-        if (config.Drive.Enabled)
-        {
-            var ok = RunBackend("Google Drive",
-                () => new RcloneBackend(runner, tempDir).Run(config.SourceRoot, files, config.Drive));
-            anyFailed |= !ok;
-        }
-
-        return anyFailed ? 2 : 0;
+        return true;
     }
 
     /// <summary>
@@ -139,9 +232,10 @@ public static class BackupRunner
     /// overload: the 4-arg <see cref="FileSelector.Select"/> overload, wired
     /// through so the withheld list is never silently discarded.
     /// </summary>
-    private static (IReadOnlyList<string> Files, List<string> Withheld) SelectFiles(BackupConfig config)
+    private static (IReadOnlyList<string> Files, List<string> Withheld) SelectFiles(
+        string root, IEnumerable<string> include, IEnumerable<string> exclude)
     {
-        var files = new FileSelector().Select(config.SourceRoot, config.Include, config.Exclude, out var withheld);
+        var files = new FileSelector().Select(root, include, exclude, out var withheld);
         return (files, withheld);
     }
 
