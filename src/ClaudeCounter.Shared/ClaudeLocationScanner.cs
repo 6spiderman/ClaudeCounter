@@ -111,12 +111,19 @@ public static class ClaudeLocationScanner
     /// Does no threading itself - this method is synchronous and can walk a
     /// large tree (skills/ was 4,941 files on the reference machine), so
     /// callers (the tree picker's UI adapter) are the ones responsible for
-    /// running it off the UI thread. Never throws.
+    /// running it off the UI thread. Never throws for an I/O reason (an
+    /// unreadable path is simply skipped) - it DOES throw
+    /// <see cref="OperationCanceledException"/> if <paramref
+    /// name="cancellationToken"/> is cancelled mid-walk (fix round 1: the
+    /// picker dialog cancels this on close, so a walk queued for a directory
+    /// the user is no longer looking at - or the whole dialog having been
+    /// dismissed - does not keep running to completion in the background).
     /// </summary>
-    public static DirectoryStats ComputeStats(string path, bool isDirectory)
+    public static DirectoryStats ComputeStats(string path, bool isDirectory, CancellationToken cancellationToken = default)
     {
         if (!isDirectory)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 return new DirectoryStats(1, new FileInfo(path).Length);
@@ -134,6 +141,7 @@ public static class ClaudeLocationScanner
 
         while (stack.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var dir = stack.Pop();
             string[] subDirs;
             string[] files;

@@ -25,16 +25,33 @@ public sealed class BackupPickerDialog : Form
     private const int PatternsBoxHeight = 130;
     private const int BottomBarHeight = 52;
 
+    // Fix round 1, Important 2: caps how many directory-size walks
+    // (ClaudeLocationScanner.ComputeStats) run at once - without this,
+    // expanding a wide directory queues up to ~500 concurrent full-subtree
+    // walks. Cancelled as a whole via _cts when the dialog closes, so a walk
+    // for a node the user is no longer even looking at does not keep
+    // running to completion in the background.
+    private const int MaxConcurrentSizeComputations = 4;
+
     private readonly Palette _palette;
     private readonly BackupTreeModel _model;
     private readonly TreeView _tree;
     private readonly TextBox _patternsBox;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly SemaphoreSlim _sizeThrottle = new(MaxConcurrentSizeComputations);
 
     // Guards against BuildTreeNode/PopulateChildren/RefreshWholeTreeAppearance's
     // own programmatic TreeNode.Checked assignments re-entering OnAfterCheck -
     // without this, ticking one node would recurse through every cascaded
     // sibling/ancestor change as if the user had clicked each one individually.
     private bool _suppressCheckEvents;
+
+    // Fix round 1, Important 1: the root's children (and their size
+    // computations) are populated from OnHandleCreated, not the
+    // constructor - see that override's doc comment. This guards against
+    // running that initialization twice (OnHandleCreated can, in principle,
+    // fire again if the handle is recreated).
+    private bool _initialized;
 
     /// <summary>The Include pattern list for the current selection - always in sync (recomputed after every tick), not only once OK is pressed.</summary>
     public IReadOnlyList<string> Include => _model.GeneratePatterns();
@@ -116,6 +133,34 @@ public sealed class BackupPickerDialog : Form
         Controls.Add(_patternsBox);
         y += _patternsBox.Height + 8;
 
+        // Fix round 1, Important 4: ClaudeLocationScanner is fully written
+        // and tested but was otherwise never called from shipping code - and
+        // more importantly, a user who cannot see ~/.claude.json (the file
+        // most people think of as "their Claude config") anywhere in this
+        // dialog could easily assume it is already covered when it is not.
+        // The engine only ever walks ONE root (SourceRoot), so these other
+        // locations are not YET selectable here - but staying silent about
+        // them is worse than saying so plainly.
+        var otherLocations = ClaudeLocationScanner.Probe()
+            .Where(l => !PathsEqual(l.Path, sourceRoot))
+            .ToList();
+        if (otherLocations.Count > 0)
+        {
+            var otherLabel = new Label
+            {
+                Text = "Other Claude locations found (not yet selectable here): " +
+                       string.Join(", ", otherLocations.Select(l => l.DisplayName)),
+                AutoSize = true,
+                MaximumSize = new Size(DialogWidth - Pad * 2, 0),
+                Font = Font,
+                ForeColor = palette.SubtleFore,
+                BackColor = Color.Transparent,
+                Location = new Point(Pad, y),
+            };
+            Controls.Add(otherLabel);
+            y += otherLabel.PreferredHeight + 8;
+        }
+
         var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = BottomBarHeight, BackColor = palette.BarBack };
         bottomBar.Controls.Add(new Panel
         {
@@ -146,14 +191,21 @@ public sealed class BackupPickerDialog : Form
             if (e.KeyCode == Keys.Escape)
                 Close();
         };
+    }
 
-        // Root's immediate children are loaded eagerly (a single, cheap
-        // directory listing) so the picker opens already showing something -
-        // everything deeper stays lazy (see OnBeforeExpand), and directory
-        // sizes are still computed off-thread (see StartSizeComputation).
-        _model.EnsureChildrenLoaded(_model.Root);
-        PopulateChildren(_tree.Nodes, _model.Root);
-        RefreshPatternsBox();
+    private static bool PathsEqual(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     private static Button NewDialogButton(string text, Palette palette)
@@ -169,6 +221,32 @@ public sealed class BackupPickerDialog : Form
         };
         button.FlatAppearance.BorderColor = palette.Border;
         return button;
+    }
+
+    /// <summary>
+    /// Fix round 1, Important 1: populating the root's children (and
+    /// kicking off their off-thread size computations) used to happen
+    /// directly in the constructor. StartSizeComputation's own guard against
+    /// updating a closed dialog checks IsHandleCreated before calling
+    /// BeginInvoke - but the constructor runs before ShowDialog (or a
+    /// test's own `_ = form.Handle`) has ever created that handle, so for a
+    /// small directory whose ComputeStats finishes in microseconds, the
+    /// check would see IsHandleCreated still false and skip the UI update
+    /// forever - the label would be stuck on "..." with no further trigger
+    /// to ever refresh it. Doing this from OnHandleCreated instead
+    /// guarantees the handle already exists for every size computation this
+    /// dialog ever starts.
+    /// </summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (_initialized)
+            return;
+        _initialized = true;
+
+        _model.EnsureChildrenLoaded(_model.Root);
+        PopulateChildren(_tree.Nodes, _model.Root);
+        RefreshPatternsBox();
     }
 
     private void OnBeforeExpand(object? sender, TreeViewCancelEventArgs e)
@@ -201,13 +279,56 @@ public sealed class BackupPickerDialog : Form
         if (e.Node?.Tag is not FileTreeNode node)
             return;
 
-        _model.SetChecked(node, e.Node.Checked);
+        // BackupTreeModel.SetChecked may need to fully load a display-capped
+        // parent before it can apply this tick correctly (fix round 1,
+        // CRITICAL - see BackupTreeModel.EnsureFullyLoaded) - that is one
+        // more Directory.GetDirectories/GetFiles call, not the recursive
+        // size walk, so it is fast, but a wait cursor costs nothing and
+        // avoids the pointer looking idle for however long that takes on a
+        // very wide directory.
+        Cursor = Cursors.WaitCursor;
+        try
+        {
+            _model.SetChecked(node, e.Node.Checked);
+        }
+        finally
+        {
+            Cursor = Cursors.Default;
+        }
+
+        // A tick can also lift the display cap on node's parent entirely
+        // (HiddenChildCount permanently drops to 0) - keep the "... and N
+        // more" placeholder, if any, in sync with that rather than leaving
+        // it showing a stale count (or claiming entries are hidden when
+        // they no longer are).
+        SyncCapPlaceholder(e.Node.Parent?.Nodes ?? _tree.Nodes, node.Parent ?? _model.Root);
+
         // A single tick can cascade through the whole loaded tree (children
         // forced to match, ancestors recomputed) - re-sync every
         // materialized TreeNode from the model rather than trying to track
         // which ones changed.
         RefreshWholeTreeAppearance();
         RefreshPatternsBox();
+    }
+
+    private void SyncCapPlaceholder(TreeNodeCollection uiCollection, FileTreeNode modelParent)
+    {
+        TreeNode? placeholder = null;
+        foreach (TreeNode candidate in uiCollection)
+        {
+            if (candidate.Tag is null && candidate.Text.StartsWith("... and ", StringComparison.Ordinal))
+            {
+                placeholder = candidate;
+                break;
+            }
+        }
+        if (placeholder is null)
+            return;
+
+        if (modelParent.HiddenChildCount == 0)
+            uiCollection.Remove(placeholder);
+        else
+            placeholder.Text = $"... and {modelParent.HiddenChildCount} more (not shown)";
     }
 
     private void PopulateChildren(TreeNodeCollection uiCollection, FileTreeNode modelParent)
@@ -224,7 +345,8 @@ public sealed class BackupPickerDialog : Form
                 uiCollection.Add(new TreeNode($"... and {modelParent.HiddenChildCount} more (not shown)")
                 {
                     ForeColor = _palette.SubtleFore,
-                    ToolTipText = "Display limit only - ticking the parent folder still includes these.",
+                    ToolTipText = "Display limit only - ticking the parent folder still includes these, " +
+                                  "and ticking any individually-shown sibling loads the rest too.",
                 });
             }
         }
@@ -237,7 +359,16 @@ public sealed class BackupPickerDialog : Form
     private TreeNode BuildTreeNode(FileTreeNode child)
     {
         var uiNode = new TreeNode { Tag = child };
-        ApplyAppearance(uiNode, child);
+
+        // Set once at creation - unlike Text/Checked/ForeColor (see
+        // RefreshNodeAppearance), neither of these ever changes for the
+        // lifetime of the node.
+        if (child.IsDenylisted)
+            uiNode.ToolTipText = "Denylisted - " + child.DenylistReason;
+        else if (child.IsTranscriptBearing)
+            uiNode.ToolTipText = child.TranscriptNote;
+
+        RefreshNodeAppearance(uiNode, child);
 
         if (child.IsDirectory)
         {
@@ -252,50 +383,63 @@ public sealed class BackupPickerDialog : Form
         return uiNode;
     }
 
-    private void ApplyAppearance(TreeNode uiNode, FileTreeNode node)
-    {
-        uiNode.Text = FormatLabel(node);
-        uiNode.Checked = node.CheckState == NodeCheckState.Checked;
-
-        if (node.IsDenylisted)
-        {
-            uiNode.ForeColor = _palette.SubtleFore;
-            uiNode.ToolTipText = "Denylisted - " + node.DenylistReason;
-        }
-        else if (node.IsTranscriptBearing)
-        {
-            uiNode.ToolTipText = node.TranscriptNote;
-        }
-    }
-
     /// <summary>
-    /// Computes a directory's file count and total size off the UI thread
-    /// (see ClaudeLocationScanner.ComputeStats - this can walk thousands of
-    /// files, e.g. skills/ on the reference machine) and updates the node's
-    /// label once ready. Guards against the dialog having been closed while
-    /// the background computation was still running.
+    /// Fix round 1, Important 2: the directory-size walk
+    /// (ClaudeLocationScanner.ComputeStats) is throttled to at most
+    /// MaxConcurrentSizeComputations concurrent walks (a SemaphoreSlim) and
+    /// fully cancellable via _cts, cancelled in Dispose - without this,
+    /// closing the dialog left every already-queued or in-flight walk
+    /// running to completion regardless (the old IsDisposed check only ever
+    /// suppressed the resulting UI update, not the walk itself), and
+    /// expanding one wide directory could queue up to ~500 of them at once.
+    ///
+    /// Fix round 1, Minor: node.SizeBytes/FileCount are now written only
+    /// inside the BeginInvoke lambda (i.e. on the UI thread), not on the
+    /// background thread beforehand - writing them from the background
+    /// thread and reading them from the UI thread with no synchronization
+    /// risked a concurrent refresh observing SizeBytes and FileCount at
+    /// different points in time (each nullable's HasValue/Value assignment
+    /// is not atomic together).
     /// </summary>
     private void StartSizeComputation(FileTreeNode node, TreeNode uiNode)
     {
-        Task.Run(() => ClaudeLocationScanner.ComputeStats(node.FullPath, isDirectory: true))
-            .ContinueWith(t =>
+        var token = _cts.Token;
+        _ = Task.Run(async () =>
+        {
+            var acquired = false;
+            try
             {
-                if (t.IsFaulted)
-                    return;
-                node.SizeBytes = t.Result.TotalBytes;
-                node.FileCount = t.Result.FileCount;
+                await _sizeThrottle.WaitAsync(token).ConfigureAwait(false);
+                acquired = true;
+
+                var stats = ClaudeLocationScanner.ComputeStats(node.FullPath, isDirectory: true, token);
+
                 try
                 {
                     if (!IsDisposed && IsHandleCreated)
                         BeginInvoke(new Action(() =>
                         {
-                            if (!IsDisposed)
-                                uiNode.Text = FormatLabel(node);
+                            if (IsDisposed)
+                                return;
+                            node.SizeBytes = stats.TotalBytes;
+                            node.FileCount = stats.FileCount;
+                            uiNode.Text = FormatLabel(node);
                         }));
                 }
                 catch (ObjectDisposedException) { /* dialog closed mid-flight */ }
                 catch (InvalidOperationException) { /* handle destroyed mid-flight */ }
-            }, TaskScheduler.Default);
+            }
+            catch (OperationCanceledException)
+            {
+                // Dialog closed (either while waiting for a throttle slot, or
+                // mid-walk) - nothing left to compute or show.
+            }
+            finally
+            {
+                if (acquired)
+                    _sizeThrottle.Release();
+            }
+        }, token);
     }
 
     private void RefreshWholeTreeAppearance()
@@ -316,12 +460,33 @@ public sealed class BackupPickerDialog : Form
         foreach (TreeNode uiNode in nodes)
         {
             if (uiNode.Tag is FileTreeNode node)
-            {
-                uiNode.Checked = node.CheckState == NodeCheckState.Checked;
-                uiNode.Text = FormatLabel(node);
-            }
+                RefreshNodeAppearance(uiNode, node);
             RefreshRecursive(uiNode.Nodes);
         }
+    }
+
+    /// <summary>
+    /// Fix round 1, Minor: previously only Checked and Text were kept in
+    /// sync on every refresh - ForeColor was set once at creation and never
+    /// revisited, so a node that became Indeterminate after this dialog
+    /// opened never actually looked any different from a fully Unchecked
+    /// one (the review's own finding: "a user cannot currently distinguish
+    /// none-from-some at a glance"). Indeterminate nodes now get a distinct
+    /// color (the same amber used elsewhere in this app for a warn-level
+    /// state - Theme.BandColor(Band.Amber) - reused rather than inventing a
+    /// new one), and this recomputes it every refresh, not just at creation,
+    /// so a node moving between Unchecked/Checked/Indeterminate always
+    /// matches its current state.
+    /// </summary>
+    private void RefreshNodeAppearance(TreeNode uiNode, FileTreeNode node)
+    {
+        uiNode.Text = FormatLabel(node);
+        uiNode.Checked = node.CheckState == NodeCheckState.Checked;
+        uiNode.ForeColor = node.IsDenylisted
+            ? _palette.SubtleFore
+            : node.CheckState == NodeCheckState.Indeterminate
+                ? Theme.BandColor(Band.Amber)
+                : _palette.Fore;
     }
 
     private void RefreshPatternsBox()
@@ -349,22 +514,23 @@ public sealed class BackupPickerDialog : Form
     }
 
     /// <summary>
-    /// "name (stat)[ (partial)][ [contains chat transcripts]]" - the stat
-    /// segment is "..." for a directory whose size has not arrived yet (see
-    /// StartSizeComputation), the partial flag reflects Indeterminate (the
-    /// checkbox itself is only two-state), and the transcript flag is a
-    /// visible label suffix (not just a hover tooltip) per the design spec.
+    /// "name[ (partial)] (stat)[ [contains chat transcripts]]" - fix round 1,
+    /// Minor: the partial flag moved from the end to immediately after the
+    /// name (it used to land after the size stat, e.g.
+    /// "projects (622 files, 340.7 MB) (partial) [...]", far from the
+    /// checkbox it is meant to explain). The stat segment is "..." for a
+    /// directory whose size has not arrived yet (see StartSizeComputation),
+    /// and the transcript flag is a visible label suffix (not just a hover
+    /// tooltip) per the design spec.
     /// </summary>
     private static string FormatLabel(FileTreeNode node)
     {
+        var partial = node.CheckState == NodeCheckState.Indeterminate ? " (partial)" : "";
         var stat = BuildStatText(node);
-        var flags = "";
-        if (node.CheckState == NodeCheckState.Indeterminate)
-            flags += " (partial)";
-        if (node.IsTranscriptBearing)
-            flags += " [contains chat transcripts]";
+        var statPart = stat.Length == 0 ? "" : $" ({stat})";
+        var transcript = node.IsTranscriptBearing ? " [contains chat transcripts]" : "";
 
-        return stat.Length == 0 ? node.Name + flags : $"{node.Name} ({stat}){flags}";
+        return $"{node.Name}{partial}{statPart}{transcript}";
     }
 
     private static string BuildStatText(FileTreeNode node)
@@ -388,5 +554,21 @@ public sealed class BackupPickerDialog : Form
             unit++;
         }
         return unit == 0 ? $"{(long)size} {units[unit]}" : $"{size:0.#} {units[unit]}";
+    }
+
+    // _cts/_sizeThrottle are not in the Controls tree, so nothing else
+    // disposes them - mirrors SettingsForm's own Dispose override for
+    // _helpTip. Cancelling first ensures any task still waiting on the
+    // semaphore (or mid-walk, via the token threaded into ComputeStats)
+    // unwinds promptly rather than racing the semaphore's own disposal.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _cts.Cancel();
+            _cts.Dispose();
+            _sizeThrottle.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }

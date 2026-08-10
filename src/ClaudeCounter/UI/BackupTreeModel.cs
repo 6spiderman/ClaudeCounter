@@ -340,6 +340,77 @@ public sealed class BackupTreeModel
         }
     }
 
+    /// <summary>
+    /// Fix round 1 (CRITICAL): loads every entry of <paramref name="node"/>
+    /// left out by an earlier capped <see cref="EnsureChildrenLoaded"/> call,
+    /// so the display cap can never again cause a silent under-selection.
+    ///
+    /// The bug this closes: tick a >cap-entry directory (Checked, cascades to
+    /// every LOADED child - correct), then untick just one of the rendered
+    /// children. Recomputing the parent from its children walks
+    /// <see cref="FileTreeNode.Children"/>, which the cap had already
+    /// truncated - every entry beyond the cap was never a node at all, so
+    /// GeneratePatterns' tree walk had nothing to find them by and they
+    /// silently vanished from the output. Re-ticking the single child could
+    /// not recover them either, because RecomputeFromChildren refuses to
+    /// promote back to Checked while HiddenChildCount is nonzero.
+    ///
+    /// <see cref="SetChecked"/> calls this on the target node's parent
+    /// before applying any tick, which is what actually closes the gap: by
+    /// the time RecomputeFromChildren or GeneratePatterns ever look at
+    /// <paramref name="node"/>'s children again, the cap has already been
+    /// lifted for it, permanently (HiddenChildCount stays 0 from here on).
+    /// Re-lists the directory (one more Directory.GetDirectories/GetFiles
+    /// call - cheap; this is NOT the recursive size walk) and appends
+    /// whatever AddChild has not already created, so already-created nodes
+    /// (and anything already ticked/unticked on them) are left untouched. A
+    /// newly-discovered node still gets AddChild's normal initial-state
+    /// rule - in particular, if the parent is Checked at this exact moment
+    /// (the common case: this runs right before the first tick that would
+    /// otherwise make it Indeterminate), the newly-discovered entries start
+    /// Checked too, which is what keeps them selected instead of resetting
+    /// them to nothing the instant they are finally materialized.
+    ///
+    /// No-op, and cheap, for a directory that either is not capped
+    /// (HiddenChildCount already 0) or was never loaded as a directory at
+    /// all.
+    /// </summary>
+    public void EnsureFullyLoaded(FileTreeNode node)
+    {
+        if (!node.IsDirectory || node.HiddenChildCount == 0)
+            return;
+
+        string[] subDirs;
+        string[] files;
+        try
+        {
+            subDirs = Directory.GetDirectories(node.FullPath);
+            files = Directory.GetFiles(node.FullPath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        Array.Sort(subDirs, StringComparer.OrdinalIgnoreCase);
+        Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+
+        var existing = new HashSet<string>(node.Children.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in subDirs)
+        {
+            var name = Path.GetFileName(dir);
+            if (existing.Add(name))
+                AddChild(node, name, dir, isDirectory: true);
+        }
+        foreach (var file in files)
+        {
+            var name = Path.GetFileName(file);
+            if (existing.Add(name))
+                AddChild(node, name, file, isDirectory: false);
+        }
+    }
+
     private void AddChild(FileTreeNode parent, string name, string fullPath, bool isDirectory)
     {
         var relativePath = parent.RelativePath.Length == 0 ? name : parent.RelativePath + "/" + name;
@@ -403,11 +474,21 @@ public sealed class BackupTreeModel
     /// than replaying stale defaults from the file that was loaded. Returns
     /// false without changing anything for a denylisted node - the picker
     /// must not offer any route around the denylist.
+    ///
+    /// Fix round 1 (CRITICAL): calls <see cref="EnsureFullyLoaded"/> on
+    /// node's parent BEFORE doing any of the above - see that method's doc
+    /// comment for the data-loss bug this closes. Must happen first: the
+    /// cascade/recompute/GeneratePatterns steps that follow all read
+    /// node.Parent.Children, and they must see the complete set, not
+    /// whatever the display cap happened to leave loaded.
     /// </summary>
     public bool SetChecked(FileTreeNode node, bool value)
     {
         if (node.IsDenylisted)
             return false;
+
+        if (node.Parent is { } parent)
+            EnsureFullyLoaded(parent);
 
         ForgetRecognizedSelectionUnder(node.RelativePath);
         node.ApplyCheckedRecursively(value ? NodeCheckState.Checked : NodeCheckState.Unchecked);

@@ -129,6 +129,17 @@ public class SettingsFormSmokeTests
     [Fact]
     public void SettingsFormHeightStaysWithinTheDisplayBudget()
     {
+        // Fix round 1, Important 3: the Backup tab (and this test's whole
+        // reason to exist) is only built when BackupTaskManager.WorkerAvailable()
+        // is true - true under `dotnet test` today only because the test
+        // project references ClaudeBackup.csproj, which copies
+        // ClaudeBackup.exe next to the test host. Without this assertion, a
+        // future host/runner change that stops satisfying that could make
+        // this test measure only General/Alerts and keep passing with zero
+        // signal on the thing it exists to guard.
+        Assert.True(BackupTaskManager.WorkerAvailable(),
+            "Backup tab not built - the height assertion below would be vacuous.");
+
         // Not built on ConstructOnStaThread: that helper disposes the Form
         // before returning (it only ever reports whether construction
         // threw), and ClientSize is not safe to read afterward. The height
