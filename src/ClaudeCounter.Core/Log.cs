@@ -9,6 +9,13 @@ using System.Text;
 // parallel with this one.
 [assembly: InternalsVisibleTo("ClaudeCounter.Tests")]
 
+// RelativePathGuard and CredentialScrubber moved here from ClaudeBackup.csproj
+// (see their doc comments) so the restore engine, also in this assembly, can
+// reuse them. GitBackend and RcloneBackend - still in ClaudeBackup.csproj -
+// call both as internal members, exactly as before the move; this is what
+// keeps that access working across the assembly boundary.
+[assembly: InternalsVisibleTo("ClaudeBackup")]
+
 namespace ClaudeCounter.Core;
 
 /// <summary>

@@ -223,14 +223,14 @@ public sealed class GitBackend
     /// whose name happens to share the same prefix (e.g. "C:\staging-evil"
     /// against a base of "C:\staging") - see
     /// GitBackendTests.IsWithinDirectoryDetectsEscapes for that exact case.
-    /// Internal (not private) so it can be tested directly.
+    /// Forwards to <see cref="RelativePathGuard.IsWithinDirectory"/> (moved
+    /// there so the restore engine can share the same check instead of a
+    /// third copy) - kept here, under the original name, purely so existing
+    /// direct callers (GitBackendTests) do not need to change. Internal (not
+    /// private) so it can be tested directly.
     /// </summary>
-    internal static bool IsWithinDirectory(string baseDirFull, string candidateFullPath)
-    {
-        var normalizedBase = Path.TrimEndingDirectorySeparator(baseDirFull);
-        return string.Equals(candidateFullPath, normalizedBase, StringComparison.OrdinalIgnoreCase)
-            || candidateFullPath.StartsWith(normalizedBase + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool IsWithinDirectory(string baseDirFull, string candidateFullPath) =>
+        RelativePathGuard.IsWithinDirectory(baseDirFull, candidateFullPath);
 
     private static void Check(ProcessResult r, string what)
     {

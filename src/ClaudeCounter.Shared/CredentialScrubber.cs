@@ -3,13 +3,20 @@ using System.Text.RegularExpressions;
 namespace ClaudeBackup;
 
 /// <summary>
-/// Shared credential-scrubbing choke point for backend output. Both
-/// <see cref="GitBackend"/> (git stderr can echo an HTTPS remote with an
-/// embedded token) and <see cref="RcloneBackend"/> (rclone stderr can echo a
-/// remote spec, e.g. a WebDAV/S3 URL with embedded credentials) route
-/// anything that could reach a log line, an exception message, or a
-/// <see cref="BackendResult.Message"/> through here first. One regex, one
-/// place to fix it, instead of two copies drifting apart.
+/// Shared credential-scrubbing choke point for backend output. <see
+/// cref="GitBackend"/> (git stderr can echo an HTTPS remote with an embedded
+/// token), <see cref="RcloneBackend"/> (rclone stderr can echo a remote spec,
+/// e.g. a WebDAV/S3 URL with embedded credentials), and the restore engine's
+/// GitHub source (a failed `git clone`/`git fetch` against an HTTPS remote can
+/// equally echo a token) all route anything that could reach a log line, an
+/// exception message, or a result message through here first. One regex, one
+/// place to fix it, instead of copies drifting apart.
+///
+/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where it was
+/// originally defined) so the restore engine - itself in Shared, for the
+/// reasons documented on <see cref="IProcessRunner"/> - can reuse it rather
+/// than duplicating the regex. GitBackend and RcloneBackend keep using it
+/// unchanged; only the physical file moved, and the namespace did not change.
 /// </summary>
 internal static class CredentialScrubber
 {
