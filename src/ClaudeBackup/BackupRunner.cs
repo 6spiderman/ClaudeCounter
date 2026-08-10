@@ -6,25 +6,33 @@ using ClaudeCounter.Core;
 namespace ClaudeBackup;
 
 /// <summary>
-/// Orchestrates one backup run: select files PER ENABLED DESTINATION (GitHub
-/// and Drive each own an independent include/exclude selection - see
+/// Orchestrates one backup run: validate each enabled destination's own
+/// configuration (remote URL/branch for GitHub, rclone remote for Drive),
+/// select files PER ENABLED-AND-CONFIGURED DESTINATION (GitHub and Drive
+/// each own an independent include/exclude selection - see
 /// GitTarget.Include / DriveTarget.Include), log what the secret denylist
 /// withheld per destination, re-assert the denylist as a fail-closed
 /// backstop against EACH destination's selection independently, then run
-/// each enabled backend independently so one backend failing (or throwing,
-/// or having nothing to upload) does not prevent the other from running.
+/// each such destination's backend independently so one destination being
+/// misconfigured, having nothing to upload, or its backend failing (or
+/// throwing) does not prevent a sibling destination that IS configured and
+/// has files from running.
 ///
 /// Exit codes (meaningful to Task Scheduler, which records them):
-///   0 - success: every enabled destination that had anything to upload
-///       succeeded.
-///   1 - configuration/selection error: no destination enabled, an enabled
-///       destination is not configured, a denylist offender detected in
-///       either destination's selection, or NO enabled destination had
-///       anything selected to upload. One destination selecting nothing
-///       while another selects files is NOT this case - see the per-
-///       destination "nothing selected" handling below.
-///   2 - at least one enabled destination that had something to upload
-///       actually failed to upload it.
+///   0 - success: every enabled, configured destination that had anything
+///       to upload succeeded.
+///   1 - configuration/selection error: no destination enabled, a denylist
+///       offender detected in either destination's selection (see the
+///       DELIBERATE comment at that call site - this one IS a whole-run
+///       abort), or NO enabled destination ended up both configured and
+///       having something selected to upload. An individual destination
+///       being misconfigured (e.g. GitHub enabled with a blank RemoteUrl)
+///       or selecting nothing is NOT this case by itself - it is logged and
+///       that destination is skipped, but a sibling destination that IS
+///       configured and has files still runs and can still bring the run
+///       to exit 0. See the per-destination handling below.
+///   2 - at least one enabled, configured destination that had something to
+///       upload actually failed to upload it.
 /// </summary>
 public static class BackupRunner
 {
@@ -64,34 +72,55 @@ public static class BackupRunner
             return 1;
         }
 
-        // An enabled destination with no remote configured is a
-        // configuration mistake, not a backend failure - GitBackend/
-        // RcloneBackend would eventually report a failure for it (an empty
-        // git remote or rclone remote spec), but that would surface as exit
-        // 2 ("a backend failed") when the truth is exit 1 ("fix your
-        // config"). Catch it before either backend ever runs.
+        // Fix round 2: an enabled destination with no remote configured is
+        // THAT DESTINATION'S OWN configuration mistake, not a backend
+        // failure and not grounds to abort a sibling destination that IS
+        // fully configured - GitHub left half set up (e.g. a blank
+        // RemoteUrl) must not silently stop a properly configured Drive
+        // from backing up anything at all, and vice versa. This mirrors the
+        // per-destination "nothing selected" philosophy further down: a
+        // problem scoped to one destination stays scoped to it. Each guard
+        // below only clears that destination's own "configured" flag (and
+        // logs which destination and why) rather than returning 1
+        // immediately - GitBackend/RcloneBackend would eventually report a
+        // failure for a bad remote spec too (an empty git remote or rclone
+        // remote), but that would surface as exit 2 ("a backend failed")
+        // when the truth is exit 1-shaped ("fix your config"), so this
+        // still runs before either backend ever sees the bad config -
+        // it just no longer takes the other destination down with it.
+        var githubConfigured = true;
         if (config.Github.Enabled && string.IsNullOrWhiteSpace(config.Github.RemoteUrl))
         {
-            Log.Warn("BackupRunner: GitHub backup is enabled but RemoteUrl is not configured.");
-            return 1;
+            Log.Warn("BackupRunner: GitHub backup is enabled but RemoteUrl is not configured; skipping this destination.");
+            githubConfigured = false;
         }
         // Same reasoning as the RemoteUrl guard above: SettingsForm trims the
         // branch textbox, so clearing it and saving persists "". Without this
         // check that empty string reaches 'git init -b ""' inside GitBackend,
         // which fails as a backend error (exit 2) instead of the
-        // configuration error it actually is (exit 1).
-        if (config.Github.Enabled && string.IsNullOrWhiteSpace(config.Github.Branch))
+        // configuration error it actually is.
+        if (config.Github.Enabled && githubConfigured && string.IsNullOrWhiteSpace(config.Github.Branch))
         {
-            Log.Warn("BackupRunner: GitHub backup is enabled but Branch is not configured.");
-            return 1;
-        }
-        if (config.Drive.Enabled && string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
-        {
-            Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured.");
-            return 1;
+            Log.Warn("BackupRunner: GitHub backup is enabled but Branch is not configured; skipping this destination.");
+            githubConfigured = false;
         }
 
-        // Each enabled destination is selected against its OWN Include/
+        var driveConfigured = true;
+        if (config.Drive.Enabled && string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
+        {
+            Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured; skipping this destination.");
+            driveConfigured = false;
+        }
+
+        // "Active" = enabled AND configured. Everything from here on - the
+        // secret-denylist backstop, "nothing selected", and which backend
+        // gets a chance to run - is gated on this, not on Enabled alone, so
+        // a misconfigured destination behaves exactly like a disabled one
+        // for the rest of the run: it simply is not there.
+        var githubActive = config.Github.Enabled && githubConfigured;
+        var driveActive = config.Drive.Enabled && driveConfigured;
+
+        // Each active destination is selected against its OWN Include/
         // Exclude and independently re-checked against the secret denylist
         // below - collapsing this back to a single selection/check (as a
         // single shared Include/Exclude used to allow) would silently stop
@@ -109,37 +138,40 @@ public static class BackupRunner
         // assumption breaking is to upload nothing anywhere, not to proceed
         // with whichever destination happens to look clean via a selection
         // pipeline that just proved it cannot be trusted. Do not "fix" this
-        // into per-destination scoping.
+        // into per-destination scoping - this is unlike the config guards
+        // above and the "nothing selected" handling below, both of which
+        // ARE deliberately scoped per destination.
         IReadOnlyList<string> githubFiles = Array.Empty<string>();
-        if (config.Github.Enabled)
+        if (githubActive)
         {
             if (!TrySelect(select, "GitHub", config.SourceRoot, config.Github.Include, config.Github.Exclude, out githubFiles))
                 return 1;
         }
 
         IReadOnlyList<string> driveFiles = Array.Empty<string>();
-        if (config.Drive.Enabled)
+        if (driveActive)
         {
             if (!TrySelect(select, "Google Drive", config.SourceRoot, config.Drive.Include, config.Drive.Exclude, out driveFiles))
                 return 1;
         }
 
-        // "Nothing selected" is only a whole-run failure when NO enabled
-        // destination has anything to upload. One destination with an empty
-        // selection while another has files is that destination's own
-        // config mistake (logged below, per destination), not grounds to
+        // "Nothing selected" is only a whole-run failure when NO active
+        // (enabled AND configured) destination has anything to upload. One
+        // destination with an empty selection - or one that turned out to
+        // be misconfigured above - while another is active and has files is
+        // that destination's own problem (already logged), not grounds to
         // fail a run that can otherwise proceed.
-        var githubHasFiles = config.Github.Enabled && githubFiles.Count > 0;
-        var driveHasFiles = config.Drive.Enabled && driveFiles.Count > 0;
+        var githubHasFiles = githubActive && githubFiles.Count > 0;
+        var driveHasFiles = driveActive && driveFiles.Count > 0;
         if (!githubHasFiles && !driveHasFiles)
         {
-            Log.Warn("BackupRunner: nothing selected to back up on any enabled destination.");
+            Log.Warn("BackupRunner: nothing selected to back up on any enabled, configured destination.");
             return 1;
         }
 
         var anyFailed = false;
 
-        if (config.Github.Enabled)
+        if (githubActive)
         {
             if (githubFiles.Count == 0)
             {
@@ -154,10 +186,10 @@ public static class BackupRunner
         }
 
         // Deliberately not an "else if" and not short-circuited by the
-        // GitHub result above: each enabled backend must get a chance to
-        // run regardless of whether the other one failed, threw, or had
-        // nothing selected.
-        if (config.Drive.Enabled)
+        // GitHub result above: each active backend must get a chance to run
+        // regardless of whether the other one failed, threw, was
+        // misconfigured, or had nothing selected.
+        if (driveActive)
         {
             if (driveFiles.Count == 0)
             {

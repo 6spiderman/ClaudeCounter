@@ -411,11 +411,19 @@ public sealed class SettingsForm : Form
         page.Controls.Add(selectorLabel);
         y += selectorLabel.PreferredHeight + 2;
 
+        // Fix round 2: open on whichever destination is actually enabled in
+        // the saved config, not always GitHub - a Drive-only user should not
+        // land on a disabled GitHub block the moment they open Settings.
+        // Falls back to GitHub (index 0) when neither is enabled, since that
+        // is the same tie-break Default() and every other "pick a starting
+        // index" spot in this dialog already uses.
+        var initialShowGithub = config.Github.Enabled || !config.Drive.Enabled;
+
         _backupSelectionTarget = NewCombo(palette, 150);
         _backupSelectionTarget.Location = new Point(PagePadX, y);
         _backupSelectionTarget.Items.Add("GitHub");
         _backupSelectionTarget.Items.Add("Google Drive");
-        _backupSelectionTarget.SelectedIndex = 0;
+        _backupSelectionTarget.SelectedIndex = initialShowGithub ? 0 : 1;
         page.Controls.Add(_backupSelectionTarget);
         y += _backupSelectionTarget.Height + RowGap;
 
@@ -423,8 +431,8 @@ public sealed class SettingsForm : Form
         var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, palette, fullWidth, rightEdgeX);
         githubBlock.Location = new Point(0, y);
         driveBlock.Location = new Point(0, y);
-        githubBlock.Visible = true;
-        driveBlock.Visible = false;
+        githubBlock.Visible = initialShowGithub;
+        driveBlock.Visible = !initialShowGithub;
         // Both blocks are added regardless of the selector's starting value -
         // only Visible toggles thereafter - so every control inside both
         // (including the ones not currently shown) is fully constructed and

@@ -134,6 +134,49 @@ public class BackupRunnerTests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
+    // Fix round 2: the review found this interaction was untested -
+    // EnabledGithubWithoutRemoteUrlIsConfigError above only exercises the
+    // case where Drive is disabled too, so it never proves GitHub's own
+    // misconfiguration does not take a sibling, fully-configured Drive down
+    // with it. GitHub is enabled but half set up (blank RemoteUrl); Drive is
+    // enabled, configured, and has files - the run must still exit 0 and
+    // actually upload via Drive, with GitHub silently skipped (logged, not
+    // fatal).
+    [Fact]
+    public void EnabledGithubWithoutRemoteUrlDoesNotStopConfiguredDriveFromRunning()
+    {
+        var c = Config();
+        c.Github.RemoteUrl = "";
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "settings.json" };
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        Assert.Contains(runner.Calls, call => call.StartsWith("rclone copy"));
+        Assert.DoesNotContain(runner.Calls, call => call.StartsWith("git push"));
+    }
+
+    // Mirror of the above, in the other direction: Drive enabled but
+    // misconfigured (blank RcloneRemote) must not stop a fully configured,
+    // file-having GitHub from running.
+    [Fact]
+    public void EnabledDriveWithoutRcloneRemoteDoesNotStopConfiguredGithubFromRunning()
+    {
+        var c = Config();
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "";
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        Assert.Contains(runner.Calls, call => call.StartsWith("git push"));
+        Assert.DoesNotContain(runner.Calls, call => call.StartsWith("rclone copy"));
+    }
+
     [Fact]
     public void HappyPathReturnsZero()
     {
