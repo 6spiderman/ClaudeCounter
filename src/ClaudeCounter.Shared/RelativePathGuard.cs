@@ -57,4 +57,27 @@ internal static class RelativePathGuard
         return string.Equals(candidateFullPath, normalizedBase, StringComparison.OrdinalIgnoreCase)
             || candidateFullPath.StartsWith(normalizedBase + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// True when <paramref name="a"/> and <paramref name="b"/> are the same
+    /// directory, or one is nested inside the other (in either direction).
+    /// Fix round 1 (restore review, Important 3): a materialisation
+    /// destination that IS, or CONTAINS, or is CONTAINED BY, a protected
+    /// live root must be refused before anything is written - restore rule 1
+    /// ("never write to live config without an explicit apply call") held
+    /// only by convention until this check existed, since neither
+    /// RestoreZipSource.Materialize nor RestoreGitSource.Materialize
+    /// otherwise has any idea what "live" means. Both directions matter: a
+    /// destination equal to or under the live root would write config
+    /// directly into it, and a destination that is an ANCESTOR of the live
+    /// root would (combined with the destination-clearing fix in the same
+    /// review round) delete everything under that ancestor, live root
+    /// included, before materialising into it.
+    /// </summary>
+    internal static bool Overlaps(string a, string b)
+    {
+        var af = Path.TrimEndingDirectorySeparator(Path.GetFullPath(a));
+        var bf = Path.TrimEndingDirectorySeparator(Path.GetFullPath(b));
+        return IsWithinDirectory(af, bf) || IsWithinDirectory(bf, af);
+    }
 }

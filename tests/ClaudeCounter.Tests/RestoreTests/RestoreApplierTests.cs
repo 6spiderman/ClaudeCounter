@@ -86,7 +86,11 @@ public class RestoreApplierTests : IDisposable
 
         Assert.True(result.Ok);
         Assert.Null(result.SafetyCopyPath);
-        Assert.False(Directory.Exists(Path.Combine(_safetyBase, "20260810-090000")));
+        // Nothing under _safetyBase at all - not just the specific timestamp
+        // name, which now carries a unique suffix (fix round 1, Minor: two
+        // Apply calls in the same wall-clock second must not share a safety
+        // folder) and so is not a fixed string to check against.
+        Assert.False(Directory.Exists(_safetyBase));
     }
 
     // Restore rule 3: a LiveOnly entry is never in the apply set, even if a
@@ -170,6 +174,63 @@ public class RestoreApplierTests : IDisposable
         Assert.Contains("../evil.json", result.SkippedPaths);
         var escapedTarget = Path.Combine(Path.GetDirectoryName(_live)!, "evil.json");
         Assert.False(File.Exists(escapedTarget));
+    }
+
+    // Fix round 1, Important 2: `chosen` is public API taking an arbitrary
+    // list - an "apply all" selection merged with individually ticked files
+    // (exactly what the future dialog will build) can easily contain the
+    // same RelativePath twice. The second occurrence must not re-copy the
+    // ALREADY-RESTORED live file into the safety folder, which would
+    // silently replace the saved original with the new content and empty
+    // the undo mechanism.
+    [Fact]
+    public void DuplicateEntryDoesNotClobberTheSafetyCopyWithRestoredContent()
+    {
+        Stage("changed.txt", "new version");
+        Live("changed.txt", "original version");
+
+        var entry = new RestoreFileEntry("changed.txt", RestoreFileStatus.Changed, 11, null, 17, null);
+        var chosen = new[] { entry, entry }; // the exact duplicate shape an "apply all" + ticked-file merge produces
+
+        var result = RestoreApplier.Apply(_staged, _live, chosen, _safetyBase, FixedNow);
+
+        Assert.True(result.Ok);
+        Assert.Single(result.WrittenPaths);
+        Assert.Equal(1, result.OverwrittenCount);
+        Assert.Contains("changed.txt", result.SkippedPaths);
+
+        var safetyFile = Path.Combine(result.SafetyCopyPath!, "changed.txt");
+        Assert.True(File.Exists(safetyFile));
+        // The critical assertion: the safety copy still holds the ORIGINAL
+        // content, not the restored one the second pass would have copied
+        // over it without the dedupe guard.
+        Assert.Equal("original version", File.ReadAllText(safetyFile));
+        Assert.Equal("new version", File.ReadAllText(Path.Combine(_live, "changed.txt")));
+    }
+
+    // Fix round 1, Minor: two Apply calls landing in the same wall-clock
+    // second (the timestamp component of the safety folder name) must not
+    // share one safety folder - the second call's overwrite: true copy would
+    // destroy the first call's saved originals.
+    [Fact]
+    public void TwoApplyCallsInTheSameSecondGetDifferentSafetyFolders()
+    {
+        Stage("changed.txt", "run 1 content");
+        Live("changed.txt", "original");
+        var chosen = new[] { new RestoreFileEntry("changed.txt", RestoreFileStatus.Changed, 13, null, 8, null) };
+
+        var first = RestoreApplier.Apply(_staged, _live, chosen, _safetyBase, FixedNow);
+
+        Stage("changed.txt", "run 2 content");
+        var second = RestoreApplier.Apply(_staged, _live, chosen, _safetyBase, FixedNow);
+
+        Assert.NotEqual(first.SafetyCopyPath, second.SafetyCopyPath);
+        // The first run's safety copy (the true original) must still be
+        // intact after the second run, and the second run's own safety copy
+        // (what was live just before IT ran) must be intact too - neither
+        // folder clobbered the other.
+        Assert.Equal("original", File.ReadAllText(Path.Combine(first.SafetyCopyPath!, "changed.txt")));
+        Assert.Equal("run 1 content", File.ReadAllText(Path.Combine(second.SafetyCopyPath!, "changed.txt")));
     }
 
     [Fact]

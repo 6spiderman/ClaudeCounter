@@ -68,14 +68,30 @@ public sealed class RestoreGitSource
     /// with the containment and denylist checks described on this class.
     /// Uses a detached checkout so materialising a snapshot never moves or
     /// creates any local branch.
+    ///
+    /// <paramref name="destinationDir"/> is CLEARED before the copy (fix
+    /// round 1, Important 1) - see RestoreZipSource.Materialize's doc comment
+    /// for why this is safe (restore-owned scratch, not live config) and why
+    /// it is necessary (otherwise materialising snapshot A and then, later,
+    /// snapshot B into the same directory leaves the staged tree a UNION of
+    /// both). <paramref name="protectedRoot"/> (fix round 1, Important 3) is
+    /// the live config root that <paramref name="destinationDir"/> must
+    /// never be, contain, or be contained by - refused up front, before the
+    /// checkout, the clear, or any write.
     /// </summary>
-    public RestoreMaterializeResult Materialize(GitTarget target, string snapshotId, string destinationDir)
+    public RestoreMaterializeResult Materialize(GitTarget target, string snapshotId, string destinationDir, string protectedRoot)
     {
         if (!_runner.Exists("git"))
             return RestoreMaterializeResult.Failure(ScrubAndLog("git not found on PATH - install Git for Windows and ensure 'git' is available."));
 
         if (!IsPlausibleSha(snapshotId))
             return RestoreMaterializeResult.Failure("Invalid snapshot id.");
+
+        if (RelativePathGuard.Overlaps(destinationDir, protectedRoot))
+        {
+            return RestoreMaterializeResult.Failure(
+                "Refusing to materialise into the live config root, or a directory that contains or is contained by it.");
+        }
 
         var (ok, message) = EnsureRepo(target);
         if (!ok)
@@ -92,6 +108,7 @@ public sealed class RestoreGitSource
                 return RestoreMaterializeResult.Failure(ScrubAndLog($"git checkout failed: {checkout.StdErr.Trim()}"));
 
             Directory.CreateDirectory(destinationDir);
+            ClearDirectoryContents(destinationDir);
             CopySafely(_stagingDir, destinationDir);
 
             return RestoreMaterializeResult.Success(destinationDir);
@@ -99,6 +116,21 @@ public sealed class RestoreGitSource
         catch (Exception ex)
         {
             return RestoreMaterializeResult.Failure(ScrubAndLog(ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Deletes every entry directly under <paramref name="dir"/> (recursively
+    /// for subdirectories) - see RestoreZipSource.ClearDirectoryContents for
+    /// the full reasoning (fix round 1, Important 1). Assumes <paramref
+    /// name="dir"/> already exists.
+    /// </summary>
+    private static void ClearDirectoryContents(string dir)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
+        {
+            if (Directory.Exists(entry)) Directory.Delete(entry, true);
+            else File.Delete(entry);
         }
     }
 

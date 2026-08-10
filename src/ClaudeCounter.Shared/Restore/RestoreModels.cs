@@ -61,6 +61,18 @@ public enum RestoreFileStatus
 /// file actually exists - both sides for <see cref="RestoreFileStatus.Changed"/>
 /// and <see cref="RestoreFileStatus.Identical"/>, staged-only for <see
 /// cref="RestoreFileStatus.New"/>, live-only for <see cref="RestoreFileStatus.LiveOnly"/>.
+///
+/// <b>Caveat (fix round 1, Minor):</b> <see cref="StagedModifiedUtc"/> for a
+/// GitHub-sourced snapshot is NOT the commit's own timestamp - it is
+/// whatever <see cref="File.LastWriteTimeUtc(string)"/> reads back after
+/// RestoreGitSource.CopySafely writes the file out of the git worktree, i.e.
+/// close to "now", for every file in the snapshot alike. A Drive-sourced
+/// snapshot's <see cref="StagedModifiedUtc"/> is the zip entry's own stored
+/// modification time and does not have this problem. A caller presenting
+/// this as a "last modified" column must not treat the GitHub case as
+/// meaningful per-file information - <see cref="RestoreSnapshot.Timestamp"/>
+/// (the commit's own timestamp, one value for the whole snapshot) is the
+/// trustworthy signal there instead.
 /// </summary>
 public sealed record RestoreFileEntry(
     string RelativePath,

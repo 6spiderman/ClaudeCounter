@@ -32,12 +32,20 @@ public static class RestoreApplier
     /// onto <paramref name="liveRoot"/>. <paramref name="safetyBaseDir"/> is
     /// the parent of the timestamped safety folder (e.g.
     /// <c>%LOCALAPPDATA%\ClaudeCounter\restore-safety</c>) - a new
-    /// <c>&lt;timestamp&gt;</c> subfolder is created per call, and its full
-    /// path is returned as <see cref="RestoreApplyResult.SafetyCopyPath"/> so
-    /// the caller can log and show it (only non-null when at least one file
-    /// was actually overwritten - nothing was created to protect otherwise).
-    /// <paramref name="now"/> defaults to the real clock; a test supplies a
-    /// fixed value so the timestamp folder name is deterministic.
+    /// <c>&lt;timestamp&gt;-&lt;unique suffix&gt;</c> subfolder is created per
+    /// call (fix round 1, Minor: the suffix guards against two Apply calls in
+    /// the same wall-clock second sharing one folder and the second
+    /// <c>overwrite: true</c> copy destroying the first call's originals -
+    /// mirrors RcloneBackend's own timestamp+GUID zip naming, added for
+    /// exactly this race), and its full path is returned as <see
+    /// cref="RestoreApplyResult.SafetyCopyPath"/> so the caller can log and
+    /// show it (only non-null when at least one file was actually
+    /// overwritten - nothing was created to protect otherwise). <paramref
+    /// name="now"/> defaults to the real clock; a test supplies a fixed value
+    /// so the timestamp portion of the folder name is deterministic (the
+    /// unique suffix still is not - tests read <see
+    /// cref="RestoreApplyResult.SafetyCopyPath"/> back rather than assuming
+    /// an exact name).
     /// </summary>
     public static RestoreApplyResult Apply(
         string stagedRoot,
@@ -47,7 +55,8 @@ public static class RestoreApplier
         DateTimeOffset? now = null)
     {
         var timestamp = (now ?? DateTimeOffset.Now).ToString("yyyyMMdd-HHmmss");
-        var safetyDir = Path.Combine(safetyBaseDir, timestamp);
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        var safetyDir = Path.Combine(safetyBaseDir, $"{timestamp}-{uniqueSuffix}");
 
         var liveRootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(liveRoot));
 
@@ -57,10 +66,28 @@ public static class RestoreApplier
         var overwritten = 0;
         var safetyCopiesTaken = 0;
 
+        // Fix round 1, Important 2: `chosen` is public API taking an
+        // arbitrary list - an "apply all" selection merged with individually
+        // ticked files (exactly what the future dialog will build) can
+        // easily contain the same RelativePath twice. Without this guard the
+        // second occurrence finds the file already overwritten by the first
+        // and copies the RESTORED content into the safety folder instead of
+        // the original, silently emptying the one thing rule 2 exists to
+        // guarantee. Mirrors RcloneBackend's own `seenEntries` guard, added
+        // for the identical "public API takes an arbitrary list" hazard.
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         try
         {
             foreach (var entry in chosen)
             {
+                if (!seenPaths.Add(entry.RelativePath))
+                {
+                    Log.Warn($"RestoreApplier: refusing duplicate entry for '{entry.RelativePath}' - already applied earlier in this batch.");
+                    skipped.Add(entry.RelativePath);
+                    continue;
+                }
+
                 // Rule 3 backstop: LiveOnly (and Identical - nothing to do)
                 // are never applied, however `chosen` was assembled.
                 if (entry.Status is not (RestoreFileStatus.New or RestoreFileStatus.Changed))
@@ -136,7 +163,15 @@ public static class RestoreApplier
         }
         catch (Exception ex)
         {
-            Log.Error($"RestoreApplier: apply failed after writing {written.Count} file(s): {ex.Message}");
+            // Fix round 1, Minor: a mid-apply failure (e.g. a file locked by
+            // a running Claude Code session - rule 6's exact scenario) is
+            // precisely when the user most needs the undo location, so the
+            // safety path must be in this log line too, not just the success
+            // path's.
+            var safetyNote = safetyCopiesTaken > 0
+                ? $" Safety copy of {safetyCopiesTaken} file(s) taken so far is at '{safetyDir}'."
+                : "";
+            Log.Error($"RestoreApplier: apply failed after writing {written.Count} file(s): {ex.Message}.{safetyNote}");
             return new RestoreApplyResult(
                 false, ex.Message,
                 safetyCopiesTaken > 0 ? safetyDir : null,

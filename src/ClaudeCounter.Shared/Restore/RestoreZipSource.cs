@@ -77,14 +77,35 @@ public sealed class RestoreZipSource
     /// name="tempDir"/> afterwards on a best-effort basis (mirrors
     /// RcloneBackend's own temp-zip cleanup) - a leftover zip would be a
     /// second plaintext copy of the user's Claude config sitting on disk.
+    ///
+    /// <paramref name="destinationDir"/> is CLEARED before extraction (fix
+    /// round 1, Important 1) - restoring snapshot A into it and then, later,
+    /// snapshot B must never leave A's files behind to be classified as part
+    /// of B's staged tree (a union, not the chosen snapshot). This is safe
+    /// specifically because a materialisation destination is restore-owned
+    /// scratch, never live config - restore rule 3 ("never delete") governs
+    /// what happens to <c>liveRoot</c> in RestoreApplier, not this directory.
+    /// <paramref name="protectedRoot"/> (fix round 1, Important 3) is the
+    /// live config root (in production, the configured BackupConfig.SourceRoot)
+    /// that <paramref name="destinationDir"/> must never be, contain, or be
+    /// contained by - refused up front, before the clear above or any write,
+    /// so a caller mistake here cannot delete or overwrite live config with
+    /// no safety copy and no preview.
     /// </summary>
-    public RestoreMaterializeResult Materialize(DriveTarget target, string snapshotId, string tempDir, string destinationDir)
+    public RestoreMaterializeResult Materialize(
+        DriveTarget target, string snapshotId, string tempDir, string destinationDir, string protectedRoot)
     {
         if (!_runner.Exists("rclone"))
             return RestoreMaterializeResult.Failure(ScrubAndLog("rclone not found on PATH - install and run 'rclone config' first."));
 
         if (!IsPlausibleSnapshotId(snapshotId))
             return RestoreMaterializeResult.Failure("Invalid snapshot id.");
+
+        if (RelativePathGuard.Overlaps(destinationDir, protectedRoot))
+        {
+            return RestoreMaterializeResult.Failure(
+                "Refusing to materialise into the live config root, or a directory that contains or is contained by it.");
+        }
 
         try
         {
@@ -100,6 +121,7 @@ public sealed class RestoreZipSource
                 return RestoreMaterializeResult.Failure("rclone copy reported success but the downloaded zip was not found locally.");
 
             Directory.CreateDirectory(destinationDir);
+            ClearDirectoryContents(destinationDir);
             ExtractSafely(zipPath, destinationDir);
 
             return RestoreMaterializeResult.Success(destinationDir);
@@ -170,6 +192,24 @@ public sealed class RestoreZipSource
 
             Directory.CreateDirectory(Path.GetDirectoryName(destFull)!);
             entry.ExtractToFile(destFull, overwrite: true);
+        }
+    }
+
+    /// <summary>
+    /// Deletes every entry directly under <paramref name="dir"/> (recursively
+    /// for subdirectories) so a fresh Materialize call never leaves a
+    /// previous snapshot's files behind for RestoreClassifier to see as part
+    /// of the new one - fix round 1, Important 1. Assumes <paramref
+    /// name="dir"/> already exists (callers create it first) and is
+    /// restore-owned scratch, not live config - restore rule 3 does not
+    /// apply here.
+    /// </summary>
+    private static void ClearDirectoryContents(string dir)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
+        {
+            if (Directory.Exists(entry)) Directory.Delete(entry, true);
+            else File.Delete(entry);
         }
     }
 
