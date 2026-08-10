@@ -307,9 +307,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         foreach (var e in events)
         {
-            var enabled = e.Level == AlertLevel.Maxed
-                ? _settings.MaxedAlertsEnabled
-                : _settings.CriticalAlertsEnabled;
+            var enabled = e.Level switch
+            {
+                AlertLevel.Maxed => _settings.MaxedAlertsEnabled,
+                AlertLevel.Critical => _settings.CriticalAlertsEnabled,
+                AlertLevel.Warn => _settings.WarnAlertsEnabled,
+                _ => false,
+            };
             if (!enabled)
                 continue;
             if (modalActive)

@@ -19,7 +19,18 @@ public sealed class SettingsStore
     public (AppSettings Settings, bool IsFirstRun) Load()
     {
         if (!File.Exists(_path))
-            return (new AppSettings(), true);
+        {
+            // Normalize a brand-new settings object too (not just loaded ones),
+            // so NotificationStateVersion is already stamped at the current
+            // value before the first save. Skipping this would leave a fresh
+            // install's first settings.json on file with version 0 (the
+            // "pre-Warn" sentinel), causing Normalize() to spuriously clear
+            // real same-version dedupe state the very first time it is loaded
+            // back on a later run.
+            var fresh = new AppSettings();
+            fresh.Normalize();
+            return (fresh, true);
+        }
 
         try
         {

@@ -12,6 +12,9 @@ public static class AlertContent
         if (e.Level == AlertLevel.Maxed)
             return ("Time to touch some grass",
                     $"{e.WindowLabel} is at 100%{reset}.");
+        if (e.Level == AlertLevel.Warn)
+            return ($"{e.WindowLabel} usage warning",
+                    $"At {e.Utilization:0}%{reset}.");
         return ($"{e.WindowLabel} usage critical",
                 $"At {e.Utilization:0}%{reset}.");
     }
@@ -47,8 +50,12 @@ public sealed class AlertPopupForm : Form
         KeyPreview = true;
 
         var palette = Theme.Current();
-        BackColor = e.Level == AlertLevel.Maxed
-            ? Theme.BandColor(Band.Red) : palette.Back;
+        BackColor = e.Level switch
+        {
+            AlertLevel.Maxed => Theme.BandColor(Band.Red),
+            AlertLevel.Warn => Theme.BandColor(Band.Amber),
+            _ => palette.Back,
+        };
 
         var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
         BuildContent(title, body, e.Level, palette);
@@ -118,7 +125,17 @@ public sealed class AlertPopupForm : Form
 
     private void BuildContent(string title, string body, AlertLevel level, Palette palette)
     {
-        var fore = level == AlertLevel.Maxed ? Color.White : palette.Fore;
+        // Maxed's red and Warn's amber are both fixed accent colors, not part
+        // of the light/dark theme pair, so they get their own fixed
+        // contrasting foreground rather than palette.Fore (which is tuned for
+        // palette.Back, not for an accent-colored card). Amber is the
+        // brighter of the two, so black reads better on it than white.
+        var fore = level switch
+        {
+            AlertLevel.Maxed => Color.White,
+            AlertLevel.Warn => Color.Black,
+            _ => palette.Fore,
+        };
         var pad = 14;
         var titleLabel = new Label
         {
@@ -140,7 +157,16 @@ public sealed class AlertPopupForm : Form
         var dismiss = new Button
         {
             Text = "Dismiss", FlatStyle = FlatStyle.Flat, ForeColor = fore,
-            BackColor = level == AlertLevel.Maxed ? Color.FromArgb(60, 0, 0, 0) : palette.BarBack,
+            // Maxed and Warn both sit on a solid accent color rather than the
+            // neutral theme background, so their Dismiss button is a darkened
+            // overlay of that same accent rather than palette.BarBack (which
+            // would look like an unrelated gray patch dropped on top of it).
+            BackColor = level switch
+            {
+                AlertLevel.Maxed => Color.FromArgb(60, 0, 0, 0),
+                AlertLevel.Warn => Color.FromArgb(60, 0, 0, 0),
+                _ => palette.BarBack,
+            },
             Size = new Size(80, 28),
             Location = new Point(Width - pad - 80, bodyLabel.Bottom + 10),
         };

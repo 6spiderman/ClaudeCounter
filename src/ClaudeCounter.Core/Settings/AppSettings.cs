@@ -13,6 +13,7 @@ public sealed class AppSettings
     public int CriticalThreshold { get; set; } = 90;
     public bool AutostartEnabled { get; set; } = true;
 
+    public bool WarnAlertsEnabled { get; set; } = true;
     public bool CriticalAlertsEnabled { get; set; } = true;
     public bool MaxedAlertsEnabled { get; set; } = true;
     public bool AlertFiveHour { get; set; } = true;
@@ -23,6 +24,23 @@ public sealed class AppSettings
 
     // Persisted alert dedupe state so restarts do not re-pop.
     public Dictionary<string, WindowAlertState> NotificationState { get; set; } = new();
+
+    /// <summary>
+    /// Schema version of <see cref="NotificationState"/>'s <c>AlertLevel</c>
+    /// encoding. AlertLevel is persisted as a plain int, and inserting Warn
+    /// between None and Critical renumbered Critical from 1 to 2 and Maxed
+    /// from 2 to 3 - a settings.json written before Warn existed would
+    /// otherwise be silently misread (a stored 1, meaning Critical, would come
+    /// back as Warn). Left at its default (0) for a pre-Warn file, since the
+    /// property is simply absent from old JSON; bumped to
+    /// <see cref="CurrentNotificationStateVersion"/> by <see cref="Normalize"/>
+    /// once the mismatch has been handled. Do not remap old int values - the
+    /// mapping is ambiguous once Maxed is involved.
+    /// </summary>
+    public int NotificationStateVersion { get; set; }
+
+    /// <summary>Current schema version for <see cref="NotificationState"/>. Bump when AlertLevel's int encoding changes again.</summary>
+    public const int CurrentNotificationStateVersion = 1;
 
     /// <summary>Ask GitHub once a day whether a newer release exists.</summary>
     public bool CheckForUpdates { get; set; } = true;
@@ -57,5 +75,16 @@ public sealed class AppSettings
         // SaveSettings() writes null forever and every restart re-pops every
         // alert. Restore it here, before ThresholdTracker ever sees it.
         NotificationState ??= new();
+
+        // See NotificationStateVersion's doc comment: a file written before
+        // Warn existed reads back with the wrong AlertLevel meanings. The
+        // dedupe state is only bookkeeping (worst case: one extra alert per
+        // window, once), so it is simplest and safest to discard it outright
+        // rather than attempt an ambiguous remap.
+        if (NotificationStateVersion < CurrentNotificationStateVersion)
+        {
+            NotificationState.Clear();
+            NotificationStateVersion = CurrentNotificationStateVersion;
+        }
     }
 }

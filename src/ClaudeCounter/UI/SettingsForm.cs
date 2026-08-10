@@ -58,6 +58,7 @@ public sealed class SettingsForm : Form
     private NumericUpDown _criticalInput = null!;
     private CheckBox _autostartCheck = null!;
     private CheckBox _updateCheck = null!;
+    private CheckBox _warnAlerts = null!;
     private CheckBox _criticalAlerts = null!;
     private CheckBox _maxedAlerts = null!;
     private CheckBox _alertFiveHour = null!;
@@ -270,6 +271,11 @@ public sealed class SettingsForm : Form
         var page = new Panel { Dock = DockStyle.Fill, BackColor = palette.Back, Visible = false };
         var y = PageTopY;
         const int col2X = 290;
+
+        _warnAlerts = NewCheckBox("Popup when a window hits the warn threshold", current.WarnAlertsEnabled, palette);
+        _warnAlerts.Location = new Point(PagePadX, y);
+        page.Controls.Add(_warnAlerts);
+        y += _warnAlerts.Height + RowGap;
 
         _criticalAlerts = NewCheckBox("Popup when a window hits the critical threshold", current.CriticalAlertsEnabled, palette);
         _criticalAlerts.Location = new Point(PagePadX, y);
@@ -681,6 +687,7 @@ public sealed class SettingsForm : Form
         settings.CriticalThreshold = (int)_criticalInput.Value;
         settings.AutostartEnabled = _autostartCheck.Checked;
         settings.CheckForUpdates = _updateCheck.Checked;
+        settings.WarnAlertsEnabled = _warnAlerts.Checked;
         settings.CriticalAlertsEnabled = _criticalAlerts.Checked;
         settings.MaxedAlertsEnabled = _maxedAlerts.Checked;
         settings.AlertFiveHour = _alertFiveHour.Checked;

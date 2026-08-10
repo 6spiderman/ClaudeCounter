@@ -11,6 +11,8 @@ public class ThresholdTrackerTests
     private static readonly DateTimeOffset R2 = new(2026, 8, 8, 17, 0, 0, TimeSpan.Zero);
 
     // All windows enabled so tests exercise the tracker, not the filter.
+    // WarnAlertsEnabled defaults to true on AppSettings, so it is implicitly
+    // on here too unless a test overrides it.
     private static AppSettings Settings() => new()
     {
         CriticalThreshold = 90,
@@ -93,6 +95,86 @@ public class ThresholdTrackerTests
         t.Evaluate(FiveHour(95, R1), Settings());
         Assert.Empty(t.Evaluate(FiveHour(80, R1), Settings())); // same resets_at, lands between warn and critical
         Assert.Empty(t.Evaluate(FiveHour(95, R1), Settings())); // gap: re-crossing critical is suppressed
+    }
+
+    [Fact]
+    public void WarnCrossingEmitsOnce()
+    {
+        var t = new ThresholdTracker();
+        var e = Assert.Single(t.Evaluate(FiveHour(80), Settings()));
+        Assert.Equal(AlertLevel.Warn, e.Level);
+        Assert.Empty(t.Evaluate(FiveHour(85), Settings())); // still warn, no repeat
+    }
+
+    [Fact]
+    public void WarnThenCriticalEmitsBothExactlyOnce()
+    {
+        var t = new ThresholdTracker();
+        var warn = Assert.Single(t.Evaluate(FiveHour(80), Settings()));
+        Assert.Equal(AlertLevel.Warn, warn.Level);
+        var critical = Assert.Single(t.Evaluate(FiveHour(91), Settings()));
+        Assert.Equal(AlertLevel.Critical, critical.Level);
+    }
+
+    [Fact]
+    public void JumpingStraightToCriticalSkipsWarn()
+    {
+        // 50 -> 95 in one poll must emit Critical only, not Warn then Critical -
+        // level is computed from the single current reading, not walked
+        // through every intermediate tier.
+        var t = new ThresholdTracker();
+        t.Evaluate(FiveHour(50), Settings());
+        var e = Assert.Single(t.Evaluate(FiveHour(95), Settings()));
+        Assert.Equal(AlertLevel.Critical, e.Level);
+    }
+
+    [Fact]
+    public void MaxedAfterCriticalEmitsOnce()
+    {
+        var t = new ThresholdTracker();
+        t.Evaluate(FiveHour(91), Settings());
+        var e = Assert.Single(t.Evaluate(FiveHour(100), Settings()));
+        Assert.Equal(AlertLevel.Maxed, e.Level);
+    }
+
+    [Fact]
+    public void DipInsideWarnBandEmitsNothing()
+    {
+        var t = new ThresholdTracker();
+        t.Evaluate(FiveHour(80), Settings());
+        Assert.Empty(t.Evaluate(FiveHour(76), Settings())); // 76 still >= WarnThreshold(75)
+    }
+
+    [Fact]
+    public void DroppingBelowWarnReArmsAndAlertsAgain()
+    {
+        // The bug this task exists to fix: a window that alerted at Warn and
+        // then collapsed toward zero must re-arm through the level-based rule
+        // (current level None while LastAlertedLevel is above None), not the
+        // old ">= Critical" floor which never true for a Warn-only alert.
+        var t = new ThresholdTracker();
+        var warn = Assert.Single(t.Evaluate(FiveHour(80, R1), Settings()));
+        Assert.Equal(AlertLevel.Warn, warn.Level);
+        Assert.Empty(t.Evaluate(FiveHour(5, R1), Settings())); // collapse, same resets_at
+        var again = Assert.Single(t.Evaluate(FiveHour(80, R1), Settings()));
+        Assert.Equal(AlertLevel.Warn, again.Level);
+    }
+
+    [Fact]
+    public void WarnAlertsDisabledSuppressesWarnButNotCriticalOrMaxed()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.WarnAlertsEnabled = false;
+
+        Assert.Empty(t.Evaluate(FiveHour(80), s)); // in warn band, suppressed
+        Assert.Empty(t.Evaluate(FiveHour(85), s)); // still warn band, still suppressed
+
+        var critical = Assert.Single(t.Evaluate(FiveHour(91), s));
+        Assert.Equal(AlertLevel.Critical, critical.Level);
+
+        var maxed = Assert.Single(t.Evaluate(FiveHour(100), s));
+        Assert.Equal(AlertLevel.Maxed, maxed.Level);
     }
 
     [Fact]

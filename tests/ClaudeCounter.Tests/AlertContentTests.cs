@@ -20,6 +20,18 @@ public class AlertContentTests
     }
 
     [Fact]
+    public void WarnMentionsWindowAndPercentAndLevel()
+    {
+        var e = new AlertEvent("five_hour", "5-hour session", AlertLevel.Warn, 78,
+            Now.AddHours(1));
+        var (title, body) = AlertContent.For(e, Now);
+        Assert.Contains("5-hour session", title);
+        Assert.Contains("warning", title, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("78%", body);
+        Assert.Contains("resets in", body);
+    }
+
+    [Fact]
     public void MaxedSaysTouchGrass()
     {
         var e = new AlertEvent("five_hour", "5-hour session", AlertLevel.Maxed, 100, null);
