@@ -5,6 +5,17 @@ namespace ClaudeBackup;
 /// config can cause a secret to be uploaded. Matching is case-insensitive on the
 /// file name (via <see cref="Path.GetFileName(string)"/>), not the full path.
 ///
+/// S6: lives in ClaudeCounter.Shared (not ClaudeBackup.csproj) - same reasoning,
+/// and same "keep the ClaudeBackup namespace even though the file physically
+/// moved" pattern, as BackupConfig.cs. The Backup tab's file picker (in the
+/// ClaudeCounter tray project) needs this to grey out denylisted nodes, and
+/// ClaudeCounter deliberately carries no ProjectReference to ClaudeBackup.csproj
+/// (see BackupTaskManager's doc comment: that would drag the worker's
+/// RID-specific publish graph into the tray's single-file publish). Moving this
+/// type here - rather than adding that reference, or duplicating the list - lets
+/// both the worker (FileSelector) and the tray (the picker) share one
+/// definition of what a secret looks like.
+///
 /// This is a NAME-based heuristic, not a content scanner. It reliably catches
 /// the two concrete secrets known to exist on these machines
 /// (".credentials.json" and "session.dat"), common credential-file names
