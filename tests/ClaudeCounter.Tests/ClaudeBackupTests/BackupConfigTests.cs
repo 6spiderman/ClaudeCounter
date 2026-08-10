@@ -96,6 +96,78 @@ public class BackupConfigTests
         finally { File.Delete(path); }
     }
 
+    // S7/S8: the schedule-robustness and Drive-retention fields added to
+    // ScheduleConfig/DriveTarget must round-trip like every other setting -
+    // including KeepLastCount/DeleteOlderThanDays staying null when never
+    // set, so an existing user who has not opened the Advanced dialog is not
+    // silently opted into a retention rule.
+    [Fact]
+    public void ScheduleAndDriveRetentionSettingsRoundTripThroughFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            var c = BackupConfig.Default();
+            c.Schedule.StartWhenAvailable = false;
+            c.Schedule.RunOnlyIfNetworkAvailable = false;
+            c.Schedule.DisallowStartIfOnBatteries = true;
+            c.Schedule.StopIfGoingOnBatteries = true;
+            c.Schedule.RestartOnFailure = false;
+            c.Schedule.RestartIntervalMinutes = 45;
+            c.Schedule.RestartCount = 7;
+            c.Drive.KeepLastCount = 14;
+            c.Drive.DeleteOlderThanDays = 60;
+            c.Save(path);
+
+            var back = BackupConfig.Load(path);
+            Assert.False(back.Schedule.StartWhenAvailable);
+            Assert.False(back.Schedule.RunOnlyIfNetworkAvailable);
+            Assert.True(back.Schedule.DisallowStartIfOnBatteries);
+            Assert.True(back.Schedule.StopIfGoingOnBatteries);
+            Assert.False(back.Schedule.RestartOnFailure);
+            Assert.Equal(45, back.Schedule.RestartIntervalMinutes);
+            Assert.Equal(7, back.Schedule.RestartCount);
+            Assert.Equal(14, back.Drive.KeepLastCount);
+            Assert.Equal(60, back.Drive.DeleteOlderThanDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A backup.json written before this feature existed has no
+    // KeepLastCount/DeleteOlderThanDays properties at all - deserializing it
+    // must leave both null (retention off) rather than throwing or defaulting
+    // to some non-null value that would silently start pruning a remote the
+    // user never configured for it.
+    [Fact]
+    public void MissingRetentionFieldsDefaultToNullNotSomeActiveValue()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": true, "RcloneRemote": "gdrive:X" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+            var loaded = BackupConfig.Load(path);
+            Assert.Null(loaded.Drive.KeepLastCount);
+            Assert.Null(loaded.Drive.DeleteOlderThanDays);
+            // And the schedule-robustness defaults come back as the design
+            // spec's defaults, not some JSON-absent zero/false value.
+            Assert.True(loaded.Schedule.StartWhenAvailable);
+            Assert.True(loaded.Schedule.RunOnlyIfNetworkAvailable);
+            Assert.False(loaded.Schedule.DisallowStartIfOnBatteries);
+            Assert.False(loaded.Schedule.StopIfGoingOnBatteries);
+            Assert.True(loaded.Schedule.RestartOnFailure);
+            Assert.Equal(15, loaded.Schedule.RestartIntervalMinutes);
+            Assert.Equal(3, loaded.Schedule.RestartCount);
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
     public void LoadMissingReturnsDefault()
     {

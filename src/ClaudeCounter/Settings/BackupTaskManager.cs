@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
+using System.Xml.Linq;
 using ClaudeBackup;
 using ClaudeCounter.Core;
 
@@ -108,10 +110,7 @@ public static class BackupTaskManager
     /// </exception>
     public static string BuildSchtasksArgs(ScheduleConfig schedule, string workerPath)
     {
-        if (!TimeOnly.TryParseExact(schedule.Time, "HH:mm", CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out _))
-            throw new ArgumentException(
-                $"Schedule time '{schedule.Time}' is not a valid 24-hour HH:mm value.", nameof(schedule));
+        ParseTimeOrThrow(schedule);
 
         var sc = schedule.Frequency.ToLowerInvariant() switch
         {
@@ -125,26 +124,200 @@ public static class BackupTaskManager
     }
 
     /// <summary>
-    /// Registers (or replaces) the scheduled task. Never throws; returns false
-    /// on any failure (worker absent, invalid schedule, or a non-zero
-    /// schtasks exit), with the reason logged via Log.Warn.
+    /// Shared HH:mm validation for both <see cref="BuildSchtasksArgs"/> (kept
+    /// for the /Delete and /Query paths - see this class's summary) and <see
+    /// cref="BuildTaskXml"/>, which is where registration's real logic now
+    /// lives. Time reaches here as free text from a Settings textbox; without
+    /// this check a value that is not strictly "HH:mm" could splice extra
+    /// content into a generated schtasks command line or task XML.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="schedule"/>'s Time is not a strict 24-hour "HH:mm" value.
+    /// </exception>
+    private static TimeOnly ParseTimeOrThrow(ScheduleConfig schedule)
+    {
+        if (!TimeOnly.TryParseExact(schedule.Time, "HH:mm", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var time))
+            throw new ArgumentException(
+                $"Schedule time '{schedule.Time}' is not a valid 24-hour HH:mm value.", nameof(schedule));
+        return time;
+    }
+
+    // Task Scheduler's own XML namespace - every element in the document
+    // must be qualified with this or schtasks /Create /XML rejects the file
+    // as an invalid task definition.
+    private static readonly XNamespace TaskNs = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+    /// <summary>
+    /// Builds the Task Scheduler XML definition for registering the backup
+    /// schedule - the real logic behind <see cref="Register"/> now that
+    /// registration switched from <c>schtasks /Create</c> with flags (which
+    /// cannot express "run a missed backup as soon as possible" or the two
+    /// battery settings) to <c>schtasks /Create /XML &lt;file&gt;</c>. Pure
+    /// and unit-testable - performs no I/O, never touches the filesystem or
+    /// invokes schtasks itself; <see cref="Register"/> writes the result to a
+    /// temp file and passes that to schtasks.
+    /// </summary>
+    /// <remarks>
+    /// Element order within a given parent does not matter to Task
+    /// Scheduler's schema (its complex types use xs:all, not xs:sequence),
+    /// but the order below follows what Task Scheduler itself emits when
+    /// exporting a task, since that is a known-good reference rather than a
+    /// guess. A caller (a test, in particular) should round-trip this
+    /// through <see cref="XDocument"/> rather than string-matching -
+    /// confirming well-formedness and the presence/value of each element is
+    /// what actually proves the document is valid, not substring checks
+    /// against a specific serialization.
+    ///
+    /// The &lt;Command&gt; element carries <paramref name="workerPath"/>
+    /// verbatim - unlike schtasks' command-line /TR value, an XML element's
+    /// text content does not need its own quoting for an embedded space;
+    /// XElement's text-content escaping (for XML metacharacters like
+    /// &amp;/&lt;/&gt;) is all that is required.
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="schedule"/>'s Time is not a strict 24-hour "HH:mm" value.
+    /// </exception>
+    public static string BuildTaskXml(ScheduleConfig schedule, string workerPath)
+    {
+        var time = ParseTimeOrThrow(schedule);
+
+        // Local wall-clock time, no UTC/offset suffix - Task Scheduler
+        // treats an offset-less StartBoundary as local time, which is the
+        // same "wall clock, whatever timezone the machine is in right now"
+        // semantics /ST always had via schtasks.
+        var startBoundary = (DateTime.Now.Date + time.ToTimeSpan())
+            .ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+
+        var trigger = schedule.Frequency.ToLowerInvariant() switch
+        {
+            // Weekly: recurs on the same day of the week as the start
+            // boundary, matching what registering "weekly, starting today"
+            // has always meant here - there is no separate day-of-week
+            // field on ScheduleConfig to honour instead.
+            "weekly" => new XElement(TaskNs + "CalendarTrigger",
+                new XElement(TaskNs + "StartBoundary", startBoundary),
+                new XElement(TaskNs + "Enabled", "true"),
+                new XElement(TaskNs + "ScheduleByWeek",
+                    new XElement(TaskNs + "DaysOfWeek",
+                        new XElement(TaskNs + DateTime.Now.DayOfWeek.ToString())),
+                    new XElement(TaskNs + "WeeksInterval", "1"))),
+            // Hourly: a one-time trigger that repeats every hour forever
+            // (no <Duration> means indefinite repetition) - the same shape
+            // `schtasks /Create /SC HOURLY` itself produces, rather than a
+            // daily trigger with an hourly repetition wrapped around it.
+            "hourly" => new XElement(TaskNs + "TimeTrigger",
+                new XElement(TaskNs + "StartBoundary", startBoundary),
+                new XElement(TaskNs + "Enabled", "true"),
+                new XElement(TaskNs + "Repetition",
+                    new XElement(TaskNs + "Interval", "PT1H"),
+                    new XElement(TaskNs + "StopAtDurationEnd", "false"))),
+            _ => new XElement(TaskNs + "CalendarTrigger",
+                new XElement(TaskNs + "StartBoundary", startBoundary),
+                new XElement(TaskNs + "Enabled", "true"),
+                new XElement(TaskNs + "ScheduleByDay",
+                    new XElement(TaskNs + "DaysInterval", "1"))),
+        };
+
+        var settings = new XElement(TaskNs + "Settings",
+            new XElement(TaskNs + "MultipleInstancesPolicy", "IgnoreNew"),
+            new XElement(TaskNs + "DisallowStartIfOnBatteries", Bool(schedule.DisallowStartIfOnBatteries)),
+            new XElement(TaskNs + "StopIfGoingOnBatteries", Bool(schedule.StopIfGoingOnBatteries)),
+            new XElement(TaskNs + "AllowHardTerminate", "true"),
+            new XElement(TaskNs + "StartWhenAvailable", Bool(schedule.StartWhenAvailable)),
+            new XElement(TaskNs + "RunOnlyIfNetworkAvailable", Bool(schedule.RunOnlyIfNetworkAvailable)),
+            new XElement(TaskNs + "AllowStartOnDemand", "true"),
+            new XElement(TaskNs + "Enabled", "true"),
+            new XElement(TaskNs + "Hidden", "false"),
+            new XElement(TaskNs + "RunOnlyIfIdle", "false"),
+            new XElement(TaskNs + "WakeToRun", "false"),
+            new XElement(TaskNs + "ExecutionTimeLimit", "PT0S"),
+            new XElement(TaskNs + "Priority", "7"));
+
+        if (schedule.RestartOnFailure)
+        {
+            settings.Add(new XElement(TaskNs + "RestartOnFailure",
+                new XElement(TaskNs + "Interval", $"PT{Math.Max(1, schedule.RestartIntervalMinutes)}M"),
+                new XElement(TaskNs + "Count", Math.Max(1, schedule.RestartCount).ToString(CultureInfo.InvariantCulture))));
+        }
+
+        var doc = new XDocument(
+            new XDeclaration("1.0", "UTF-16", null),
+            new XElement(TaskNs + "Task", new XAttribute("version", "1.2"),
+                new XElement(TaskNs + "RegistrationInfo",
+                    new XElement(TaskNs + "Description", "Runs the ClaudeCounter backup worker on a schedule.")),
+                new XElement(TaskNs + "Triggers", trigger),
+                new XElement(TaskNs + "Principals",
+                    new XElement(TaskNs + "Principal", new XAttribute("id", "Author"),
+                        new XElement(TaskNs + "LogonType", "InteractiveToken"),
+                        new XElement(TaskNs + "RunLevel", "LeastPrivilege"))),
+                settings,
+                new XElement(TaskNs + "Actions", new XAttribute("Context", "Author"),
+                    new XElement(TaskNs + "Exec",
+                        new XElement(TaskNs + "Command", workerPath)))));
+
+        return doc.ToString();
+    }
+
+    private static string Bool(bool value) => value ? "true" : "false";
+
+    /// <summary>
+    /// Registers (or replaces) the scheduled task by generating the task
+    /// definition XML (see <see cref="BuildTaskXml"/>), writing it to a temp
+    /// file, and calling <c>schtasks /Create /F /TN ... /XML &lt;file&gt;</c>
+    /// - the only way to set the advanced settings BuildTaskXml encodes
+    /// (StartWhenAvailable, battery behaviour, retry on failure), none of
+    /// which `schtasks /Create` exposes as flags. The temp file is written
+    /// as UTF-16 to match the XML declaration BuildTaskXml emits, and is
+    /// always deleted afterwards - including when schtasks itself fails -
+    /// since nothing else in this tool ever revisits it. Never throws;
+    /// returns false on any failure (worker absent, invalid schedule, the
+    /// temp file could not be written, or a non-zero schtasks exit), with
+    /// the reason logged via Log.Warn.
     /// </summary>
     public static bool Register(ScheduleConfig schedule)
     {
         if (WorkerPath() is not { } path)
             return false;
 
-        string args;
+        string xml;
         try
         {
-            args = BuildSchtasksArgs(schedule, path);
+            xml = BuildTaskXml(schedule, path);
         }
         catch (ArgumentException e)
         {
             Log.Warn($"Refused to register the backup schedule: {e.Message}");
             return false;
         }
-        return Run(args);
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"claudecounter-backup-task-{Guid.NewGuid():N}.xml");
+        try
+        {
+            File.WriteAllText(tempFile, xml, Encoding.Unicode);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Could not write the task definition file: {e.Message}");
+            return false;
+        }
+
+        try
+        {
+            return Run($"/Create /F /TN \"{TaskName}\" /XML \"{tempFile}\"");
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempFile))
+                    File.Delete(tempFile);
+            }
+            catch (Exception e)
+            {
+                Log.Warn($"Could not delete temp task definition file '{tempFile}': {e.Message}");
+            }
+        }
     }
 
     /// <summary>

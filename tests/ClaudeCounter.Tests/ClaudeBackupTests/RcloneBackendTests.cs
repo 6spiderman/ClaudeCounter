@@ -32,6 +32,14 @@ public class RcloneBackendTests : IDisposable
         public bool LockZipDuringCopy { get; set; }
         public FileStream? HeldLock { get; private set; }
 
+        // S8: retention pruning support - lsjson listing (either canned JSON
+        // or a forced failure) and every deletefile call's remote path, so a
+        // test can assert exactly which names were pruned without a real
+        // rclone remote.
+        public string LsJsonResponse { get; set; } = "[]";
+        public bool LsJsonShouldFail { get; set; }
+        public List<string> DeletedRemotePaths { get; } = new();
+
         public bool Exists(string file) => file == "rclone" ? RclonePresent : true;
 
         public ProcessResult Run(string file, IReadOnlyList<string> args, string? wd = null)
@@ -49,6 +57,18 @@ public class RcloneBackendTests : IDisposable
                 if (CopyShouldFail)
                     return new ProcessResult(1, "", CopyStdErr);
             }
+
+            if (args.Count > 0 && args[0] == "lsjson")
+                return LsJsonShouldFail
+                    ? new ProcessResult(1, "", "lsjson failed")
+                    : new ProcessResult(0, LsJsonResponse, "");
+
+            if (args.Count > 1 && args[0] == "deletefile")
+            {
+                DeletedRemotePaths.Add(args[1]);
+                return new ProcessResult(0, "", "");
+            }
+
             return new ProcessResult(0, "", "");
         }
     }
@@ -323,6 +343,114 @@ public class RcloneBackendTests : IDisposable
             foreach (var leftover in Directory.GetFiles(_tmp))
                 File.Delete(leftover);
         }
+    }
+
+    // S8: retention pruning is a no-op (no "lsjson" call at all) when
+    // neither DriveTarget.KeepLastCount nor DeleteOlderThanDays is
+    // configured - the common case, and the reason a user who never opens
+    // the Advanced dialog pays no extra rclone call per run.
+    [Fact]
+    public void PruningIsSkippedEntirelyWhenNeitherRetentionSettingIsConfigured()
+    {
+        var runner = new FakeRunner();
+        var result = new RcloneBackend(runner, _tmp)
+            .Run(_root, new[] { "settings.json" }, new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
+
+        Assert.True(result.Ok);
+        Assert.DoesNotContain(runner.Calls, c => c.StartsWith("rclone lsjson"));
+        Assert.Empty(runner.DeletedRemotePaths);
+    }
+
+    // Retention safety rule 1 (design spec, Part 2): pruning runs ONLY after
+    // a successful upload - a failed rclone copy must never even attempt to
+    // list the remote, let alone delete anything from it.
+    [Fact]
+    public void FailedUploadPerformsNoPruning()
+    {
+        var runner = new FakeRunner { CopyShouldFail = true, CopyStdErr = "connection refused" };
+        var target = new DriveTarget
+        {
+            Enabled = true,
+            RcloneRemote = "gdrive:X",
+            KeepLastCount = 1,
+            DeleteOlderThanDays = 1,
+        };
+
+        var result = new RcloneBackend(runner, _tmp).Run(_root, new[] { "settings.json" }, target);
+
+        Assert.False(result.Ok);
+        Assert.DoesNotContain(runner.Calls, c => c.StartsWith("rclone lsjson"));
+        Assert.Empty(runner.DeletedRemotePaths);
+    }
+
+    // A failed `rclone lsjson` must be logged and pruning skipped for this
+    // run - but the run itself, which already succeeded (the upload went
+    // through), must still be reported as successful.
+    [Fact]
+    public void FailedListingLogsAndLeavesTheRunSuccessful()
+    {
+        var runner = new FakeRunner { LsJsonShouldFail = true };
+        var target = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X", KeepLastCount = 1 };
+
+        var before = ReadLog().Length;
+        var result = new RcloneBackend(runner, _tmp).Run(_root, new[] { "settings.json" }, target);
+        var written = ReadLog()[before..];
+
+        Assert.True(result.Ok);
+        Assert.Empty(runner.DeletedRemotePaths);
+        Assert.Contains("lsjson failed", written);
+        Assert.Contains("skipping retention pruning", written);
+    }
+
+    // The integration path: a successful upload, a listing with entries
+    // beyond the keep-last window, and the doomed ones actually deleted via
+    // `rclone deletefile` against the right remote path.
+    [Fact]
+    public void SuccessfulUploadPrunesOldEntriesPastTheKeepLastWindow()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var lsJson = $$"""
+            [
+              {"Name": "claude-backup-newest.zip", "ModTime": "{{now:o}}", "IsDir": false},
+              {"Name": "claude-backup-oldest.zip", "ModTime": "{{now.AddDays(-10):o}}", "IsDir": false}
+            ]
+            """;
+        var runner = new FakeRunner { LsJsonResponse = lsJson };
+        var target = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X", KeepLastCount = 1 };
+
+        var result = new RcloneBackend(runner, _tmp).Run(_root, new[] { "settings.json" }, target);
+
+        Assert.True(result.Ok);
+        Assert.Contains(runner.Calls, c => c.StartsWith("rclone lsjson gdrive:X"));
+        Assert.Equal(new[] { "gdrive:X/claude-backup-oldest.zip" }, runner.DeletedRemotePaths);
+    }
+
+    // Retention safety rule 3 (design spec, Part 2): only claude-backup-*.zip
+    // entries are candidates - something else living in the same remote
+    // folder must survive pruning even under aggressive settings.
+    [Fact]
+    public void PruningNeverDeletesAFileThatIsNotOurs()
+    {
+        var now = DateTimeOffset.UtcNow;
+        // Two genuine candidates plus a non-matching file, all equally
+        // stale, under maximally aggressive settings (keep 0, older-than 0
+        // days) - proves both that the non-matching file is never touched
+        // AND that pruning still does its real job on the entries that ARE
+        // ours (all but the newest of the two).
+        var lsJson = $$"""
+            [
+              {"Name": "claude-backup-a.zip", "ModTime": "{{now.AddDays(-100):o}}", "IsDir": false},
+              {"Name": "claude-backup-b.zip", "ModTime": "{{now.AddDays(-200):o}}", "IsDir": false},
+              {"Name": "some-other-file.txt", "ModTime": "{{now.AddDays(-100):o}}", "IsDir": false}
+            ]
+            """;
+        var runner = new FakeRunner { LsJsonResponse = lsJson };
+        var target = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X", KeepLastCount = 0, DeleteOlderThanDays = 0 };
+
+        var result = new RcloneBackend(runner, _tmp).Run(_root, new[] { "settings.json" }, target);
+
+        Assert.True(result.Ok);
+        Assert.Equal(new[] { "gdrive:X/claude-backup-b.zip" }, runner.DeletedRemotePaths);
     }
 
     private static string ReadLog()

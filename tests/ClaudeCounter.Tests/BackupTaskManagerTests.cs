@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using ClaudeBackup;
 using ClaudeCounter.Settings;
 using Xunit;
@@ -200,4 +201,197 @@ public class BackupTaskManagerTests
     // the REAL worker against this machine's real backup.json - exactly the
     // kind of real-process invocation this project's tests must not do.
     // ResultMessage above is RunNowAsync's entire pure, testable surface.
+}
+
+/// <summary>
+/// BackupTaskManager.BuildTaskXml is where registration's real logic now
+/// lives (schedule-robustness design spec, Part 1) - schtasks /Create with
+/// flags cannot express StartWhenAvailable, the battery settings, or retry
+/// on failure, so registration switched to schtasks /Create /XML &lt;file&gt;
+/// with the definition generated here. Every test round-trips the result
+/// through XDocument.Parse (never string-matching alone) so a malformed
+/// document - wrong namespace, unbalanced elements, bad XML - fails the test
+/// rather than slipping through on a substring match. Register itself (which
+/// writes the temp file and invokes schtasks) is not exercised here, for the
+/// same reason BuildSchtasksArgs's tests above never exercise Register.
+/// </summary>
+public class BackupTaskManagerBuildTaskXmlTests
+{
+    private static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+    private static XDocument Parse(string xml) => XDocument.Parse(xml);
+
+    private static ScheduleConfig Daily(string time = "09:00") => new() { Frequency = "daily", Time = time };
+
+    [Fact]
+    public void ProducesWellFormedXmlInTheTaskSchedulerNamespace()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(Daily(), @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        Assert.Equal(Ns + "Task", doc.Root!.Name);
+        Assert.Equal("1.2", doc.Root.Attribute("version")?.Value);
+    }
+
+    [Fact]
+    public void CommandElementCarriesTheWorkerPathVerbatim()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(Daily(), @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        var command = doc.Descendants(Ns + "Command").Single().Value;
+        Assert.Equal(@"C:\apps\ClaudeBackup.exe", command);
+    }
+
+    // Unlike BuildSchtasksArgs' /TR value, an XML element's text content
+    // needs no manual quoting for an embedded space - XElement's own
+    // escaping is all that is required, and the round-tripped value must
+    // come back exactly as passed in, spaces included.
+    [Fact]
+    public void CommandElementNeedsNoEscapingForAPathWithSpaces()
+    {
+        const string path = @"C:\Users\First Last\AppData\Local\ClaudeCounter\ClaudeBackup.exe";
+        var xml = BackupTaskManager.BuildTaskXml(Daily(), path);
+        var doc = Parse(xml);
+        Assert.Equal(path, doc.Descendants(Ns + "Command").Single().Value);
+    }
+
+    [Fact]
+    public void DailyUsesCalendarTriggerWithScheduleByDay()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(Daily(), @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        var trigger = doc.Descendants(Ns + "CalendarTrigger").Single();
+        Assert.Equal("1", trigger.Descendants(Ns + "ScheduleByDay").Single()
+            .Element(Ns + "DaysInterval")!.Value);
+        Assert.Contains("09:00:00", trigger.Element(Ns + "StartBoundary")!.Value);
+    }
+
+    [Fact]
+    public void WeeklyUsesCalendarTriggerWithScheduleByWeek()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(
+            new ScheduleConfig { Frequency = "weekly", Time = "18:30" }, @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        var trigger = doc.Descendants(Ns + "CalendarTrigger").Single();
+        var byWeek = trigger.Element(Ns + "ScheduleByWeek")!;
+        Assert.Equal("1", byWeek.Element(Ns + "WeeksInterval")!.Value);
+        // Recurs on whatever day of the week "now" (registration time) is -
+        // exactly one day-of-week element, matching DateTime.Now.DayOfWeek.
+        var daysOfWeek = byWeek.Element(Ns + "DaysOfWeek")!;
+        Assert.Single(daysOfWeek.Elements());
+        Assert.Equal(Ns + DateTime.Now.DayOfWeek.ToString(), daysOfWeek.Elements().Single().Name);
+    }
+
+    [Fact]
+    public void HourlyUsesTimeTriggerWithHourlyRepetition()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(
+            new ScheduleConfig { Frequency = "hourly", Time = "09:00" }, @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        Assert.Empty(doc.Descendants(Ns + "CalendarTrigger"));
+        var trigger = doc.Descendants(Ns + "TimeTrigger").Single();
+        var repetition = trigger.Element(Ns + "Repetition")!;
+        Assert.Equal("PT1H", repetition.Element(Ns + "Interval")!.Value);
+        Assert.Equal("false", repetition.Element(Ns + "StopAtDurationEnd")!.Value);
+    }
+
+    [Fact]
+    public void UnrecognizedFrequencyFallsBackToDaily()
+    {
+        var xml = BackupTaskManager.BuildTaskXml(
+            new ScheduleConfig { Frequency = "fortnightly", Time = "09:00" }, @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        Assert.Single(doc.Descendants(Ns + "CalendarTrigger"));
+        Assert.NotNull(doc.Descendants(Ns + "ScheduleByDay").SingleOrDefault());
+    }
+
+    [Fact]
+    public void DefaultsMatchTheDesignSpec()
+    {
+        // ScheduleConfig's own field initializers ARE the design spec's
+        // default table - this proves BuildTaskXml faithfully encodes
+        // whatever ScheduleConfig says, using an untouched instance.
+        var xml = BackupTaskManager.BuildTaskXml(new ScheduleConfig(), @"C:\apps\ClaudeBackup.exe");
+        var settings = Parse(xml).Descendants(Ns + "Settings").Single();
+
+        Assert.Equal("true", settings.Element(Ns + "StartWhenAvailable")!.Value);
+        Assert.Equal("true", settings.Element(Ns + "RunOnlyIfNetworkAvailable")!.Value);
+        Assert.Equal("false", settings.Element(Ns + "DisallowStartIfOnBatteries")!.Value);
+        Assert.Equal("false", settings.Element(Ns + "StopIfGoingOnBatteries")!.Value);
+
+        var restart = settings.Element(Ns + "RestartOnFailure")!;
+        Assert.Equal("PT15M", restart.Element(Ns + "Interval")!.Value);
+        Assert.Equal("3", restart.Element(Ns + "Count")!.Value);
+    }
+
+    [Fact]
+    public void HonoursNonDefaultBatteryAndNetworkSettings()
+    {
+        var schedule = Daily();
+        schedule.StartWhenAvailable = false;
+        schedule.RunOnlyIfNetworkAvailable = false;
+        schedule.DisallowStartIfOnBatteries = true;
+        schedule.StopIfGoingOnBatteries = true;
+
+        var settings = Parse(BackupTaskManager.BuildTaskXml(schedule, @"C:\apps\ClaudeBackup.exe"))
+            .Descendants(Ns + "Settings").Single();
+
+        Assert.Equal("false", settings.Element(Ns + "StartWhenAvailable")!.Value);
+        Assert.Equal("false", settings.Element(Ns + "RunOnlyIfNetworkAvailable")!.Value);
+        Assert.Equal("true", settings.Element(Ns + "DisallowStartIfOnBatteries")!.Value);
+        Assert.Equal("true", settings.Element(Ns + "StopIfGoingOnBatteries")!.Value);
+    }
+
+    [Fact]
+    public void HonoursNonDefaultRestartIntervalAndCount()
+    {
+        var schedule = Daily();
+        schedule.RestartIntervalMinutes = 45;
+        schedule.RestartCount = 7;
+
+        var restart = Parse(BackupTaskManager.BuildTaskXml(schedule, @"C:\apps\ClaudeBackup.exe"))
+            .Descendants(Ns + "RestartOnFailure").Single();
+
+        Assert.Equal("PT45M", restart.Element(Ns + "Interval")!.Value);
+        Assert.Equal("7", restart.Element(Ns + "Count")!.Value);
+    }
+
+    [Fact]
+    public void OmitsRestartOnFailureElementWhenDisabled()
+    {
+        var schedule = Daily();
+        schedule.RestartOnFailure = false;
+
+        var xml = BackupTaskManager.BuildTaskXml(schedule, @"C:\apps\ClaudeBackup.exe");
+        Assert.Empty(Parse(xml).Descendants(Ns + "RestartOnFailure"));
+    }
+
+    // Same invalid-time inputs BuildSchtasksArgs is checked against - the
+    // validation is shared (see BackupTaskManager.ParseTimeOrThrow), but
+    // this proves BuildTaskXml itself actually calls it rather than
+    // silently accepting whatever reaches it.
+    [Theory]
+    [InlineData("9:00")]
+    [InlineData("09:0")]
+    [InlineData("24:00")]
+    [InlineData("09:60")]
+    [InlineData("")]
+    [InlineData("not a time")]
+    public void RejectsAnyTimeThatIsNotStrictTwentyFourHourHhMm(string time)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            BackupTaskManager.BuildTaskXml(new ScheduleConfig { Frequency = "daily", Time = time },
+                @"C:\apps\ClaudeBackup.exe"));
+        Assert.Contains(time, ex.Message);
+    }
+
+    [Theory]
+    [InlineData("00:00")]
+    [InlineData("23:59")]
+    [InlineData("09:05")]
+    public void AcceptsValidTwentyFourHourHhMm(string time)
+    {
+        var xml = BackupTaskManager.BuildTaskXml(Daily(time), @"C:\apps\ClaudeBackup.exe");
+        var doc = Parse(xml);
+        Assert.Contains(time + ":00", doc.Descendants(Ns + "StartBoundary").Single().Value);
+    }
 }

@@ -21,12 +21,59 @@ public sealed class DriveTarget
     /// <summary>Drive's own include/exclude selection - independent of <see cref="GitTarget"/>'s.</summary>
     public List<string> Include { get; set; } = new();
     public List<string> Exclude { get; set; } = new();
+
+    /// <summary>
+    /// Keep at most this many <c>claude-backup-*.zip</c> entries in <see
+    /// cref="RcloneRemote"/>, pruning the oldest first - null (the default)
+    /// means this rule is off. Independently switchable from <see
+    /// cref="DeleteOlderThanDays"/>; when both are set a zip is pruned if
+    /// EITHER rule would remove it (the union), per the design spec. See
+    /// DriveRetention.SelectForDeletion for the pure selection logic, and
+    /// RcloneBackend for where it is applied - only after a successful
+    /// upload, and never down to zero remaining backups.
+    /// </summary>
+    public int? KeepLastCount { get; set; }
+
+    /// <summary>
+    /// Delete <c>claude-backup-*.zip</c> entries in <see cref="RcloneRemote"/>
+    /// older than this many days - null (the default) means this rule is
+    /// off. See <see cref="KeepLastCount"/>'s doc comment for how the two
+    /// combine.
+    /// </summary>
+    public int? DeleteOlderThanDays { get; set; }
 }
 
 public sealed class ScheduleConfig
 {
     public string Frequency { get; set; } = "daily"; // daily | weekly | hourly
     public string Time { get; set; } = "09:00";
+
+    // Advanced Task Scheduler settings (schedule-robustness spec). Windows'
+    // own defaults for the two battery settings are both true, which on a
+    // laptop means the backup only ever runs while plugged in - exactly the
+    // silent-skip behaviour StartWhenAvailable exists to fix. Defaulting
+    // them false here is deliberate; do not "correct" them to match Windows.
+
+    /// <summary>Run a missed backup as soon as possible once the machine is available again.</summary>
+    public bool StartWhenAvailable { get; set; } = true;
+
+    /// <summary>Only start the task when a network connection is available.</summary>
+    public bool RunOnlyIfNetworkAvailable { get; set; } = true;
+
+    /// <summary>Deliberately false by default - see this class's remarks.</summary>
+    public bool DisallowStartIfOnBatteries { get; set; }
+
+    /// <summary>Deliberately false by default - see this class's remarks.</summary>
+    public bool StopIfGoingOnBatteries { get; set; }
+
+    /// <summary>Restart the task after a failed run.</summary>
+    public bool RestartOnFailure { get; set; } = true;
+
+    /// <summary>Minutes between restart attempts when <see cref="RestartOnFailure"/> is set.</summary>
+    public int RestartIntervalMinutes { get; set; } = 15;
+
+    /// <summary>Maximum number of restart attempts when <see cref="RestartOnFailure"/> is set.</summary>
+    public int RestartCount { get; set; } = 3;
 }
 
 public sealed class BackupConfig
