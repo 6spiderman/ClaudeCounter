@@ -48,6 +48,7 @@ public sealed class SettingsForm : Form
     private const int FieldX = 230;
     private const int RowGap = 8;
     private const int LabelYOffset = 4;
+    private const int InfoButtonSize = 16;
 
     // No longer `readonly`: these are now assigned from the per-tab Build*Page
     // helper methods rather than directly in the constructor body, and C# only
@@ -85,6 +86,14 @@ public sealed class SettingsForm : Form
     private TextBox? _backupExclude;
     private ComboBox? _backupFrequency;
     private TextBox? _backupTime;
+
+    // Backs every per-field (i) popup on the Backup tab. A single shared
+    // instance (not one per button) because ToolTip.Show already positions
+    // and dismisses independently per call; only created when the Backup tab
+    // is (BackupTaskManager.WorkerAvailable()), and disposed in Dispose below
+    // since it is a Component, not a Control, and would otherwise outlive the
+    // form's own Controls.Clear()-driven cleanup.
+    private ToolTip? _helpTip;
 
     public SettingsForm(AppSettings current)
     {
@@ -348,14 +357,34 @@ public sealed class SettingsForm : Form
         var page = new Panel { Dock = DockStyle.Fill, BackColor = palette.Back, Visible = false };
         var y = PageTopY;
         var fullWidth = DialogWidth - PagePadX * 2;
+        var rightEdgeX = PagePadX + fullWidth - InfoButtonSize;
+
+        // Shared by every (i) button below - manual Show() calls, not
+        // hover-triggered, so the button controls when it appears; it never
+        // steals focus (a ToolTip window is never activatable) and is themed
+        // to match the dialog rather than falling back to OS tooltip colors.
+        _helpTip = new ToolTip
+        {
+            BackColor = palette.BarBack,
+            ForeColor = palette.Fore,
+            ShowAlways = true,
+        };
+
+        var helpButton = NewFlatButton("Help", palette);
+        helpButton.Location = new Point(PagePadX + fullWidth - helpButton.Width, y);
+        helpButton.Click += (_, _) => new BackupHelpDialog(palette).ShowDialog(this);
+        page.Controls.Add(helpButton);
+        y += helpButton.Height + RowGap;
 
         _backupGithubEnabled = NewCheckBox("Back up to a GitHub repo", config.Github.Enabled, palette);
         _backupGithubEnabled.Location = new Point(PagePadX, y);
         page.Controls.Add(_backupGithubEnabled);
+        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.GithubEnabled);
         y += _backupGithubEnabled.Height + RowGap;
 
         var urlLabel = NewSectionLabel("Remote URL", palette, y);
         page.Controls.Add(urlLabel);
+        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.RemoteUrl);
         y += urlLabel.PreferredHeight + 2;
 
         _backupGithubUrl = NewTextBox(config.Github.RemoteUrl, palette, fullWidth);
@@ -378,21 +407,25 @@ public sealed class SettingsForm : Form
         _backupGithubBranch = NewTextBox(config.Github.Branch, palette, 130);
         _backupGithubBranch.Location = new Point(FieldX, y);
         page.Controls.Add(_backupGithubBranch);
+        AddInfoButton(page, palette, FieldX + 130 + 8, y + 3, BackupHelpText.Branch);
         y += _backupGithubBranch.Height + RowGap;
 
         _backupDriveEnabled = NewCheckBox("Back up to Google Drive (rclone)", config.Drive.Enabled, palette);
         _backupDriveEnabled.Location = new Point(PagePadX, y);
         page.Controls.Add(_backupDriveEnabled);
+        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
         y += _backupDriveEnabled.Height + RowGap;
 
         page.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
         _backupDriveRemote = NewTextBox(config.Drive.RcloneRemote, palette, 130);
         _backupDriveRemote.Location = new Point(FieldX, y);
         page.Controls.Add(_backupDriveRemote);
+        AddInfoButton(page, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
         y += _backupDriveRemote.Height + RowGap;
 
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         page.Controls.Add(includeLabel);
+        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.Include);
         y += includeLabel.PreferredHeight + 2;
         _backupInclude = NewTextBox(string.Join(Environment.NewLine, config.Include), palette, fullWidth, multiline: true, height: 55);
         _backupInclude.Location = new Point(PagePadX, y);
@@ -401,6 +434,7 @@ public sealed class SettingsForm : Form
 
         var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
         page.Controls.Add(excludeLabel);
+        AddInfoButton(page, palette, rightEdgeX, y, BackupHelpText.Exclude);
         y += excludeLabel.PreferredHeight + 2;
         _backupExclude = NewTextBox(string.Join(Environment.NewLine, config.Exclude), palette, fullWidth, multiline: true, height: 55);
         _backupExclude.Location = new Point(PagePadX, y);
@@ -437,6 +471,18 @@ public sealed class SettingsForm : Form
         y += Math.Max(runNowButton.Height, saveScheduleButton.Height) + RowGap;
 
         return (page, y + 10);
+    }
+
+    /// <summary>
+    /// Adds a small themed info button at (x, y) that shows <paramref
+    /// name="text"/> in the shared _helpTip on click. Only called from
+    /// BuildBackupPage, which creates _helpTip before the first call.
+    /// </summary>
+    private void AddInfoButton(Panel page, Palette palette, int x, int y, string text)
+    {
+        var button = new InfoButton(palette) { Location = new Point(x, y) };
+        button.Click += (_, _) => _helpTip!.Show(text, button, button.Width + 4, 0, 15000);
+        page.Controls.Add(button);
     }
 
     private static Label NewFieldLabel(string text, Palette palette, int y) => new()
@@ -687,6 +733,15 @@ public sealed class SettingsForm : Form
         TopMost = false;
     }
 
+    // _helpTip is a Component, not a Control - it is never in the Controls
+    // tree, so nothing else disposes it. Mirrors AlertPopupForm's own
+    // Dispose override for its dismiss timer.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _helpTip?.Dispose();
+        base.Dispose(disposing);
+    }
+
     private void OnOk(object? sender, EventArgs e)
     {
         if (_warnInput.Value >= _criticalInput.Value)
@@ -860,6 +915,81 @@ public sealed class SettingsForm : Form
             var textRect = new Rectangle(BoxSize + BoxTextGap, 0, Width - BoxSize - BoxTextGap, Height);
             TextRenderer.DrawText(e.Graphics, Text, Font, textRect, _palette.Fore,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
+            if (Focused)
+                ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
+        }
+    }
+
+    /// <summary>
+    /// A small themed "(i)" affordance for a single Backup field's help text.
+    /// Drawn entirely with GDI+ primitives (an ellipse plus the letter "i" in
+    /// the same font already used everywhere else in this dialog) rather than
+    /// relying on the Unicode U+24D8 CIRCLED LATIN SMALL LETTER I glyph -
+    /// that glyph's coverage varies by font and this app has no way to
+    /// screenshot-verify its rendering at 100/125/150% DPI before shipping,
+    /// so a hand-drawn circle sidesteps the risk entirely rather than
+    /// gambling on it. Click (or Enter/Space when focused) shows the themed,
+    /// non-activating ToolTip owned by the containing SettingsForm.
+    /// </summary>
+    private sealed class InfoButton : Control
+    {
+        // Deliberately smaller and bolder than BaseFont, not just BaseFont
+        // reused: at BaseFont's 9pt the "i" glyph plus its side bearings
+        // does not comfortably fit inside a 16px circle at 100% DPI, let
+        // alone 150%.
+        private static readonly Font InfoFont = new("Segoe UI", 7.5f, FontStyle.Bold);
+
+        private readonly Palette _palette;
+
+        public InfoButton(Palette palette)
+        {
+            _palette = palette;
+            Size = new Size(InfoButtonSize, InfoButtonSize);
+            Font = InfoFont;
+            Cursor = Cursors.Hand;
+            TabStop = true;
+            BackColor = Color.Transparent;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
+        }
+
+        protected override bool IsInputKey(Keys keyData) =>
+            keyData is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode is Keys.Enter or Keys.Space)
+            {
+                e.Handled = true;
+                OnClick(EventArgs.Empty);
+            }
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent?.BackColor ?? _palette.Back);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            var circle = new Rectangle(0, 0, Width - 1, Height - 1);
+            using (var pen = new Pen(_palette.SubtleFore))
+                e.Graphics.DrawEllipse(pen, circle);
+
+            TextRenderer.DrawText(e.Graphics, "i", Font, ClientRectangle, _palette.SubtleFore,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
             if (Focused)
                 ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
