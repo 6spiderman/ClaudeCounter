@@ -83,4 +83,87 @@ public class SettingsFormSmokeTests
         var error = ConstructOnStaThread(() => new BackupHelpDialog(Theme.Current()));
         Assert.Null(error);
     }
+
+    // S6: the file picker is only reachable by clicking "Choose files..." on
+    // the Backup tab, so - like BackupHelpDialog above - it would otherwise
+    // never be constructed by any test at all. A populated tree (some files,
+    // some directories, an existing Include list mixing a representable and
+    // a non-representable pattern) exercises the constructor's real
+    // work - loading patterns, the eager root-level EnsureChildrenLoaded,
+    // building TreeNodes, kicking off background size computation, and
+    // populating the read-only patterns box - rather than only the trivial
+    // empty-directory path.
+    [Fact]
+    public void BackupPickerDialogConstructsWithAPopulatedTreeWithoutThrowing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"picker-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(root, "commands"));
+        Directory.CreateDirectory(Path.Combine(root, "skills", "one"));
+        File.WriteAllText(Path.Combine(root, "settings.json"), "{}");
+        File.WriteAllText(Path.Combine(root, ".credentials.json"), "secret");
+        File.WriteAllText(Path.Combine(root, "commands", "a.md"), "a");
+        File.WriteAllText(Path.Combine(root, "skills", "one", "SKILL.md"), "s");
+        try
+        {
+            var error = ConstructOnStaThread(() => new BackupPickerDialog(
+                Theme.Current(), "GitHub", root,
+                new[] { "settings.json", "commands/**", "**/*.md" }));
+            Assert.Null(error);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* best effort */ }
+        }
+    }
+
+    // S6: re-measure after adding the Backup tab's "Choose files..." button
+    // inline on the Include row (see SettingsForm.AddChooseFilesButton) - the
+    // Backup tab was 654px against a ~687px budget on a 1366x768 display
+    // before this feature (see the design spec), only 33px of margin.
+    // Measured (via this very test, temporarily made to fail with the
+    // actual number) at 671px after adding the button: +17px, 16px of
+    // margin left. This is the actual, load-bearing check that the button
+    // did not push the dialog's real, measured ClientSize.Height back over
+    // budget - not just a hand-computed guess in a comment.
+    [Fact]
+    public void SettingsFormHeightStaysWithinTheDisplayBudget()
+    {
+        // Not built on ConstructOnStaThread: that helper disposes the Form
+        // before returning (it only ever reports whether construction
+        // threw), and ClientSize is not safe to read afterward. The height
+        // has to be captured from inside the same STA thread, before the
+        // `using` in the thread body disposes the form.
+        int? measuredHeight = null;
+        Exception? captured = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var form = new SettingsForm(new AppSettings());
+                _ = form.Handle; // force handle creation, same as ConstructOnStaThread
+                measuredHeight = form.ClientSize.Height;
+            }
+            catch (Exception e)
+            {
+                captured = e;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "Form construction did not complete within 30s.");
+        Assert.Null(captured);
+        Assert.NotNull(measuredHeight);
+
+        // 1366x768 at 100% DPI minus taskbar/title bar/window chrome - the
+        // same real-world budget the design spec's own comments measure
+        // against (687px was that budget; 654px was the Backup tab before
+        // this feature). This is the load-bearing check that adding the
+        // "Choose files..." button (see SettingsForm.AddChooseFilesButton)
+        // did not push the dialog's real, measured height back over it.
+        Assert.True(measuredHeight!.Value <= 687,
+            $"SettingsForm.ClientSize.Height was {measuredHeight}px, over the ~687px display budget.");
+    }
 }

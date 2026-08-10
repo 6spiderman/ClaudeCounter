@@ -427,8 +427,8 @@ public sealed class SettingsForm : Form
         page.Controls.Add(_backupSelectionTarget);
         y += _backupSelectionTarget.Height + RowGap;
 
-        var (githubBlock, githubBlockHeight) = BuildGithubBlock(config.Github, palette, fullWidth, rightEdgeX);
-        var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, palette, fullWidth, rightEdgeX);
+        var (githubBlock, githubBlockHeight) = BuildGithubBlock(config.Github, config.SourceRoot, palette, fullWidth, rightEdgeX);
+        var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, config.SourceRoot, palette, fullWidth, rightEdgeX);
         githubBlock.Location = new Point(0, y);
         driveBlock.Location = new Point(0, y);
         githubBlock.Visible = initialShowGithub;
@@ -491,7 +491,7 @@ public sealed class SettingsForm : Form
     /// every other page uses, since the panel's own Location.X is 0 and
     /// therefore does not shift their absolute position.
     /// </summary>
-    private (Panel Block, int Height) BuildGithubBlock(GitTarget target, Palette palette, int fullWidth, int rightEdgeX)
+    private (Panel Block, int Height) BuildGithubBlock(GitTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
     {
         var block = new Panel { BackColor = palette.Back };
         var y = 0;
@@ -533,7 +533,9 @@ public sealed class SettingsForm : Form
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         block.Controls.Add(includeLabel);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
-        y += includeLabel.PreferredHeight + 2;
+        var chooseGithubButton = AddChooseFilesButton(
+            block, palette, "GitHub", sourceRoot, () => _backupGithubInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
+        y += Math.Max(includeLabel.PreferredHeight, chooseGithubButton.Height) + 2;
         _backupGithubInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
         _backupGithubInclude.Location = new Point(PagePadX, y);
         block.Controls.Add(_backupGithubInclude);
@@ -557,7 +559,7 @@ public sealed class SettingsForm : Form
     /// Include/Exclude. See BuildGithubBlock's doc comment for the layout
     /// reasoning - identical here, just for the Drive target.
     /// </summary>
-    private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, Palette palette, int fullWidth, int rightEdgeX)
+    private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
     {
         var block = new Panel { BackColor = palette.Back };
         var y = 0;
@@ -578,7 +580,9 @@ public sealed class SettingsForm : Form
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         block.Controls.Add(includeLabel);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
-        y += includeLabel.PreferredHeight + 2;
+        var chooseDriveButton = AddChooseFilesButton(
+            block, palette, "Google Drive", sourceRoot, () => _backupDriveInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
+        y += Math.Max(includeLabel.PreferredHeight, chooseDriveButton.Height) + 2;
         _backupDriveInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
         _backupDriveInclude.Location = new Point(PagePadX, y);
         block.Controls.Add(_backupDriveInclude);
@@ -609,6 +613,43 @@ public sealed class SettingsForm : Form
         var button = new InfoButton(palette) { Location = new Point(x, y) };
         button.Click += (_, _) => _helpTip!.Show(text, button, button.Width + 4, 0, 15000);
         page.Controls.Add(button);
+    }
+
+    /// <summary>
+    /// S6: adds a "Choose files..." button, right-aligned to end at
+    /// <paramref name="rightX"/>, that opens BackupPickerDialog scoped to
+    /// ONE destination's own Include list - GitHub and Drive each get their
+    /// own call, with their own <paramref name="destinationName"/> (shown in
+    /// the picker's title, per the design spec) and their own Include
+    /// textbox. Seeded from the textbox's CURRENT (possibly unsaved) text,
+    /// not from disk, so a picker opened after editing the box by hand
+    /// starts from what is actually on screen - the same "read the live
+    /// control" rule OnSaveBackupSchedule already follows. On OK, the box is
+    /// overwritten with the dialog's generated pattern list (which itself
+    /// preserves anything the tree could not represent - see
+    /// BackupTreeModel); on Cancel, the box is untouched.
+    ///
+    /// Placed inline on the existing Include label's row (see
+    /// BuildGithubBlock/BuildDriveBlock) rather than on a new row of its
+    /// own - the Backup tab's page height budget is tight enough that this
+    /// note matters (see BuildBackupPage's own doc comment history).
+    /// </summary>
+    private Button AddChooseFilesButton(
+        Panel block, Palette palette, string destinationName, string sourceRoot,
+        Func<TextBox> includeBoxAccessor, int rightX, int y)
+    {
+        var button = NewFlatButton("Choose files...", palette);
+        button.Location = new Point(rightX - button.Width, y);
+        button.Click += (_, _) =>
+        {
+            var includeBox = includeBoxAccessor();
+            var current = SplitLines(includeBox.Text);
+            using var dialog = new BackupPickerDialog(palette, destinationName, sourceRoot, current);
+            if (dialog.ShowDialog(this) == DialogResult.OK)
+                includeBox.Text = string.Join(Environment.NewLine, dialog.Include);
+        };
+        block.Controls.Add(button);
+        return button;
     }
 
     private static Label NewFieldLabel(string text, Palette palette, int y) => new()
