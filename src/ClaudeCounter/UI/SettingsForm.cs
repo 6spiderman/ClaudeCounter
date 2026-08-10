@@ -957,9 +957,16 @@ public sealed class SettingsForm : Form
             Font = InfoFont;
             Cursor = Cursors.Hand;
             TabStop = true;
-            BackColor = Color.Transparent;
+            // SupportsTransparentBackColor must be enabled BEFORE assigning a
+            // transparent BackColor, and a plain Control does not opt in by
+            // default: Control.set_BackColor throws "Control does not support
+            // transparent background colors" otherwise, which crashed the app
+            // the moment the Backup tab was built. ThemedCheckBox gets away
+            // with the same assignment only because ButtonBase opts in for it.
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable |
+                     ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
         }
 
         protected override bool IsInputKey(Keys keyData) =>
