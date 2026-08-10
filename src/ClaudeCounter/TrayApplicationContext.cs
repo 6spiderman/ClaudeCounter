@@ -333,7 +333,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
             try
             {
-                AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position);
+                AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position, _settings.PopupAutoDismissSeconds);
             }
             catch (Exception ex)
             {

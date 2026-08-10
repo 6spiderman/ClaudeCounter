@@ -66,6 +66,7 @@ public sealed class SettingsForm : Form
     private CheckBox _alertOpus = null!;
     private CheckBox _alertSonnet = null!;
     private ComboBox _placement = null!;
+    private NumericUpDown _autoDismissInput = null!;
 
     // Only created when BackupTaskManager.WorkerAvailable() - the Backup tab is
     // entirely absent (fields stay null, and no tab button is created) when
@@ -313,6 +314,25 @@ public sealed class SettingsForm : Form
         _placement.SelectedIndex = current.PopupPlacement == PopupPlacement.Centered ? 1 : 0;
         page.Controls.Add(_placement);
         y += _placement.Height + RowGap;
+
+        // Label goes on its own line above the field (like Backup's "Remote
+        // URL") rather than beside it at FieldX - this label is long enough
+        // that side-by-side would run into the NumericUpDown.
+        var autoDismissLabel = NewSectionLabel("Auto-dismiss popups after (seconds, 0 = never)", palette, y);
+        page.Controls.Add(autoDismissLabel);
+        y += autoDismissLabel.PreferredHeight + 2;
+
+        _autoDismissInput = NewNumeric(palette, 0, 300, current.PopupAutoDismissSeconds);
+        _autoDismissInput.Location = new Point(PagePadX, y);
+        page.Controls.Add(_autoDismissInput);
+        y += _autoDismissInput.Height + 2;
+
+        var autoDismissHint = NewSubtleLabel(
+            "Centered popups (including every 100% popup) always wait for you to dismiss them.",
+            palette, DialogWidth - PagePadX * 2);
+        autoDismissHint.Location = new Point(PagePadX, y);
+        page.Controls.Add(autoDismissHint);
+        y += autoDismissHint.PreferredHeight + RowGap;
 
         return (page, y + 10);
     }
@@ -696,6 +716,7 @@ public sealed class SettingsForm : Form
         settings.AlertSevenDaySonnet = _alertSonnet.Checked;
         settings.PopupPlacement = _placement.SelectedIndex == 1
             ? PopupPlacement.Centered : PopupPlacement.NearTray;
+        settings.PopupAutoDismissSeconds = (int)_autoDismissInput.Value;
     }
 
     /// <summary>

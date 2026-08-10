@@ -18,6 +18,7 @@ public class AppSettingsTests
         Assert.False(s.AlertSevenDayOpus);
         Assert.False(s.AlertSevenDaySonnet);
         Assert.Equal(PopupPlacement.NearTray, s.PopupPlacement);
+        Assert.Equal(12, s.PopupAutoDismissSeconds);
         Assert.NotNull(s.NotificationState);
     }
 
@@ -63,6 +64,20 @@ public class AppSettingsTests
         s.Normalize();
         Assert.Empty(s.NotificationState);
         Assert.Equal(AppSettings.CurrentNotificationStateVersion, s.NotificationStateVersion);
+    }
+
+    [Theory]
+    [InlineData(12, 12)]     // default, untouched
+    [InlineData(0, 0)]       // 0 is meaningful ("never") - must survive, not coerce to default
+    [InlineData(-5, 0)]      // negative clamps up to the floor
+    [InlineData(300, 300)]   // ceiling itself is in range
+    [InlineData(301, 300)]   // just past the ceiling clamps down
+    [InlineData(100000, 300)] // absurd value still clamps to the ceiling
+    public void NormalizeClampsPopupAutoDismissSeconds(int input, int expected)
+    {
+        var s = new AppSettings { PopupAutoDismissSeconds = input };
+        s.Normalize();
+        Assert.Equal(expected, s.PopupAutoDismissSeconds);
     }
 
     [Fact]

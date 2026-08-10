@@ -24,7 +24,6 @@ public sealed class AlertPopupForm : Form
 {
     private const int PopupWidth = 300;
     private const int StackGap = 8;
-    private static readonly TimeSpan AutoDismiss = TimeSpan.FromSeconds(12);
 
     // Near-tray popups only, tracked so a later popup in the same poll stacks
     // above earlier ones instead of drawing on top of them. All access happens
@@ -35,7 +34,7 @@ public sealed class AlertPopupForm : Form
     private readonly bool _noActivate;
     private readonly System.Windows.Forms.Timer? _dismissTimer;
 
-    private AlertPopupForm(AlertEvent e, PopupPlacement placement, Point anchor)
+    private AlertPopupForm(AlertEvent e, PopupPlacement placement, Point anchor, int autoDismissSeconds)
     {
         // 100% always takes the center + focus; critical follows the setting.
         var centered = placement == PopupPlacement.Centered || e.Level == AlertLevel.Maxed;
@@ -75,16 +74,28 @@ public sealed class AlertPopupForm : Form
             // Reserve our height for whichever near-tray popup comes next.
             NearTrayPopups.Add(this);
 
-            _dismissTimer = new System.Windows.Forms.Timer { Interval = (int)AutoDismiss.TotalMilliseconds };
-            _dismissTimer.Tick += (_, _) => Close();
-            _dismissTimer.Start();
+            // 0 means "never auto-dismiss" - create no timer at all rather
+            // than one that never fires, so there is nothing to Stop/Dispose
+            // that could ever matter and no Tick handler that could ever run.
+            if (autoDismissSeconds > 0)
+            {
+                _dismissTimer = new System.Windows.Forms.Timer { Interval = autoDismissSeconds * 1000 };
+                _dismissTimer.Tick += (_, _) => Close();
+                _dismissTimer.Start();
+            }
         }
     }
 
-    /// <summary>Show a popup for one alert event. Call on the UI thread.</summary>
-    public static void Show(AlertEvent e, PopupPlacement placement, Point anchor)
+    /// <summary>
+    /// Show a popup for one alert event. Call on the UI thread.
+    /// <paramref name="autoDismissSeconds"/> only governs near-tray popups - a
+    /// centered popup (every Maxed popup is always centered, regardless of
+    /// <paramref name="placement"/>) takes focus and always waits for
+    /// explicit dismissal. 0 means the near-tray popup never auto-dismisses.
+    /// </summary>
+    public static void Show(AlertEvent e, PopupPlacement placement, Point anchor, int autoDismissSeconds)
     {
-        var form = new AlertPopupForm(e, placement, anchor);
+        var form = new AlertPopupForm(e, placement, anchor, autoDismissSeconds);
         if (form._noActivate)
             form.Show();      // ShowWithoutActivation keeps focus with the active app
         else

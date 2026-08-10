@@ -23,6 +23,16 @@ public sealed class AppSettings
     public bool AlertSevenDaySonnet { get; set; }      // default false
     public PopupPlacement PopupPlacement { get; set; } = PopupPlacement.NearTray;
 
+    /// <summary>
+    /// How long a near-tray popup waits before auto-dismissing itself. Only
+    /// governs near-tray popups - a centered popup (which includes every
+    /// Maxed popup, always centered regardless of PopupPlacement) takes focus
+    /// and always waits for explicit dismissal, so this value has no effect
+    /// on it. 0 is a valid, meaningful setting ("never auto-dismiss"), not
+    /// "unset" - see Normalize, which must not coerce it to the default.
+    /// </summary>
+    public int PopupAutoDismissSeconds { get; set; } = 12;
+
     // Persisted alert dedupe state so restarts do not re-pop.
     public Dictionary<string, WindowAlertState> NotificationState { get; set; } = new();
 
@@ -75,6 +85,10 @@ public sealed class AppSettings
     {
         if (!IntervalPresets.Contains(PollIntervalMinutes))
             PollIntervalMinutes = 5;
+        // 0 ("never auto-dismiss") is a meaningful in-range value, so this is
+        // a plain clamp, not a fallback-to-default like the thresholds below -
+        // coercing 0 to 12 here would silently revert a deliberate choice.
+        PopupAutoDismissSeconds = Math.Clamp(PopupAutoDismissSeconds, 0, 300);
         WarnThreshold = Math.Clamp(WarnThreshold, 1, 100);
         CriticalThreshold = Math.Clamp(CriticalThreshold, 1, 100);
         if (WarnThreshold >= CriticalThreshold)
