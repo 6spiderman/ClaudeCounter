@@ -216,7 +216,18 @@ public class GitBackendTests : IDisposable
 
         Assert.True(result.Ok);
         Assert.True(File.Exists(Path.Combine(_staging, "settings.json")));
-        var escapePath = Path.Combine(Path.GetDirectoryName(_staging)!, "escape.json");
+        // Fix (flake): this must be a path unique to THIS test, not the
+        // literal "escape.json" - Path.GetDirectoryName(_staging) resolves
+        // to the shared OS temp root, which RcloneBackendTests'
+        // ZipContainsExactlyTheSafeSelectedFilesNotAnEscapingOne also probes
+        // (it writes and deletes a REAL file there under the same literal
+        // name). Under xUnit's cross-class parallelism the two tests can
+        // observe each other's file mid-flight: this test would intermittently
+        // see File.Exists return true for a file it never asked GitBackend to
+        // create, because the other test's fixture happened to be present at
+        // that instant. A GUID-suffixed name makes the two tests' escape
+        // paths disjoint regardless of execution order.
+        var escapePath = Path.Combine(Path.GetTempPath(), $"escape-{Guid.NewGuid():N}.json");
         Assert.False(File.Exists(escapePath));
     }
 

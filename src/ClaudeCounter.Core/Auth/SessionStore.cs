@@ -117,7 +117,40 @@ public sealed class EncryptedSessionStore : ISessionStore
 
             var tmp = _path + ".tmp";
             File.WriteAllBytes(tmp, ciphertext);
-            File.Move(tmp, _path, overwrite: true);
+            MoveWithRetry(tmp, _path);
+        }
+    }
+
+    // Flake fix: File.Move(overwrite: true) onto an existing destination can
+    // intermittently throw UnauthorizedAccessException rather than
+    // IOException on Windows - most commonly real-time antivirus/indexer
+    // scanning briefly holding a handle open on the just-written temp file or
+    // the file being replaced. Seen under load as a spurious failure in
+    // WriteReplacesAnExistingSession (two Write calls back to back). A short
+    // bounded retry, mirroring the pattern ClaudeCounter.Core.Log.WithRetry
+    // already uses for its own concurrent-writer race, gives that transient
+    // hold time to clear instead of letting the rename fail outright. Scoped
+    // to this one call rather than reusing Log.WithRetry directly - that
+    // method is internal to ClaudeCounter.Shared and not friend-visible to
+    // this project (see Log.cs's InternalsVisibleTo list) - and broadened to
+    // retry UnauthorizedAccessException too, since that is the exception type
+    // actually observed here, not IOException.
+    private const int MoveMaxRetries = 5;
+    private const int MoveRetryDelayMs = 15;
+
+    private static void MoveWithRetry(string source, string destination)
+    {
+        for (var attempt = 1; attempt <= MoveMaxRetries; attempt++)
+        {
+            try
+            {
+                File.Move(source, destination, overwrite: true);
+                return;
+            }
+            catch (Exception e) when (attempt < MoveMaxRetries && e is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(MoveRetryDelayMs);
+            }
         }
     }
 

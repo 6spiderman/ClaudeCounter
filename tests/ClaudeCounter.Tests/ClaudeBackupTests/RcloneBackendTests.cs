@@ -123,14 +123,23 @@ public class RcloneBackendTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "commands"));
         File.WriteAllText(Path.Combine(_root, "commands", "a.md"), "hello");
 
-        var escapePath = Path.Combine(Path.GetDirectoryName(_root)!, "escape.json");
+        // Fix (flake): Path.GetDirectoryName(_root) resolves to the shared OS
+        // temp root, and GitBackendTests.RefusesToStageFileOutsideStagingDirectory
+        // probes a File.Exists check at that same literal "escape.json" path.
+        // Under xUnit's cross-class parallelism the two tests can race on this
+        // one shared file - a GUID-suffixed name keeps this test's real,
+        // on-disk escape file (and the "../..." traversal argument that must
+        // still point at it) disjoint from the other test's path regardless
+        // of execution order.
+        var escapeFileName = $"escape-{Guid.NewGuid():N}.json";
+        var escapePath = Path.Combine(Path.GetDirectoryName(_root)!, escapeFileName);
         File.WriteAllText(escapePath, "should never be archived");
         try
         {
             var runner = new FakeRunner();
             var result = new RcloneBackend(runner, _tmp).Run(
                 _root,
-                new[] { "settings.json", "commands/a.md", "../escape.json" },
+                new[] { "settings.json", "commands/a.md", $"../{escapeFileName}" },
                 new DriveTarget { Enabled = true, RcloneRemote = "gdrive:X" });
 
             Assert.True(result.Ok);
