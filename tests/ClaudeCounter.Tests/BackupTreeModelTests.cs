@@ -163,114 +163,78 @@ public class BackupTreeModelTests : IDisposable
         Assert.Equal(new[] { "plugins/sub/**" }, model.GeneratePatterns());
     }
 
-    // ---- Display cap is display-only ----
-
+    // ---- Deep partial selection (formerly "display cap is display-only") ----
+    //
+    // Fix round 2: EnsureChildrenLoaded's ~500-entry display cap - and the
+    // three tests that used to live in this section covering it
+    // (ParentTickSelectsTheWholeDirectoryEvenWhenChildrenWereDisplayCapped,
+    // TickingAllRenderedChildrenDoesNotImplyTheHiddenOnesWereSelected, and
+    // fix round 1's own
+    // UntickingOneRenderedChildOfACappedCheckedParentStillCoversTheHiddenSiblings)
+    // - are GONE. Two rounds of this review both found and fixed a CRITICAL
+    // data-loss bug caused by that cap (round 1: ticking a capped directory
+    // then unticking one rendered child dropped whatever the cap had left
+    // unrendered; round 2: the round 1 fix only lifted the cap one level up,
+    // so the identical bug reappeared two-or-more levels above the ticked
+    // node, since RecomputeFromChildren bubbles state all the way up the
+    // ancestor chain). Before patching it a third time, a throwaway
+    // benchmark measured what the cap actually bought: inserting 10,000
+    // flat TreeNodes via BeginUpdate/EndUpdate took ~39ms, and a full-tree
+    // appearance refresh over 10,000 nodes took ~14ms - both roughly two
+    // orders of magnitude under "still feels instant", and 10,000 is far
+    // beyond the widest real directory found on the reference/dev machines
+    // (259-447 entries). The cap was not earning its keep, so
+    // EnsureChildrenLoaded now always loads every entry once a directory is
+    // expanded - see its doc comment and the task report's "Fix round 2"
+    // section for the full numbers - and the three tests above, which
+    // existed solely to pin down cap-specific behaviour, no longer have
+    // anything to assert; they were deleted rather than left checking
+    // nothing meaningful.
+    //
+    // What replaces them: with no cap, "does a deep tick/untick correctly
+    // cover its whole subtree" is just the general Checked/Indeterminate
+    // bubbling behaviour, now exercised at TWO levels of nesting - the
+    // depth at which round 2's regression specifically lived.
     [Fact]
-    public void ParentTickSelectsTheWholeDirectoryEvenWhenChildrenWereDisplayCapped()
+    public void DeepUntickTwoLevelsBelowATickedAncestorStillCoversEverySibling()
     {
-        for (var i = 0; i < 5; i++)
-            WriteFile($"skills/file{i}.txt");
+        WriteFile("skills/sub/g0.txt");
+        WriteFile("skills/sub/g1.txt");
+        WriteFile("skills/a.txt");
+        WriteFile("skills/b.txt");
+        WriteFile("skills/c.txt");
 
         var model = new BackupTreeModel(_root);
         model.EnsureChildrenLoaded(model.Root);
         var skills = model.Root.Children.Single(c => c.Name == "skills");
-
-        // Cap far below the real count (5) to exercise the same code path
-        // the picker's real ~500 cap would, without needing 500+ files.
-        model.EnsureChildrenLoaded(skills, cap: 2);
-        Assert.Equal(2, skills.Children.Count);
-        Assert.Equal(3, skills.HiddenChildCount);
 
         Assert.True(model.SetChecked(skills, true));
-
-        // The whole directory is selected via a single dir/** pattern -
-        // the 3 files never rendered are still covered by it, not silently
-        // dropped from the backup.
         Assert.Equal(new[] { "skills/**" }, model.GeneratePatterns());
-    }
 
-    [Fact]
-    public void TickingAllRenderedChildrenDoesNotImplyTheHiddenOnesWereSelected()
-    {
-        for (var i = 0; i < 5; i++)
-            WriteFile($"skills/file{i}.txt");
+        // Expand two levels down and untick just one grandchild.
+        model.EnsureChildrenLoaded(skills);
+        var sub = skills.Children.Single(c => c.Name == "sub");
+        model.EnsureChildrenLoaded(sub);
+        var g0 = sub.Children.Single(c => c.Name == "g0.txt");
 
-        var model = new BackupTreeModel(_root);
-        model.EnsureChildrenLoaded(model.Root);
-        var skills = model.Root.Children.Single(c => c.Name == "skills");
-        model.EnsureChildrenLoaded(skills, cap: 2);
+        Assert.True(model.SetChecked(g0, false));
 
-        // Snapshot via ToList(): SetChecked on the FIRST rendered child now
-        // triggers EnsureFullyLoaded on skills (fix round 1 - see
-        // EnsureFullyLoaded's doc comment), which appends the 3 previously-
-        // hidden files to skills.Children mid-loop. Enumerating the live
-        // Children reference here (rather than a snapshot taken before the
-        // loop starts) would throw InvalidOperationException the moment the
-        // backing list is mutated out from under it - a hazard specific to
-        // this hand-written test loop, not to the real dialog (which only
-        // ever ticks one node per AfterCheck event, never iterates a node's
-        // Children while ticking its members).
-        foreach (var child in skills.Children.ToList())
-            model.SetChecked(child, true);
-
-        // The 2 originally-rendered children are checked; the 3 that were
-        // hidden by the cap are now materialized too (by EnsureFullyLoaded)
-        // but were never explicitly ticked, so they default to Unchecked -
-        // the directory must stay Indeterminate, not silently promote to
-        // Checked (which would imply the hidden 3 were selected too, when
-        // nobody ever saw or ticked them).
+        Assert.Equal(NodeCheckState.Indeterminate, sub.CheckState);
         Assert.Equal(NodeCheckState.Indeterminate, skills.CheckState);
-        Assert.Equal(0, skills.HiddenChildCount);
 
-        var patterns = model.GeneratePatterns();
-        Assert.DoesNotContain("skills/**", patterns);
-        Assert.Equal(2, patterns.Count);
-    }
-
-    // Fix round 1 (CRITICAL): the exact data-loss scenario the coordinator
-    // reproduced - tick a capped parent (selects everything, including the
-    // hidden entries, via dir/**), then untick just ONE of the rendered
-    // children. Before the fix, GeneratePatterns' tree walk only ever saw
-    // the capped Children list, so the 3 files that were never individually
-    // rendered vanished from the output with no warning - re-ticking the one
-    // child could not even recover them, because RecomputeFromChildren
-    // refused to promote back to Checked while HiddenChildCount stayed
-    // nonzero. See BackupTreeModel.EnsureFullyLoaded and SetChecked's doc
-    // comments for the fix.
-    [Fact]
-    public void UntickingOneRenderedChildOfACappedCheckedParentStillCoversTheHiddenSiblings()
-    {
-        for (var i = 0; i < 5; i++)
-            WriteFile($"skills/file{i}.txt");
-
-        var model = new BackupTreeModel(_root);
-        model.EnsureChildrenLoaded(model.Root);
-        var skills = model.Root.Children.Single(c => c.Name == "skills");
-        model.EnsureChildrenLoaded(skills, cap: 2);
-        Assert.Equal(3, skills.HiddenChildCount);
-
-        Assert.True(model.SetChecked(skills, true));
-        Assert.Equal(new[] { "skills/**" }, model.GeneratePatterns());
-
-        var file0 = skills.Children.Single(c => c.Name == "file0.txt");
-        Assert.True(model.SetChecked(file0, false));
-
-        // The cap must have been lifted, permanently, for this directory -
-        // and every file that was hidden behind it must still be covered.
-        Assert.Equal(0, skills.HiddenChildCount);
-        Assert.Equal(5, skills.Children.Count);
-
+        // Nothing was silently dropped: every sibling at every level except
+        // the one explicitly unticked file is still present.
         var patterns = model.GeneratePatterns().ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain("skills/**", patterns);
-        Assert.DoesNotContain("skills/file0.txt", patterns);
-        foreach (var i in new[] { 1, 2, 3, 4 })
-            Assert.Contains($"skills/file{i}.txt", patterns);
+        Assert.DoesNotContain("skills/sub/g0.txt", patterns);
+        Assert.Contains("skills/sub/g1.txt", patterns);
+        Assert.Contains("skills/a.txt", patterns);
+        Assert.Contains("skills/b.txt", patterns);
+        Assert.Contains("skills/c.txt", patterns);
         Assert.Equal(4, patterns.Count);
 
-        // Re-ticking the one file recovers the full, single-pattern
-        // selection - the cap no longer applies to this directory at all
-        // (HiddenChildCount is permanently 0 once EnsureFullyLoaded has run).
-        Assert.True(model.SetChecked(file0, true));
+        // Re-ticking the one file recovers the full, single-pattern selection.
+        Assert.True(model.SetChecked(g0, true));
         Assert.Equal(new[] { "skills/**" }, model.GeneratePatterns());
     }
 

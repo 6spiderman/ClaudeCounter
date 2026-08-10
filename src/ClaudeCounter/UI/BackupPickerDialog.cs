@@ -1,5 +1,6 @@
 using System.Text;
 using ClaudeBackup;
+using ClaudeCounter.Core;
 
 namespace ClaudeCounter.UI;
 
@@ -77,8 +78,7 @@ public sealed class BackupPickerDialog : Form
         var note = new Label
         {
             Text = $"Editing the file selection for {destinationName}. Ticking a folder includes " +
-                   "everything in it, even entries not shown below. Denylisted entries (greyed) can " +
-                   "never be selected.",
+                   "everything in it. Denylisted entries (greyed) can never be selected.",
             AutoSize = true,
             MaximumSize = new Size(DialogWidth - Pad * 2, 0),
             Font = Font,
@@ -259,10 +259,10 @@ public sealed class BackupPickerDialog : Form
 
     /// <summary>
     /// Refuses the check for anything that is not a real, selectable node -
-    /// a denylisted entry (Tag is a FileTreeNode with IsDenylisted true) or
-    /// the "... and N more (not shown)" placeholder (Tag is null) - so the
-    /// picker cannot offer any route around the denylist and the cap
-    /// placeholder cannot be mistaken for a real, tickable entry.
+    /// a denylisted entry (Tag is a FileTreeNode with IsDenylisted true), or
+    /// the placeholder expand-glyph child (Tag is null - see BuildTreeNode)
+    /// on the rare chance it is ever visible - so the picker cannot offer
+    /// any route around the denylist.
     /// </summary>
     private void OnBeforeCheck(object? sender, TreeViewCancelEventArgs e)
     {
@@ -279,29 +279,7 @@ public sealed class BackupPickerDialog : Form
         if (e.Node?.Tag is not FileTreeNode node)
             return;
 
-        // BackupTreeModel.SetChecked may need to fully load a display-capped
-        // parent before it can apply this tick correctly (fix round 1,
-        // CRITICAL - see BackupTreeModel.EnsureFullyLoaded) - that is one
-        // more Directory.GetDirectories/GetFiles call, not the recursive
-        // size walk, so it is fast, but a wait cursor costs nothing and
-        // avoids the pointer looking idle for however long that takes on a
-        // very wide directory.
-        Cursor = Cursors.WaitCursor;
-        try
-        {
-            _model.SetChecked(node, e.Node.Checked);
-        }
-        finally
-        {
-            Cursor = Cursors.Default;
-        }
-
-        // A tick can also lift the display cap on node's parent entirely
-        // (HiddenChildCount permanently drops to 0) - keep the "... and N
-        // more" placeholder, if any, in sync with that rather than leaving
-        // it showing a stale count (or claiming entries are hidden when
-        // they no longer are).
-        SyncCapPlaceholder(e.Node.Parent?.Nodes ?? _tree.Nodes, node.Parent ?? _model.Root);
+        _model.SetChecked(node, e.Node.Checked);
 
         // A single tick can cascade through the whole loaded tree (children
         // forced to match, ancestors recomputed) - re-sync every
@@ -309,26 +287,6 @@ public sealed class BackupPickerDialog : Form
         // which ones changed.
         RefreshWholeTreeAppearance();
         RefreshPatternsBox();
-    }
-
-    private void SyncCapPlaceholder(TreeNodeCollection uiCollection, FileTreeNode modelParent)
-    {
-        TreeNode? placeholder = null;
-        foreach (TreeNode candidate in uiCollection)
-        {
-            if (candidate.Tag is null && candidate.Text.StartsWith("... and ", StringComparison.Ordinal))
-            {
-                placeholder = candidate;
-                break;
-            }
-        }
-        if (placeholder is null)
-            return;
-
-        if (modelParent.HiddenChildCount == 0)
-            uiCollection.Remove(placeholder);
-        else
-            placeholder.Text = $"... and {modelParent.HiddenChildCount} more (not shown)";
     }
 
     private void PopulateChildren(TreeNodeCollection uiCollection, FileTreeNode modelParent)
@@ -339,16 +297,6 @@ public sealed class BackupPickerDialog : Form
             uiCollection.Clear();
             foreach (var child in modelParent.Children)
                 uiCollection.Add(BuildTreeNode(child));
-
-            if (modelParent.HiddenChildCount > 0)
-            {
-                uiCollection.Add(new TreeNode($"... and {modelParent.HiddenChildCount} more (not shown)")
-                {
-                    ForeColor = _palette.SubtleFore,
-                    ToolTipText = "Display limit only - ticking the parent folder still includes these, " +
-                                  "and ticking any individually-shown sibling loads the rest too.",
-                });
-            }
         }
         finally
         {
@@ -390,8 +338,7 @@ public sealed class BackupPickerDialog : Form
     /// fully cancellable via _cts, cancelled in Dispose - without this,
     /// closing the dialog left every already-queued or in-flight walk
     /// running to completion regardless (the old IsDisposed check only ever
-    /// suppressed the resulting UI update, not the walk itself), and
-    /// expanding one wide directory could queue up to ~500 of them at once.
+    /// suppressed the resulting UI update, not the walk itself).
     ///
     /// Fix round 1, Minor: node.SizeBytes/FileCount are now written only
     /// inside the BeginInvoke lambda (i.e. on the UI thread), not on the
@@ -400,6 +347,26 @@ public sealed class BackupPickerDialog : Form
     /// risked a concurrent refresh observing SizeBytes and FileCount at
     /// different points in time (each nullable's HasValue/Value assignment
     /// is not atomic together).
+    ///
+    /// Fix round 2, defect 1 (dispose race): Dispose cancels _cts and then
+    /// disposes _sizeThrottle immediately, but a task already past the
+    /// cancellation check (mid-ComputeStats, or between WaitAsync returning
+    /// and this try block) can still reach the `finally` below and call
+    /// Release() on an already-disposed semaphore, throwing
+    /// ObjectDisposedException OUT OF A BACKGROUND TASK with nothing
+    /// awaiting it - an unobserved task exception, silently swallowed by
+    /// the runtime rather than crashing, but a genuine bug. The Release
+    /// call is now wrapped in its own try/catch for exactly that one
+    /// exception type, since there is nothing to release into once the
+    /// semaphore backing it is gone.
+    ///
+    /// Fix round 2, defect 3 (non-OCE fault swallowed): removing the old
+    /// `IsFaulted` guard in fix round 1 meant ANY non-cancellation exception
+    /// from ComputeStats (it already swallows IO/UnauthorizedAccess
+    /// internally, so this should be rare, but "should be rare" is not
+    /// "cannot happen") vanished silently instead of surfacing anywhere.
+    /// Logged via the same Log.Warn other best-effort background failures
+    /// in this app use, rather than left to disappear.
     /// </summary>
     private void StartSizeComputation(FileTreeNode node, TreeNode uiNode)
     {
@@ -434,10 +401,17 @@ public sealed class BackupPickerDialog : Form
                 // Dialog closed (either while waiting for a throttle slot, or
                 // mid-walk) - nothing left to compute or show.
             }
+            catch (Exception ex)
+            {
+                Log.Warn($"BackupPickerDialog: size computation for '{node.FullPath}' failed: {ex.Message}");
+            }
             finally
             {
                 if (acquired)
-                    _sizeThrottle.Release();
+                {
+                    try { _sizeThrottle.Release(); }
+                    catch (ObjectDisposedException) { /* the dialog disposed the throttle while this task was still mid-flight */ }
+                }
             }
         }, token);
     }
