@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - "Back up now" (tray menu and Settings) now waits for the backup to finish
   and reports the result - previously it fired the worker and forgot about
   it, so a failing backup looked identical to a successful one.
+- **Advanced backup settings**, behind a new "Advanced..." button on the
+  Backup tab: a missed scheduled backup (e.g. the machine was asleep) now
+  runs as soon as possible afterwards by default, the task can require a
+  network connection before starting, and a failed run retries automatically
+  (every 15 minutes, up to 3 times, all by default). The task no longer
+  requires being plugged in to run or to keep running - unlike Windows' own
+  new-task defaults, which would have silently reintroduced the
+  missed-backup problem this exists to fix.
+- **Google Drive backup retention**, in the same Advanced dialog: keep only
+  the most recent N backups, delete anything older than N days, or both.
+  Off by default. Applied only after a successful upload, never deletes the
+  single most recent backup no matter how the settings are set, and only
+  ever considers this app's own `claude-backup-*.zip` files - never anything
+  else stored in the same remote folder.
 
 ### Fixed
 

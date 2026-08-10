@@ -132,6 +132,28 @@ public static class BackupHelpText
         "Scheduler task named 'ClaudeCounter Backup'. Disabling both " +
         "destinations and saving removes it. Uninstalling removes it too.\r\n" +
         "\r\n" +
+        "ADVANCED SCHEDULE SETTINGS\r\n" +
+        "The Advanced dialog controls what happens around a scheduled run: " +
+        "whether a missed backup (e.g. the machine was asleep) runs as soon " +
+        "as possible afterwards (on by default), whether the task requires " +
+        "a network connection to start (on by default, since both " +
+        "destinations upload), whether it is allowed to start or must stop " +
+        "on battery power (both off by default - a laptop is exactly where " +
+        "missed runs happen, so backups run on battery unless you turn " +
+        "these on), and whether a failed run retries automatically (on by " +
+        "default, every 15 minutes, up to 3 times).\r\n" +
+        "\r\n" +
+        "GOOGLE DRIVE RETENTION\r\n" +
+        "The same Advanced dialog can keep Drive from accumulating backups " +
+        "forever: keep only the most recent N, delete anything older than " +
+        "N days, or both - both off by default. When both are on, a backup " +
+        "is pruned if either rule would remove it. Pruning only ever " +
+        "considers this app's own claude-backup-*.zip files, only runs " +
+        "after a successful upload (a failed run never prunes anything), " +
+        "and never deletes the single most recent backup no matter how the " +
+        "settings are set. GitHub has no equivalent - each run is a commit, " +
+        "and git history is the retention model.\r\n" +
+        "\r\n" +
         "RESULTS\r\n" +
         "'Back up now' reports one of three outcomes - complete, 'not run, " +
         "check your settings' (nothing enabled, nothing selected on ANY " +

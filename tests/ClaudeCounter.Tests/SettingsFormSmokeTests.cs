@@ -1,3 +1,4 @@
+using ClaudeBackup;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
 using Xunit;
@@ -117,6 +118,40 @@ public class SettingsFormSmokeTests
         }
     }
 
+    // S7/S8: the Advanced dialog is only reachable by clicking "Advanced..."
+    // on the Backup tab, so - like BackupHelpDialog and BackupPickerDialog
+    // above - it would otherwise never be constructed by any test at all.
+    // Exercised with both a fresh (all-defaults) ScheduleConfig/DriveTarget
+    // and one with every optional/non-default value set, since the retry-
+    // interval and retention NumericUpDown controls are seeded from those
+    // values at construction time.
+    [Fact]
+    public void BackupAdvancedDialogConstructsWithDefaultsWithoutThrowing()
+    {
+        var error = ConstructOnStaThread(() =>
+            new BackupAdvancedDialog(Theme.Current(), new ScheduleConfig(), new DriveTarget()));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void BackupAdvancedDialogConstructsWithNonDefaultValuesWithoutThrowing()
+    {
+        var schedule = new ScheduleConfig
+        {
+            StartWhenAvailable = false,
+            RunOnlyIfNetworkAvailable = false,
+            DisallowStartIfOnBatteries = true,
+            StopIfGoingOnBatteries = true,
+            RestartOnFailure = false,
+            RestartIntervalMinutes = 30,
+            RestartCount = 5,
+        };
+        var drive = new DriveTarget { KeepLastCount = 14, DeleteOlderThanDays = 60 };
+
+        var error = ConstructOnStaThread(() => new BackupAdvancedDialog(Theme.Current(), schedule, drive));
+        Assert.Null(error);
+    }
+
     // S6: re-measure after adding the Backup tab's "Choose files..." button
     // inline on the Include row (see SettingsForm.AddChooseFilesButton) - the
     // Backup tab was 654px against a ~687px budget on a 1366x768 display
@@ -126,6 +161,16 @@ public class SettingsFormSmokeTests
     // margin left. This is the actual, load-bearing check that the button
     // did not push the dialog's real, measured ClientSize.Height back over
     // budget - not just a hand-computed guess in a comment.
+    //
+    // S7/S8: the "Advanced..." button (schedule-robustness and Drive-
+    // retention settings) was placed beside the existing Help button
+    // (same NewFlatButton control, same row) rather than beside the
+    // shorter destination combo box one row down - the combo-box
+    // placement was measured (via this same technique) to push the
+    // height to 686px, a single pixel under budget. Beside Help, the
+    // measured height is unchanged at 671px: the row's height is already
+    // governed by the taller of two identical buttons, so adding the
+    // second one costs zero extra pixels.
     [Fact]
     public void SettingsFormHeightStaysWithinTheDisplayBudget()
     {

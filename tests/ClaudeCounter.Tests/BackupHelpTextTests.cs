@@ -74,4 +74,27 @@ public class BackupHelpTextTests
         Assert.Contains("not run", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("failed", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
     }
+
+    // S7: the guide must describe what the Advanced dialog's schedule
+    // settings actually do, including that the two battery settings default
+    // OFF (the opposite of Windows' own default) - a user reading the guide
+    // must not come away thinking the Windows default applies.
+    [Fact]
+    public void GuideDescribesScheduleRobustnessSettings()
+    {
+        Assert.Contains("missed backup", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("battery", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("retries automatically", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // S8: the guide must describe Drive retention's union rule and the
+    // never-empty-the-remote floor - both are load-bearing safety facts, not
+    // just feature description.
+    [Fact]
+    public void GuideDescribesDriveRetentionRulesAndSafetyFloor()
+    {
+        Assert.Contains("retention", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("either rule", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("never deletes the single most recent backup", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+    }
 }

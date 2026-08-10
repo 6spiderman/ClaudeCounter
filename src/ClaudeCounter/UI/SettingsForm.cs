@@ -100,6 +100,24 @@ public sealed class SettingsForm : Form
     private ComboBox? _backupFrequency;
     private TextBox? _backupTime;
 
+    // S7/S8: the schedule-robustness and Drive-retention settings edited by
+    // BackupAdvancedDialog. These live as plain fields on the form (like
+    // every other Backup tab value) rather than on a live-bound control,
+    // because the dialog that edits them is not always open - seeded from
+    // the loaded BackupConfig in BuildBackupPage, mutated only when the
+    // Advanced dialog closes with OK (see OnOpenAdvancedDialog), and read
+    // back into BackupConfig by OnSaveBackupSchedule exactly like every
+    // other field on this form.
+    private bool _scheduleStartWhenAvailable = true;
+    private bool _scheduleRunOnlyIfNetworkAvailable = true;
+    private bool _scheduleDisallowStartIfOnBatteries;
+    private bool _scheduleStopIfGoingOnBatteries;
+    private bool _scheduleRestartOnFailure = true;
+    private int _scheduleRestartIntervalMinutes = 15;
+    private int _scheduleRestartCount = 3;
+    private int? _driveKeepLastCount;
+    private int? _driveDeleteOlderThanDays;
+
     // Backs every per-field (i) popup on the Backup tab. A single shared
     // instance (not one per button) because ToolTip.Show already positions
     // and dismisses independently per call; only created when the Backup tab
@@ -386,6 +404,21 @@ public sealed class SettingsForm : Form
         var fullWidth = DialogWidth - PagePadX * 2;
         var rightEdgeX = PagePadX + fullWidth - InfoButtonSize;
 
+        // S7/S8: seed the Advanced dialog's backing fields from the loaded
+        // config up front - BuildBackupPage runs once per SettingsForm, so
+        // this is the one place "what the Advanced dialog should show the
+        // first time it opens" is read from disk. OnOpenAdvancedDialog
+        // reads/writes these same fields on every subsequent open/close.
+        _scheduleStartWhenAvailable = config.Schedule.StartWhenAvailable;
+        _scheduleRunOnlyIfNetworkAvailable = config.Schedule.RunOnlyIfNetworkAvailable;
+        _scheduleDisallowStartIfOnBatteries = config.Schedule.DisallowStartIfOnBatteries;
+        _scheduleStopIfGoingOnBatteries = config.Schedule.StopIfGoingOnBatteries;
+        _scheduleRestartOnFailure = config.Schedule.RestartOnFailure;
+        _scheduleRestartIntervalMinutes = config.Schedule.RestartIntervalMinutes;
+        _scheduleRestartCount = config.Schedule.RestartCount;
+        _driveKeepLastCount = config.Drive.KeepLastCount;
+        _driveDeleteOlderThanDays = config.Drive.DeleteOlderThanDays;
+
         // Shared by every (i) button below - manual Show() calls, not
         // hover-triggered, so the button controls when it appears; it never
         // steals focus (a ToolTip window is never activatable) and is themed
@@ -405,6 +438,19 @@ public sealed class SettingsForm : Form
             dlg.ShowDialog(this);
         };
         page.Controls.Add(helpButton);
+
+        // S7/S8: schedule-robustness and Drive-retention settings do not fit
+        // as plain rows within the Backup tab's display budget (see the
+        // design spec's layout constraint) - a single button placed inline
+        // beside the existing Help button (same NewFlatButton type, so it
+        // adds no extra row height - unlike placing it beside the shorter
+        // destination combo box, which was measured to push the tab's
+        // height to 686px, a single pixel under the 687px budget) opens
+        // BackupAdvancedDialog instead of adding any new row.
+        var advancedButton = NewFlatButton("Advanced...", palette);
+        advancedButton.Location = new Point(helpButton.Left - 8 - advancedButton.Width, y);
+        advancedButton.Click += (_, _) => OnOpenAdvancedDialog(palette);
+        page.Controls.Add(advancedButton);
         y += helpButton.Height + RowGap;
 
         var selectorLabel = NewSectionLabel("Editing settings for", palette, y);
@@ -599,6 +645,50 @@ public sealed class SettingsForm : Form
 
         block.Size = new Size(fullWidth + PagePadX * 2, y);
         return (block, y);
+    }
+
+    /// <summary>
+    /// S7/S8: opens BackupAdvancedDialog seeded from the current in-memory
+    /// values of the schedule-robustness and Drive-retention fields (which
+    /// themselves start out seeded from disk in BuildBackupPage), and on
+    /// DialogResult.OK writes the dialog's result back onto those same
+    /// fields. On Cancel (or closing via Esc/the X button), nothing changes -
+    /// mirrors AddChooseFilesButton's Cancel-leaves-the-box-untouched
+    /// behaviour for the same reason. Nothing is persisted here; like every
+    /// other Backup tab field, that only happens when "Save and register
+    /// schedule" is clicked (see OnSaveBackupSchedule).
+    /// </summary>
+    private void OnOpenAdvancedDialog(Palette palette)
+    {
+        var schedule = new ScheduleConfig
+        {
+            StartWhenAvailable = _scheduleStartWhenAvailable,
+            RunOnlyIfNetworkAvailable = _scheduleRunOnlyIfNetworkAvailable,
+            DisallowStartIfOnBatteries = _scheduleDisallowStartIfOnBatteries,
+            StopIfGoingOnBatteries = _scheduleStopIfGoingOnBatteries,
+            RestartOnFailure = _scheduleRestartOnFailure,
+            RestartIntervalMinutes = _scheduleRestartIntervalMinutes,
+            RestartCount = _scheduleRestartCount,
+        };
+        var drive = new DriveTarget
+        {
+            KeepLastCount = _driveKeepLastCount,
+            DeleteOlderThanDays = _driveDeleteOlderThanDays,
+        };
+
+        using var dialog = new BackupAdvancedDialog(palette, schedule, drive);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        _scheduleStartWhenAvailable = dialog.StartWhenAvailable;
+        _scheduleRunOnlyIfNetworkAvailable = dialog.RunOnlyIfNetworkAvailable;
+        _scheduleDisallowStartIfOnBatteries = dialog.DisallowStartIfOnBatteries;
+        _scheduleStopIfGoingOnBatteries = dialog.StopIfGoingOnBatteries;
+        _scheduleRestartOnFailure = dialog.RestartOnFailure;
+        _scheduleRestartIntervalMinutes = dialog.RestartIntervalMinutes;
+        _scheduleRestartCount = dialog.RestartCount;
+        _driveKeepLastCount = dialog.KeepLastCount;
+        _driveDeleteOlderThanDays = dialog.DeleteOlderThanDays;
     }
 
     /// <summary>
@@ -834,6 +924,15 @@ public sealed class SettingsForm : Form
         config.Drive.Exclude = SplitLines(_backupDriveExclude!.Text);
         config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
         config.Schedule.Time = time;
+        config.Schedule.StartWhenAvailable = _scheduleStartWhenAvailable;
+        config.Schedule.RunOnlyIfNetworkAvailable = _scheduleRunOnlyIfNetworkAvailable;
+        config.Schedule.DisallowStartIfOnBatteries = _scheduleDisallowStartIfOnBatteries;
+        config.Schedule.StopIfGoingOnBatteries = _scheduleStopIfGoingOnBatteries;
+        config.Schedule.RestartOnFailure = _scheduleRestartOnFailure;
+        config.Schedule.RestartIntervalMinutes = _scheduleRestartIntervalMinutes;
+        config.Schedule.RestartCount = _scheduleRestartCount;
+        config.Drive.KeepLastCount = _driveKeepLastCount;
+        config.Drive.DeleteOlderThanDays = _driveDeleteOlderThanDays;
 
         config.Save(BackupConfig.DefaultPath());
 
@@ -1021,78 +1120,6 @@ public sealed class SettingsForm : Form
             // Space is pressed) and must stay visibly different from it.
             if (Focused)
                 ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
-        }
-    }
-
-    /// <summary>
-    /// A checkbox with a fully custom-painted indicator box, themed via
-    /// Palette. Subclassing CheckBox itself (rather than a plain Control, as
-    /// TabButton does) keeps all of the base class's input handling for
-    /// free - click-to-toggle, Space-to-toggle, Checked/CheckedChanged and
-    /// Tab-order participate exactly as on a stock CheckBox; only painting
-    /// and preferred-size are overridden.
-    /// </summary>
-    private sealed class ThemedCheckBox : CheckBox
-    {
-        private const int BoxSize = 16;
-        private const int BoxTextGap = 8;
-
-        private readonly Palette _palette;
-
-        public ThemedCheckBox(Palette palette)
-        {
-            _palette = palette;
-            FlatStyle = FlatStyle.Flat; // GDI+-rendered, not FlatStyle.System - required for OnPaint to be honored
-            BackColor = Color.Transparent;
-            ForeColor = palette.Fore;
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer, true);
-        }
-
-        public override Size GetPreferredSize(Size proposedSize)
-        {
-            var textSize = TextRenderer.MeasureText(Text, Font);
-            return new Size(
-                BoxSize + BoxTextGap + textSize.Width + 2,
-                Math.Max(BoxSize, textSize.Height) + 4);
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.Clear(Parent?.BackColor ?? _palette.Back);
-
-            var boxRect = new Rectangle(0, (Height - BoxSize) / 2, BoxSize, BoxSize);
-            using (var fillBrush = new SolidBrush(Checked ? _palette.Fore : _palette.Back))
-                e.Graphics.FillRectangle(fillBrush, boxRect);
-            using (var borderPen = new Pen(_palette.Border))
-                e.Graphics.DrawRectangle(borderPen, boxRect.X, boxRect.Y, boxRect.Width - 1, boxRect.Height - 1);
-
-            if (Checked)
-            {
-                // Drawn in the palette's Back color against the Fore-filled
-                // box: the same figure/ground pair as the rest of the theme,
-                // just inverted, so it reads clearly in both light and dark.
-                using var tickPen = new Pen(_palette.Back, 2f)
-                {
-                    StartCap = LineCap.Round,
-                    EndCap = LineCap.Round,
-                    LineJoin = LineJoin.Round,
-                };
-                Point[] tick =
-                [
-                    new Point(boxRect.X + 3, boxRect.Y + 8),
-                    new Point(boxRect.X + 6, boxRect.Y + 11),
-                    new Point(boxRect.X + 13, boxRect.Y + 4),
-                ];
-                e.Graphics.DrawLines(tickPen, tick);
-            }
-
-            var textRect = new Rectangle(BoxSize + BoxTextGap, 0, Width - BoxSize - BoxTextGap, Height);
-            TextRenderer.DrawText(e.Graphics, Text, Font, textRect, _palette.Fore,
-                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-
-            if (Focused)
-                ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
         }
     }
 
