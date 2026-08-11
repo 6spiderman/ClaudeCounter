@@ -176,6 +176,118 @@ public class BackupConfigTests
         Assert.Contains("settings.json", c.Github.Include);
         Assert.Contains("settings.json", c.Drive.Include);
     }
+
+    // S11a: BackupStaleAfterDays defaults to 3 (design spec) and round-trips
+    // like every other schedule setting.
+    [Fact]
+    public void DefaultBackupStaleAfterDaysIsThree()
+    {
+        var c = BackupConfig.Default();
+        Assert.Equal(3, c.Schedule.BackupStaleAfterDays);
+    }
+
+    [Fact]
+    public void BackupStaleAfterDaysRoundTripsThroughFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            var c = BackupConfig.Default();
+            c.Schedule.BackupStaleAfterDays = 10;
+            c.Save(path);
+
+            var back = BackupConfig.Load(path);
+            Assert.Equal(10, back.Schedule.BackupStaleAfterDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // 0 ("never warn about staleness") is a meaningful, in-range value - see
+    // AppSettings.PopupAutoDismissSeconds for the identical shape - so Load's
+    // Normalize() call must not coerce it back to the default.
+    [Fact]
+    public void ZeroBackupStaleAfterDaysSurvivesLoadAsNeverWarn()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            var c = BackupConfig.Default();
+            c.Schedule.BackupStaleAfterDays = 0;
+            c.Save(path);
+
+            var back = BackupConfig.Load(path);
+            Assert.Equal(0, back.Schedule.BackupStaleAfterDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // Normalize must clamp an out-of-range value (e.g. from a hand-edited
+    // file) rather than let it reach BackupHealth.Evaluate unchecked.
+    [Fact]
+    public void NegativeBackupStaleAfterDaysIsClampedToZeroOnLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00", "BackupStaleAfterDays": -5 },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(0, loaded.Schedule.BackupStaleAfterDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public void HugeBackupStaleAfterDaysIsClampedOnLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00", "BackupStaleAfterDays": 999999 },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(365, loaded.Schedule.BackupStaleAfterDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A backup.json written before this field existed has no
+    // BackupStaleAfterDays property at all - deserializing it must produce
+    // the type default (3), not 0.
+    [Fact]
+    public void MissingBackupStaleAfterDaysFieldDefaultsToThree()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(3, loaded.Schedule.BackupStaleAfterDays);
+        }
+        finally { File.Delete(path); }
+    }
 }
 
 /// <summary>

@@ -37,7 +37,17 @@ namespace ClaudeBackup;
 public static class BackupRunner
 {
     public static int Run(BackupConfig config, IProcessRunner runner, string stagingDir, string tempDir)
-        => Run(config, runner, stagingDir, tempDir, SelectFiles);
+        => RunDetailed(config, runner, stagingDir, tempDir, SelectFiles).ExitCode;
+
+    /// <summary>
+    /// Production entry point for callers (Program.RunWorker) that need more
+    /// than the bare exit code - per-destination outcome, for
+    /// BackupStatusWriter to record. Delegates to the internal 5-arg overload
+    /// with the real file-selection step, exactly like the public <see
+    /// cref="Run(BackupConfig,IProcessRunner,string,string)"/> above.
+    /// </summary>
+    internal static BackupRunResult RunDetailed(BackupConfig config, IProcessRunner runner, string stagingDir, string tempDir)
+        => RunDetailed(config, runner, stagingDir, tempDir, SelectFiles);
 
     /// <summary>
     /// Internal overload that takes the file-selection step as a delegate.
@@ -65,11 +75,39 @@ public static class BackupRunner
         string stagingDir,
         string tempDir,
         Func<string, IEnumerable<string>, IEnumerable<string>, (IReadOnlyList<string> Files, List<string> Withheld)> select)
+        => RunDetailed(config, runner, stagingDir, tempDir, select).ExitCode;
+
+    /// <summary>
+    /// The real orchestration logic (see this class's own doc comment),
+    /// returning a <see cref="BackupRunResult"/> - the exit code plus a
+    /// per-destination <see cref="DestinationAttempt"/> for
+    /// BackupStatusWriter/Program.RunWorker to record (S11a: backup health
+    /// visibility). Every return path below sets both destinations'
+    /// attempts, even the early-abort ones - see each branch's own comment
+    /// for exactly which destinations it marks Attempted and why. A
+    /// destination that is not currently enabled, or that this particular
+    /// run never got far enough to say anything new about, is reported via
+    /// <see cref="DestinationAttempt.NotAttempted"/> so BackupStatusWriter
+    /// carries its previous status forward unchanged rather than guessing.
+    /// </summary>
+    internal static BackupRunResult RunDetailed(
+        BackupConfig config,
+        IProcessRunner runner,
+        string stagingDir,
+        string tempDir,
+        Func<string, IEnumerable<string>, IEnumerable<string>, (IReadOnlyList<string> Files, List<string> Withheld)> select)
     {
+        // Not-yet-attempted defaults - overwritten below wherever this run
+        // actually has something new to say about a destination. Enabled is
+        // recorded even when nothing else changes, so BackupStatus.WasEnabled
+        // stays current for a destination the user has since turned off.
+        var githubAttempt = DestinationAttempt.NotAttempted(config.Github.Enabled);
+        var driveAttempt = DestinationAttempt.NotAttempted(config.Drive.Enabled);
+
         if (!config.Github.Enabled && !config.Drive.Enabled)
         {
             Log.Warn("BackupRunner: no backup destinations enabled.");
-            return 1;
+            return new BackupRunResult(1, githubAttempt, driveAttempt);
         }
 
         // Fix round 2: an enabled destination with no remote configured is
@@ -93,6 +131,7 @@ public static class BackupRunner
         {
             Log.Warn("BackupRunner: GitHub backup is enabled but RemoteUrl is not configured; skipping this destination.");
             githubConfigured = false;
+            githubAttempt = DestinationAttempt.Failed("GitHub backup is enabled but the remote URL is not configured.");
         }
         // Same reasoning as the RemoteUrl guard above: SettingsForm trims the
         // branch textbox, so clearing it and saving persists "". Without this
@@ -103,6 +142,7 @@ public static class BackupRunner
         {
             Log.Warn("BackupRunner: GitHub backup is enabled but Branch is not configured; skipping this destination.");
             githubConfigured = false;
+            githubAttempt = DestinationAttempt.Failed("GitHub backup is enabled but the branch is not configured.");
         }
 
         var driveConfigured = true;
@@ -110,6 +150,7 @@ public static class BackupRunner
         {
             Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured; skipping this destination.");
             driveConfigured = false;
+            driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the rclone remote is not configured.");
         }
 
         // "Active" = enabled AND configured. Everything from here on - the
@@ -145,14 +186,35 @@ public static class BackupRunner
         if (githubActive)
         {
             if (!TrySelect(select, "GitHub", config.SourceRoot, config.Github.Include, config.Github.Exclude, out githubFiles))
-                return 1;
+            {
+                // Whole-run abort (see the DELIBERATE comment above): neither
+                // backend runs, so every ACTIVE destination - not just
+                // GitHub, whose selection actually tripped the offender
+                // check - failed to back up anything this run. Drive's own
+                // selection has not even happened yet at this point, but it
+                // never will either, so it is just as much a failed attempt.
+                const string msg = "Backup aborted: a secret-shaped file was detected in the GitHub selection.";
+                return new BackupRunResult(1,
+                    DestinationAttempt.Failed(msg),
+                    driveActive ? DestinationAttempt.Failed(msg) : driveAttempt);
+            }
         }
 
         IReadOnlyList<string> driveFiles = Array.Empty<string>();
         if (driveActive)
         {
             if (!TrySelect(select, "Google Drive", config.SourceRoot, config.Drive.Include, config.Drive.Exclude, out driveFiles))
-                return 1;
+            {
+                // Mirror of the GitHub case above: GitHub's own selection
+                // already succeeded by this point (or GitHub was never
+                // active), but the whole run still aborts before either
+                // backend runs, so an active GitHub is just as much a failed
+                // attempt as Drive is.
+                const string msg = "Backup aborted: a secret-shaped file was detected in the Google Drive selection.";
+                return new BackupRunResult(1,
+                    githubActive ? DestinationAttempt.Failed(msg) : githubAttempt,
+                    DestinationAttempt.Failed(msg));
+            }
         }
 
         // "Nothing selected" is only a whole-run failure when NO active
@@ -166,7 +228,10 @@ public static class BackupRunner
         if (!githubHasFiles && !driveHasFiles)
         {
             Log.Warn("BackupRunner: nothing selected to back up on any enabled, configured destination.");
-            return 1;
+            const string msg = "Nothing selected to back up.";
+            return new BackupRunResult(1,
+                githubActive ? DestinationAttempt.Failed(msg) : githubAttempt,
+                driveActive ? DestinationAttempt.Failed(msg) : driveAttempt);
         }
 
         var anyFailed = false;
@@ -176,12 +241,15 @@ public static class BackupRunner
             if (githubFiles.Count == 0)
             {
                 Log.Warn("BackupRunner: nothing selected for GitHub; skipping this destination.");
+                githubAttempt = DestinationAttempt.Failed("Nothing selected to back up for GitHub.");
             }
             else
             {
                 var ok = RunBackend("GitHub",
-                    () => new GitBackend(runner, stagingDir).Run(config.SourceRoot, githubFiles, config.Github));
+                    () => new GitBackend(runner, stagingDir).Run(config.SourceRoot, githubFiles, config.Github),
+                    out var message);
                 anyFailed |= !ok;
+                githubAttempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
             }
         }
 
@@ -194,16 +262,19 @@ public static class BackupRunner
             if (driveFiles.Count == 0)
             {
                 Log.Warn("BackupRunner: nothing selected for Google Drive; skipping this destination.");
+                driveAttempt = DestinationAttempt.Failed("Nothing selected to back up for Google Drive.");
             }
             else
             {
                 var ok = RunBackend("Google Drive",
-                    () => new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive));
+                    () => new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive),
+                    out var message);
                 anyFailed |= !ok;
+                driveAttempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
             }
         }
 
-        return anyFailed ? 2 : 0;
+        return new BackupRunResult(anyFailed ? 2 : 0, githubAttempt, driveAttempt);
     }
 
     /// <summary>
@@ -284,22 +355,32 @@ public static class BackupRunner
     /// A tray-supplied IProcessRunner (landing in a later task) is exactly
     /// the kind of implementation this needs to be defensive against, since
     /// it is not one BackupRunner controls or can assume is well-behaved.
+    ///
+    /// <paramref name="message"/> carries the same already-scrubbed text that
+    /// gets logged on failure ("" on success) - S11a: RunDetailed uses it to
+    /// build this destination's DestinationAttempt for BackupStatusWriter,
+    /// without a second, separate source of truth for what went wrong.
     /// </summary>
-    private static bool RunBackend(string name, Func<BackendResult> run)
+    private static bool RunBackend(string name, Func<BackendResult> run, out string message)
     {
         try
         {
             var r = run();
             if (!r.Ok)
             {
-                Log.Error($"BackupRunner: {name} backend failed: {CredentialScrubber.Scrub(r.Message)}");
+                var scrubbed = CredentialScrubber.Scrub(r.Message);
+                Log.Error($"BackupRunner: {name} backend failed: {scrubbed}");
+                message = scrubbed;
                 return false;
             }
+            message = "";
             return true;
         }
         catch (Exception ex)
         {
-            Log.Error($"BackupRunner: {name} backend threw: {CredentialScrubber.Scrub(ex.Message)}");
+            var scrubbed = CredentialScrubber.Scrub(ex.Message);
+            Log.Error($"BackupRunner: {name} backend threw: {scrubbed}");
+            message = scrubbed;
             return false;
         }
     }

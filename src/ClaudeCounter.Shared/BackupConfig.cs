@@ -74,6 +74,18 @@ public sealed class ScheduleConfig
 
     /// <summary>Maximum number of restart attempts when <see cref="RestartOnFailure"/> is set.</summary>
     public int RestartCount { get; set; } = 3;
+
+    /// <summary>
+    /// Days after a destination's newest recorded success before
+    /// BackupHealth.Evaluate considers that destination Stale. 0 is a valid,
+    /// meaningful setting - "never warn about staleness" - not "unset"; see
+    /// BackupConfig.Normalize, which must not coerce it to the default
+    /// (mirrors AppSettings.PopupAutoDismissSeconds, which has the identical
+    /// 0-is-meaningful shape). Default 3: a daily schedule plus an ordinary
+    /// weekend-off laptop should not trip this, but a genuinely dead backup
+    /// still surfaces within a few days (design spec).
+    /// </summary>
+    public int BackupStaleAfterDays { get; set; } = 3;
 }
 
 public sealed class BackupConfig
@@ -146,7 +158,7 @@ public sealed class BackupConfig
         // Drive independent lists of the same content is what makes editing
         // just one of them later (via the Backup tab's destination selector)
         // a real, isolated change instead of secretly touching both.
-        return new BackupConfig
+        var result = new BackupConfig
         {
             // A freshly created config is already at the current shape, so a
             // later Load() of what this writes never mistakes it for a
@@ -157,6 +169,8 @@ public sealed class BackupConfig
             Github = new GitTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
             Drive = new DriveTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
         };
+        result.Normalize();
+        return result;
     }
 
     public static BackupConfig Load(string path)
@@ -167,12 +181,32 @@ public sealed class BackupConfig
         {
             var config = JsonSerializer.Deserialize<BackupConfig>(File.ReadAllText(path)) ?? Default();
             config.MigrateLegacySelection(path);
+            config.Normalize();
             return config;
         }
         catch (Exception e) when (e is JsonException or IOException)
         {
             return Default();
         }
+    }
+
+    /// <summary>
+    /// Enforces field-level invariants that cannot be expressed as a plain
+    /// property initializer - currently just clamping <see
+    /// cref="ScheduleConfig.BackupStaleAfterDays"/> to a sane range. 0 ("never
+    /// warn about staleness") is a meaningful in-range value - see that
+    /// property's doc comment - so this is a plain clamp, not a
+    /// fallback-to-default like AppSettings.Normalize's threshold handling.
+    /// Called by both <see cref="Load"/> (so a hand-edited or corrupted
+    /// backup.json can never carry an out-of-range value into
+    /// BackupHealth.Evaluate) and <see cref="Default"/> (so a freshly created
+    /// config is already normalized, mirroring SettingsStore's
+    /// fresh.Normalize() pattern for AppSettings).
+    /// </summary>
+    public void Normalize()
+    {
+        Schedule ??= new();
+        Schedule.BackupStaleAfterDays = Math.Clamp(Schedule.BackupStaleAfterDays, 0, 365);
     }
 
     /// <summary>
