@@ -16,6 +16,15 @@ using System.Text;
 // keeps that access working across the assembly boundary.
 [assembly: InternalsVisibleTo("ClaudeBackup")]
 
+// S10 (restore to a different folder): RestoreDialog's own destination-
+// refusal rule (RestoreDestinationModel.IsRefusedDestination, in
+// ClaudeCounter.csproj - the WinForms UI project, which normally sees only
+// this assembly's public surface) reuses RelativePathGuard.Overlaps rather
+// than duplicating its separator-aware containment check. Same reasoning as
+// the ClaudeBackup grant above, extended to the one other project that now
+// needs it.
+[assembly: InternalsVisibleTo("ClaudeCounter")]
+
 namespace ClaudeCounter.Core;
 
 /// <summary>

@@ -13,6 +13,19 @@ namespace ClaudeCounter.UI;
 /// made by the engine, not here. This dialog's whole job is to make those
 /// decisions visible and to never offer a control that routes around them.
 ///
+/// S10 (restore to a different folder): step 1 also lets the user choose
+/// WHERE restore goes - live config (the original, default behaviour) or
+/// another folder they browse to. <see cref="RestoreDestinationModel"/>
+/// resolves that choice to one root, called exactly once per preview and
+/// frozen in _destinationRootForApply for that preview/apply cycle, so
+/// classification (step 2) and apply (step 4) are guaranteed to agree on
+/// where "the destination" is - the one thing this feature could get wrong
+/// that would be worse than not having it at all. The materialisation
+/// destination (the staging folder itself) and its protectedRoot guard are
+/// untouched by this: they always stage into _stagedRoot and always guard
+/// against writing into live config, independent of what the user later
+/// chooses to classify/apply against.
+///
 /// Flow (one Form, three panels swapped via Visible - same convention
 /// SettingsForm's tab strip and BackupPickerDialog's single-page layout
 /// both use):
@@ -23,10 +36,11 @@ namespace ClaudeCounter.UI;
 ///      here, and it is what lets a test construct this dialog with an
 ///      already-populated snapshot list deterministically via a fake
 ///      IProcessRunner - see SettingsFormSmokeTests).
-///   2. Materialise the chosen snapshot and classify it against live
-///      ~/.claude (<see cref="OnPreviewClicked"/>) - both off the UI thread
-///      per the design spec, via Task.Run/await (never launched by anything
-///      a smoke test's construct-only pass ever calls).
+///   2. Materialise the chosen snapshot and classify it against the chosen
+///      destination - live ~/.claude by default, or the folder picked in
+///      step 1 (<see cref="OnPreviewClicked"/>) - both off the UI thread per
+///      the design spec, via Task.Run/await (never launched by anything a
+///      smoke test's construct-only pass ever calls).
 ///   3. Preview (<see cref="BuildPreviewPanel"/>) - every classified file,
 ///      defaulting to all New/Changed ticked and nothing else selectable
 ///      (see RestoreDisplayModel - the one place that rule lives, tested
@@ -47,7 +61,12 @@ public sealed class RestoreDialog : Form
     private enum Step { ChooseSnapshot, Preview, Result }
 
     private const int DialogWidth = 700;
-    private const int ContentHeight = 380;
+    // S10: +48 over the original 380 for the new "Restore into" row (combo +
+    // browse button) and its resolved-path label in the choose panel - see
+    // BuildChoosePanel. No test enforces this dialog's own height (unlike
+    // SettingsForm's Backup tab budget, which this change does not touch at
+    // all), so there is no pixel-exact reason to keep it at 380.
+    private const int ContentHeight = 428;
     private const int BottomBarHeight = 52;
     private const int Pad = 16;
     private const int RowGap = 8;
@@ -70,6 +89,22 @@ public sealed class RestoreDialog : Form
     private bool _busy;
     private Step _currentStep = Step.ChooseSnapshot;
 
+    // S10 (restore to a different folder). _destinationKind/_customDestinationRoot
+    // are the live, editable selection (Panel 1 only); _destinationRootForApply
+    // is that selection FROZEN the moment a preview's classify succeeds (see
+    // OnPreviewClicked) and is what OnApplyClicked actually applies against -
+    // never a fresh re-resolution - so classify and apply can never disagree
+    // about where "the destination" is, however the destination controls (in
+    // the now-hidden Panel 1) might theoretically be poked afterward.
+    // _customDestinationRoot persists across switching the combo back to Live
+    // and back to Custom again within this dialog's lifetime ("remembered for
+    // the session" per the brief) - it is only ever cleared when the user
+    // picks a folder that turns out to equal live config (see
+    // OnBrowseForDestination) or, trivially, when the dialog is disposed.
+    private RestoreDestinationKind _destinationKind = RestoreDestinationKind.Live;
+    private string? _customDestinationRoot;
+    private string? _destinationRootForApply;
+
     // Assigned from the Build*Panel helpers below, not directly in the
     // constructor body - mirrors SettingsForm's own fields (see its own
     // "No longer readonly" comment for why: a readonly field can only be
@@ -82,10 +117,17 @@ public sealed class RestoreDialog : Form
     private ListView _snapshotList = null!;
     private Label _sourceErrorLabel = null!;
 
+    // S10: destination controls, all on Panel 1 (BuildChoosePanel).
+    private ComboBox _destinationCombo = null!;
+    private Button _destinationBrowseButton = null!;
+    private Label _destinationPathLabel = null!;
+
     private ListView _fileList = null!;
     private Label _countsLabel = null!;
+    private Label _previewDestinationLabel = null!;
 
     private Label _resultMessageLabel = null!;
+    private Label _resultDestinationLabel = null!;
     private TextBox _safetyCopyBox = null!;
     private Label _skippedLabel = null!;
 
@@ -242,6 +284,41 @@ public sealed class RestoreDialog : Form
             y += label.PreferredHeight + RowGap;
         }
 
+        // S10: "Restore into" - live config (default) or a folder the user
+        // browses to. Deliberately on Panel 1, alongside "Restore from": the
+        // destination has to be settled before Preview ever runs, since it
+        // is what classify (step 2) compares staging against - see this
+        // class's own doc comment on why classify and apply must always
+        // agree on this value.
+        panel.Controls.Add(NewSectionLabel("Restore into", palette, y));
+        _destinationCombo = NewCombo(palette, 200);
+        _destinationCombo.Location = new Point(FieldX, y);
+        _destinationCombo.Items.Add("Live config");
+        _destinationCombo.Items.Add("Another folder...");
+        _destinationCombo.SelectedIndex = 0;
+        _destinationCombo.SelectedIndexChanged += OnDestinationComboChanged;
+        panel.Controls.Add(_destinationCombo);
+
+        _destinationBrowseButton = NewFlatButton("Browse...", palette);
+        _destinationBrowseButton.Location = new Point(FieldX + _destinationCombo.Width + RowGap, y);
+        _destinationBrowseButton.Visible = false;
+        _destinationBrowseButton.Click += (_, _) =>
+        {
+            if (_busy) return;
+            OnBrowseForDestination();
+            SyncDestinationComboSelection();
+            UpdateDestinationLabel();
+            RefreshPreviewButtonEnabled();
+        };
+        panel.Controls.Add(_destinationBrowseButton);
+        y += _destinationCombo.Height + RowGap;
+
+        _destinationPathLabel = NewFixedHeightDestinationLabel(palette, fullWidth);
+        _destinationPathLabel.Location = new Point(Pad, y);
+        panel.Controls.Add(_destinationPathLabel);
+        UpdateDestinationLabel();
+        y += _destinationPathLabel.Height + RowGap;
+
         var listLabel = NewSubtleLabel("Available backups, newest first:", palette, fullWidth);
         listLabel.Location = new Point(Pad, y);
         panel.Controls.Add(listLabel);
@@ -263,8 +340,7 @@ public sealed class RestoreDialog : Form
         _snapshotList.Columns.Add("When", 150);
         _snapshotList.Columns.Add("Snapshot", fullWidth - 150 - 100);
         _snapshotList.Columns.Add("Size", 100);
-        _snapshotList.SelectedIndexChanged += (_, _) =>
-            _previewButton.Enabled = !_busy && _snapshotList.SelectedItems.Count > 0;
+        _snapshotList.SelectedIndexChanged += (_, _) => RefreshPreviewButtonEnabled();
         panel.Controls.Add(_snapshotList);
         y += _snapshotList.Height + RowGap;
 
@@ -347,6 +423,167 @@ public sealed class RestoreDialog : Form
         _sourceErrorLabel.Text = message;
     }
 
+    // --- S10: destination choice ("Restore into") ---------------------------
+
+    /// <summary>
+    /// Every folder this dialog itself writes restore-owned scratch data
+    /// into: the materialised staging tree, RestoreGitSource's own clone,
+    /// the Drive temp-download directory, and the safety-copy base
+    /// directory (RestoreApplier creates a timestamped subfolder under this
+    /// one on every apply). A chosen destination that is, contains, or is
+    /// contained by any of these would let restore corrupt its own
+    /// machinery - see RestoreDestinationModel.IsRefusedDestination's own
+    /// doc comment for exactly why each of these four matters (in
+    /// particular the safety-copy directory: applying INTO it could
+    /// overwrite the very originals rule 2 just saved).
+    /// </summary>
+    private string[] ScratchDirs() => new[] { _stagedRoot, _gitStagingDir, _driveTempDir, _safetyBaseDir };
+
+    private string? ResolveDestinationRoot() =>
+        RestoreDestinationModel.ResolveDestinationRoot(_destinationKind, _liveRoot, _customDestinationRoot);
+
+    /// <summary>
+    /// True when <paramref name="destinationRoot"/> IS the live config root
+    /// - not just when <see cref="_destinationKind"/> happens to be Live.
+    /// Checked by full-path equality (case-insensitive, trailing separator
+    /// trimmed) rather than trusting the enum alone, because a user can also
+    /// reach live config by browsing to it by hand (see
+    /// OnBrowseForDestination, which folds that case back into Live
+    /// anyway) - this is the belt-and-braces version of the same check,
+    /// used everywhere "is this actually live config" needs a real answer
+    /// (the Claude-Code-running warning, and every "unmistakable" label).
+    /// </summary>
+    private bool DestinationIsLiveConfig(string destinationRoot) => string.Equals(
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationRoot)),
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(_liveRoot)),
+        StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Sets the combo's SelectedIndex to match <see cref="_destinationKind"/>
+    /// and the Browse button's visibility to match it, WITHOUT re-firing
+    /// <see cref="OnDestinationComboChanged"/> - used after this class's own
+    /// code changes _destinationKind programmatically (e.g. folding a
+    /// browsed live-config folder back into Live), where re-entering the
+    /// change handler would be redundant at best and recursive at worst.
+    /// </summary>
+    private void SyncDestinationComboSelection()
+    {
+        _destinationCombo.SelectedIndexChanged -= OnDestinationComboChanged;
+        _destinationCombo.SelectedIndex = _destinationKind == RestoreDestinationKind.Live ? 0 : 1;
+        _destinationCombo.SelectedIndexChanged += OnDestinationComboChanged;
+        _destinationBrowseButton.Visible = _destinationKind == RestoreDestinationKind.Custom;
+    }
+
+    /// <summary>
+    /// Restore rule 6 made destination-aware, and the "unmistakable" label
+    /// the brief asks for: live config is called out explicitly (and in the
+    /// same amber this dialog already uses for warnings - see
+    /// _sourceErrorLabel), since that is the one destination where a mistake
+    /// is unrecoverable-by-convenience. A custom destination gets the plain
+    /// subtle styling everything else in this panel uses - it is
+    /// deliberately the LESS alarming of the two, since restoring into a
+    /// scratch folder is the safe choice this feature exists to offer.
+    /// </summary>
+    private void UpdateDestinationLabel()
+    {
+        var root = ResolveDestinationRoot();
+        if (root is null)
+        {
+            _destinationPathLabel.Text = "Choose a destination folder above before previewing.";
+            _destinationPathLabel.ForeColor = _palette.SubtleFore;
+            return;
+        }
+
+        if (DestinationIsLiveConfig(root))
+        {
+            _destinationPathLabel.Text = $"Restoring into your LIVE configuration: {root}";
+            _destinationPathLabel.ForeColor = Theme.BandColor(Band.Amber);
+        }
+        else
+        {
+            _destinationPathLabel.Text = $"Restoring into: {root}  (not your live configuration)";
+            _destinationPathLabel.ForeColor = _palette.SubtleFore;
+        }
+    }
+
+    private void RefreshPreviewButtonEnabled() =>
+        _previewButton.Enabled = !_busy && _snapshotList.SelectedItems.Count > 0 && ResolveDestinationRoot() is not null;
+
+    private void OnDestinationComboChanged(object? sender, EventArgs e)
+    {
+        if (_busy) return;
+
+        if (_destinationCombo.SelectedIndex == 1)
+        {
+            _destinationKind = RestoreDestinationKind.Custom;
+            if (_customDestinationRoot is null)
+                OnBrowseForDestination(); // may set a custom root, fold back to Live, or leave both null on cancel/refusal
+
+            if (_customDestinationRoot is null && _destinationKind == RestoreDestinationKind.Custom)
+                _destinationKind = RestoreDestinationKind.Live; // nothing usable was ever chosen - revert
+        }
+        else
+        {
+            _destinationKind = RestoreDestinationKind.Live;
+        }
+
+        SyncDestinationComboSelection();
+        UpdateDestinationLabel();
+        RefreshPreviewButtonEnabled();
+    }
+
+    /// <summary>
+    /// Shared core for both the Browse button and "Another folder..." combo
+    /// selection: shows a folder browser, and on a real pick either folds it
+    /// into Live (if it turns out to literally be the live config root - see
+    /// DestinationIsLiveConfig) or refuses it (if it overlaps one of this
+    /// dialog's own scratch directories - see ScratchDirs/
+    /// RestoreDestinationModel.IsRefusedDestination) or accepts it as the new
+    /// custom destination. On cancel, or on refusal, _destinationKind/
+    /// _customDestinationRoot are left exactly as they were - the caller
+    /// (OnDestinationComboChanged or the Browse button's own click handler)
+    /// is responsible for re-syncing the combo/label/Preview-button state
+    /// afterward either way.
+    /// </summary>
+    private void OnBrowseForDestination()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Choose a folder to restore into. Nothing here is written until you apply.",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            SelectedPath = _customDestinationRoot ?? _liveRoot,
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var picked = dialog.SelectedPath;
+
+        if (DestinationIsLiveConfig(picked))
+        {
+            // Picking the live config folder by hand is just Live under a
+            // different name - fold it into the Live selection so every
+            // other destination-aware decision (the label, the
+            // Claude-Code-running warning) reflects reality instead of
+            // treating this as "Another folder...".
+            _destinationKind = RestoreDestinationKind.Live;
+            _customDestinationRoot = null;
+            return;
+        }
+
+        if (RestoreDestinationModel.IsRefusedDestination(picked, ScratchDirs()))
+        {
+            MessageBox.Show(this,
+                $"'{picked}' cannot be used as a restore destination - it is, or is inside, a folder this " +
+                "dialog uses internally to stage and safeguard the restore itself. Choose a different folder.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        _customDestinationRoot = picked;
+        _destinationKind = RestoreDestinationKind.Custom;
+    }
+
     // --- Panel 2: preview ----------------------------------------------------
 
     private Panel BuildPreviewPanel(Palette palette)
@@ -355,13 +592,34 @@ public sealed class RestoreDialog : Form
         var fullWidth = DialogWidth - Pad * 2;
         var y = Pad;
 
+        // S10: restated here, at the top of the panel that is about to show
+        // WHAT would change - the single most important fact for the user to
+        // have read before ticking anything is WHERE it would change. Text
+        // set in PopulatePreview from _destinationRootForApply (the frozen
+        // value classify just ran against), not re-resolved live, so this
+        // can never show a different destination than the one Apply will
+        // actually use.
+        // Fixed height, not AutoSize: text is set later at runtime
+        // (PopulatePreview), once the actual destination path is known -
+        // reserving a stable two-line height up front means a long path
+        // wrapping to a second line can never push the banner/list below it
+        // out of place, unlike an AutoSize label whose height is only
+        // correct as of whenever PreferredHeight was last read.
+        _previewDestinationLabel = NewFixedHeightDestinationLabel(palette, fullWidth);
+        _previewDestinationLabel.Location = new Point(Pad, y);
+        panel.Controls.Add(_previewDestinationLabel);
+        y += _previewDestinationLabel.Height + RowGap;
+
         // Restore rule 3, made visible: this is the one sentence in the whole
         // dialog whose entire job is to make "restore never deletes" a thing
         // the user actually reads, not just a property the engine happens to
         // have.
+        // S10: worded to hold for either destination - "your live
+        // configuration" would be wrong to read here when the destination
+        // label right above says otherwise.
         var banner = NewSubtleLabel(
             "Tick the files to restore. Only New and Changed files can be selected - Identical files need " +
-            "no action, and files that exist only in your live configuration (Live only) are never touched: " +
+            "no action, and files that exist only in the destination (Live only) are never touched: " +
             "restore adds and overwrites, it never deletes.",
             palette, fullWidth);
         banner.Location = new Point(Pad, y);
@@ -410,6 +668,14 @@ public sealed class RestoreDialog : Form
 
     private void PopulatePreview()
     {
+        var destination = _destinationRootForApply!; // set by OnPreviewClicked before this is ever called
+        _previewDestinationLabel.Text = DestinationIsLiveConfig(destination)
+            ? $"Restoring into your LIVE configuration: {destination}"
+            : $"Restoring into: {destination}  (not your live configuration)";
+        _previewDestinationLabel.ForeColor = DestinationIsLiveConfig(destination)
+            ? Theme.BandColor(Band.Amber)
+            : _palette.SubtleFore;
+
         _fileList.Items.Clear();
         foreach (var row in _rows)
         {
@@ -452,7 +718,7 @@ public sealed class RestoreDialog : Form
         _countsLabel.Text =
             $"{selectedNew + selectedChanged} of {counts.New + counts.Changed} new/changed file(s) selected. " +
             $"{counts.Identical} identical (nothing to do). " +
-            $"{counts.LiveOnly} present only in your live config - left alone.";
+            $"{counts.LiveOnly} present only in the destination - left alone.";
 
         _applyButton.Enabled = !_busy && (selectedNew + selectedChanged) > 0;
     }
@@ -465,11 +731,24 @@ public sealed class RestoreDialog : Form
         var fullWidth = DialogWidth - Pad * 2;
         var y = Pad;
 
+        // Fixed height (text set later, in PopulateResult), same reasoning
+        // as _previewDestinationLabel below - a long result.Message must not
+        // be able to wrap into and shift the destination label under it.
         _resultMessageLabel = NewSubtleLabel("", palette, fullWidth);
         _resultMessageLabel.ForeColor = palette.Fore;
         _resultMessageLabel.Location = new Point(Pad, y);
         panel.Controls.Add(_resultMessageLabel);
         y += 40;
+
+        // S10: which destination just got written is at least as important
+        // to see after the fact as before - so this uses the same wording
+        // and amber-for-live styling as the preview panel's own destination
+        // label, from the same frozen _destinationRootForApply value. Fixed
+        // height for the same reason as _previewDestinationLabel.
+        _resultDestinationLabel = NewFixedHeightDestinationLabel(palette, fullWidth);
+        _resultDestinationLabel.Location = new Point(Pad, y);
+        panel.Controls.Add(_resultDestinationLabel);
+        y += _resultDestinationLabel.Height + RowGap;
 
         // Rule 2 made visible, prominently: this path is the only way an
         // unwanted restore gets undone, so it is shown in a selectable,
@@ -504,6 +783,14 @@ public sealed class RestoreDialog : Form
             ? result.Message
             : $"Restore did not finish cleanly: {result.Message}";
         _resultMessageLabel.ForeColor = result.Ok ? _palette.Fore : Theme.BandColor(Band.Red);
+
+        var destination = _destinationRootForApply!; // set by OnPreviewClicked before Apply is ever reachable
+        _resultDestinationLabel.Text = DestinationIsLiveConfig(destination)
+            ? $"Written into your LIVE configuration: {destination}"
+            : $"Written into: {destination}  (not your live configuration)";
+        _resultDestinationLabel.ForeColor = DestinationIsLiveConfig(destination)
+            ? Theme.BandColor(Band.Amber)
+            : _palette.SubtleFore;
 
         _safetyCopyBox.Text = result.SafetyCopyPath ?? "(none needed - no live file was overwritten)";
 
@@ -629,8 +916,10 @@ public sealed class RestoreDialog : Form
         _snapshotList.Enabled = !busy;
         _fileList.Enabled = !busy;
         if (_sourceCombo is not null) _sourceCombo.Enabled = !busy;
+        _destinationCombo.Enabled = !busy;
+        _destinationBrowseButton.Enabled = !busy;
 
-        _previewButton.Enabled = !busy && _snapshotList.SelectedItems.Count > 0;
+        RefreshPreviewButtonEnabled();
         if (!busy) RefreshCounts(); // re-derives _applyButton.Enabled
     }
 
@@ -643,9 +932,43 @@ public sealed class RestoreDialog : Form
         var snapshot = (RestoreSnapshot)_snapshotList.SelectedItems[0].Tag!;
         var source = _selectedSource;
 
+        // S10: resolved exactly once here, and everything for the rest of
+        // this preview/apply cycle - classify below, and Apply once the user
+        // confirms - uses THIS value (frozen into _destinationRootForApply
+        // once classify actually succeeds), never a fresh re-resolution.
+        // ResolveDestinationRoot can only be null if the Preview button was
+        // somehow enabled without a destination chosen - RefreshPreviewButtonEnabled
+        // is the guard that is supposed to prevent that; this is the
+        // belt-and-braces backstop in case it did not.
+        var destinationRoot = ResolveDestinationRoot();
+        if (destinationRoot is null)
+        {
+            MessageBox.Show(this, "Choose a destination folder before previewing.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        // Defense in depth: the same refusal already ran when the folder was
+        // picked (OnBrowseForDestination), but this is the point classify is
+        // actually about to run against it, so it is re-checked here too -
+        // mirrors RestoreApplier's own "re-check every rule at the point of
+        // use, not just on the way in" discipline.
+        if (RestoreDestinationModel.IsRefusedDestination(destinationRoot, ScratchDirs()))
+        {
+            MessageBox.Show(this,
+                $"'{destinationRoot}' cannot be used as a restore destination - it is, or is inside, a folder " +
+                "this dialog uses internally to stage and safeguard the restore itself. Choose a different folder.",
+                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         SetBusy(true, "Materialising snapshot...");
         try
         {
+            // Materialize's protectedRoot stays _liveRoot regardless of
+            // destinationRoot above - it guards the STAGING write (always
+            // into _stagedRoot) against ever landing in live config, which
+            // is independent of where the user later chooses to classify/
+            // apply against. See this class's own doc comment.
             var materialize = await Task.Run(() => source == Source.Github
                 ? _gitSource.Materialize(_config.Github, snapshot.Id, _stagedRoot, _liveRoot)
                 : _zipSource.Materialize(_config.Drive, snapshot.Id, _driveTempDir, _stagedRoot, _liveRoot));
@@ -657,7 +980,9 @@ public sealed class RestoreDialog : Form
                 return;
             }
 
-            SetBusy(true, "Comparing against your live configuration...");
+            SetBusy(true, DestinationIsLiveConfig(destinationRoot)
+                ? "Comparing against your live configuration..."
+                : "Comparing against the chosen destination folder...");
             // Fix round 1 (review): unlike Materialize (both RestoreZipSource
             // and RestoreGitSource wrap their own bodies and return Ok=false
             // on failure) and RestoreApplier.Apply (same), RestoreClassifier.
@@ -674,7 +999,7 @@ public sealed class RestoreDialog : Form
             IReadOnlyList<RestoreFileEntry> entries;
             try
             {
-                entries = await Task.Run(() => RestoreClassifier.Classify(_stagedRoot, _liveRoot));
+                entries = await Task.Run(() => RestoreClassifier.Classify(_stagedRoot, destinationRoot));
             }
             catch (Exception ex)
             {
@@ -682,7 +1007,7 @@ public sealed class RestoreDialog : Form
                 if (!IsDisposed)
                 {
                     MessageBox.Show(this,
-                        $"Could not compare the staged snapshot against your live configuration: {ex.Message}\n\n" +
+                        $"Could not compare the staged snapshot against '{destinationRoot}': {ex.Message}\n\n" +
                         "See the log for details.",
                         "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
@@ -691,6 +1016,7 @@ public sealed class RestoreDialog : Form
             if (IsDisposed) return;
 
             _rows = RestoreDisplayModel.BuildRows(entries);
+            _destinationRootForApply = destinationRoot; // frozen - see field's own doc comment
             PopulatePreview();
             ShowStep(Step.Preview);
         }
@@ -711,9 +1037,22 @@ public sealed class RestoreDialog : Form
         if (chosen.Count == 0)
             return;
 
+        // Set by OnPreviewClicked before Step.Preview (where Apply is the
+        // only reachable action) is ever shown - see the field's own doc
+        // comment for why this is a frozen value, not a fresh
+        // ResolveDestinationRoot() call: classify already ran against
+        // exactly this root, and Apply must use the identical one.
+        var destinationRoot = _destinationRootForApply!;
+        var isLiveConfig = DestinationIsLiveConfig(destinationRoot);
+
         // Restore rule 6: warn, never a hard block - the user may know
-        // better than a name-based process check.
-        if (ClaudeProcessDetector.AppearsRunning())
+        // better than a name-based process check. S10: only meaningful when
+        // restoring into live config - Claude Code holding a file open in
+        // ~/.claude is the entire risk this warning exists to flag, and that
+        // risk simply does not exist when applying into an unrelated scratch
+        // folder, so showing it there would just be noise the user has to
+        // click past on every custom-destination restore.
+        if (isLiveConfig && ClaudeProcessDetector.AppearsRunning())
         {
             var proceedPastWarning = MessageBox.Show(this,
                 "Claude Code appears to be running. Restoring now could overwrite files it currently has " +
@@ -725,13 +1064,21 @@ public sealed class RestoreDialog : Form
 
         var newCount = chosen.Count(c => c.Status == RestoreFileStatus.New);
         var changedCount = chosen.Count(c => c.Status == RestoreFileStatus.Changed);
+        // S10: the destination is named plainly and, for live config,
+        // called out in capitals - the confirmation dialog is the last
+        // point before anything is written, so this is the one place above
+        // all others where "which destination is about to be written" must
+        // be unmistakable.
+        var destinationLine = isLiveConfig
+            ? $"This will write {chosen.Count} file(s) into your LIVE CONFIGURATION at {destinationRoot}:"
+            : $"This will write {chosen.Count} file(s) into {destinationRoot} (not your live configuration):";
         var confirmed = MessageBox.Show(this,
-            $"This will write {chosen.Count} file(s) into {_liveRoot}:\n" +
+            $"{destinationLine}\n" +
             $"  {newCount} new file(s)\n" +
             $"  {changedCount} existing file(s) overwritten\n\n" +
             "Every file about to be overwritten is copied to a safety folder first, so this can be undone " +
-            "by hand. Restore never deletes anything - files that exist only in your live configuration are " +
-            "left alone.\n\nContinue?",
+            "by hand. Restore never deletes anything - files that exist only in the destination are left " +
+            "alone.\n\nContinue?",
             "Confirm restore", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (confirmed != DialogResult.Yes)
             return;
@@ -739,7 +1086,7 @@ public sealed class RestoreDialog : Form
         SetBusy(true, "Applying restore...");
         try
         {
-            var result = await Task.Run(() => RestoreApplier.Apply(_stagedRoot, _liveRoot, chosen, _safetyBaseDir));
+            var result = await Task.Run(() => RestoreApplier.Apply(_stagedRoot, destinationRoot, chosen, _safetyBaseDir));
             if (IsDisposed) return;
 
             PopulateResult(result);
@@ -788,6 +1135,27 @@ public sealed class RestoreDialog : Form
         AutoSize = true,
         Font = new Font("Segoe UI", 9f),
         MaximumSize = new Size(maxWidth, 0),
+        ForeColor = palette.SubtleFore,
+        BackColor = Color.Transparent,
+    };
+
+    /// <summary>
+    /// S10: a destination label whose Text is only known at runtime (set
+    /// well after this panel's own layout has already positioned every
+    /// control below it - see UpdateDestinationLabel/PopulatePreview/
+    /// PopulateResult). Fixed at a reserved two-line height instead of
+    /// AutoSize, so an unusually long destination path wrapping to a second
+    /// line changes only what is drawn INSIDE this label's bounds, never the
+    /// position of anything else in the panel - the overlap an AutoSize
+    /// label would risk here, since its PreferredHeight at layout time
+    /// reflects the empty string this label always starts with, not the
+    /// real text set later.
+    /// </summary>
+    private static Label NewFixedHeightDestinationLabel(Palette palette, int width) => new()
+    {
+        AutoSize = false,
+        Size = new Size(width, 32),
+        Font = new Font("Segoe UI", 9f),
         ForeColor = palette.SubtleFore,
         BackColor = Color.Transparent,
     };
