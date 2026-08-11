@@ -95,7 +95,7 @@ public static class BackupHealth
         if (config.Github.Enabled)
             destinations.Add(EvaluateDestination("GitHub", status.Github, now, staleAfterDays));
         if (config.Drive.Enabled)
-            destinations.Add(EvaluateDestination("Google Drive", status.Drive, now, staleAfterDays));
+            destinations.Add(EvaluateDestination(DriveDisplayName(config.Drive), status.Drive, now, staleAfterDays));
 
         // No destination enabled: show nothing at all - never nag a user who
         // does not use backup. Checked before anything else so a NeverRun/
@@ -126,6 +126,24 @@ public static class BackupHealth
 
         return new BackupHealthResult(BackupHealthState.Healthy, destinations);
     }
+
+    /// <summary>
+    /// S14: the single Drive destination now has two transports (see the
+    /// design doc's "Key structural decision" - a transport switch, not a
+    /// third destination), so its health/failure display name is
+    /// transport-aware: "Sync folder" for the no-auth folder transport,
+    /// "Google Drive (rclone)" for the original one. The original bare
+    /// "Google Drive" is retired for BOTH transports, not just replaced for
+    /// the new one - a sync-folder user might just as well be pointed at
+    /// OneDrive, Dropbox, or a NAS share, where "Google Drive" would be
+    /// actively wrong, and disambiguating the rclone case too keeps the two
+    /// names symmetric instead of one being oddly specific and the other not.
+    /// </summary>
+    private static string DriveDisplayName(DriveTarget target) => target.Transport switch
+    {
+        DriveTransport.SyncFolder => "Sync folder",
+        _ => "Google Drive (rclone)",
+    };
 
     private static DestinationHealth EvaluateDestination(string name, DestinationStatus status, DateTimeOffset now, int staleAfterDays)
     {

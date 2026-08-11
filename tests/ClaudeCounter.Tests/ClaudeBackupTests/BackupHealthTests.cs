@@ -179,7 +179,7 @@ public class BackupHealthTests
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         var github = result.Destinations.Single(d => d.Name == "GitHub");
-        var drive = result.Destinations.Single(d => d.Name == "Google Drive");
+        var drive = result.Destinations.Single(d => d.Name == "Google Drive (rclone)");
         Assert.Equal(DestinationHealthState.Failed, github.State);
         Assert.Equal(DestinationHealthState.Healthy, drive.State);
     }
@@ -201,7 +201,7 @@ public class BackupHealthTests
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Stale, result.State);
-        var drive = result.Destinations.Single(d => d.Name == "Google Drive");
+        var drive = result.Destinations.Single(d => d.Name == "Google Drive (rclone)");
         Assert.Equal(DestinationHealthState.NeverRun, drive.State);
         Assert.Null(drive.LastSuccessUtc);
     }
@@ -220,5 +220,36 @@ public class BackupHealthTests
     public void WarrantsAttentionMatchesTheSurfacingContract(BackupHealthState state, bool expected)
     {
         Assert.Equal(expected, state.WarrantsAttention());
+    }
+
+    // S14: the Drive destination's display name is transport-aware - a
+    // sync-folder-configured destination must be named "Sync folder", not
+    // "Google Drive (rclone)", so a failure/staleness message names what the
+    // user actually configured (they might be pointed at OneDrive, Dropbox,
+    // or a NAS share, not Google Drive at all).
+    [Fact]
+    public void SyncFolderTransportUsesSyncFolderDisplayName()
+    {
+        var status = new BackupStatus { Drive = Failed(Now.AddMinutes(-1)) };
+        var config = new BackupConfig
+        {
+            Drive = new DriveTarget { Enabled = true, Transport = DriveTransport.SyncFolder, FolderPath = @"D:\SyncFolder" },
+        };
+        var result = BackupHealth.Evaluate(status, config, Now, staleAfterDays: 3);
+
+        var drive = result.Destinations.Single(d => d.Name == "Sync folder");
+        Assert.Equal(DestinationHealthState.Failed, drive.State);
+    }
+
+    // The default (Rclone) transport must keep its own disambiguated name -
+    // not just "Google Drive" - so the two transports read symmetrically.
+    [Fact]
+    public void RcloneTransportUsesGoogleDriveRcloneDisplayName()
+    {
+        var status = new BackupStatus { Drive = Succeeded(Now.AddHours(-1)) };
+        var result = BackupHealth.Evaluate(status, Config(driveEnabled: true), Now, staleAfterDays: 3);
+
+        var drive = result.Destinations.Single(d => d.Name == "Google Drive (rclone)");
+        Assert.Equal(DestinationHealthState.Healthy, drive.State);
     }
 }
