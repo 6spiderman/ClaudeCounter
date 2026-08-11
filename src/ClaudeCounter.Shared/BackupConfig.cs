@@ -41,6 +41,37 @@ public enum DriveTransport
     SyncFolder = 1,
 }
 
+/// <summary>
+/// Which named sync-folder destination <see cref="DriveTarget.FolderPath"/>
+/// belongs to (S16 design: named backup destinations) - a pure DISPLAY
+/// discriminator. Never read by BackupRunner or SyncFolderBackend, which
+/// only ever look at <see cref="DriveTarget.Transport"/> and <see
+/// cref="DriveTarget.FolderPath"/>; this exists purely so the Backup tab's
+/// "Back up to" selector can show "OneDrive" (or "NAS / network share", or
+/// "Dropbox", or "Google Drive") again the next time Settings opens, instead
+/// of a meaningless generic "sync folder". <see cref="Other"/> = 0 is the
+/// default specifically so a backup.json written before this field existed -
+/// including one written by the 1.2 sync-folder-transport build, which had
+/// Transport and FolderPath but not this - loads with SyncProvider already
+/// correct (back-compat): an absent property deserializing to its type
+/// default is exactly the intended behaviour, which is also why this does
+/// not bump <see cref="BackupConfig.CurrentBackupConfigVersion"/>.
+/// SettingsForm infers a display-only guess from FolderPath (see
+/// SyncProviderInference) when Transport is SyncFolder but this is still
+/// Other, rather than showing the user a meaningless label - but that
+/// inference is never written back to this field just from opening and
+/// re-saving Settings; it only changes when the user actually picks a named
+/// destination in the selector.
+/// </summary>
+public enum SyncProvider
+{
+    Other = 0,
+    GoogleDrive = 1,
+    OneDrive = 2,
+    Dropbox = 3,
+    Nas = 4,
+}
+
 public sealed class DriveTarget
 {
     public bool Enabled { get; set; }
@@ -62,6 +93,9 @@ public sealed class DriveTarget
     /// share is a first-class target for this transport, not an edge case.
     /// </summary>
     public string FolderPath { get; set; } = "";
+
+    /// <summary>Which named sync-folder destination <see cref="FolderPath"/> belongs to - see <see cref="SyncProvider"/>. Only meaningful when <see cref="Transport"/> is <see cref="DriveTransport.SyncFolder"/>; every backend ignores it and reads <see cref="FolderPath"/> directly.</summary>
+    public SyncProvider SyncProvider { get; set; } = SyncProvider.Other;
 
     /// <summary>Drive's own include/exclude selection - independent of <see cref="GitTarget"/>'s.</summary>
     public List<string> Include { get; set; } = new();
@@ -273,6 +307,13 @@ public sealed class BackupConfig
         Drive.FolderPath ??= "";
         if (!Enum.IsDefined(typeof(DriveTransport), Drive.Transport))
             Drive.Transport = DriveTransport.Rclone;
+
+        // S16: same "an undefined enum value must never reach anything
+        // downstream" guard as Transport just above - a hand-edited or
+        // future-version backup.json with e.g. "SyncProvider": 99 is reset
+        // to Other rather than left as a value this enum never produces.
+        if (!Enum.IsDefined(typeof(SyncProvider), Drive.SyncProvider))
+            Drive.SyncProvider = SyncProvider.Other;
     }
 
     /// <summary>

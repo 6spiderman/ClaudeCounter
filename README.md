@@ -202,17 +202,20 @@ to Claude...**
   placed near the tray or centered on screen, each configurable (or turned off)
   independently in Settings.
 - **Backup** (`ClaudeBackup.exe`): scheduled or on-demand backup of a subset
-  of your Claude config to a private GitHub repo and/or a Drive destination,
-  with restore built in. Installed by default; untick "Backup tools" on the
-  installer's Components page (choose "Custom installation") if you would
-  rather leave it out, and every backup control in Settings stays hidden when
-  it is not installed. The GitHub repo you configure **must be private**;
-  ClaudeCounter cannot verify that automatically, so it warns you in Settings
-  and in the log instead. The Drive destination has two transports: a **sync
-  folder** (point it at a Google Drive/OneDrive/Dropbox folder or a NAS share
-  - no sign-in needed, the sync client or the NAS does the upload) or an
-  **rclone remote** (advanced, needs a one-time Google Cloud Console setup of
-  your own OAuth client) - see
+  of your Claude config to a private GitHub repo and/or one cloud/NAS
+  destination, with restore built in. Installed by default; untick "Backup
+  tools" on the installer's Components page (choose "Custom installation") if
+  you would rather leave it out, and every backup control in Settings stays
+  hidden when it is not installed. The GitHub repo you configure **must be
+  private**; ClaudeCounter cannot verify that automatically, so it warns you
+  in Settings and in the log instead. Settings -> Backup -> "Back up to"
+  names each destination directly - **Google Drive**, **OneDrive**,
+  **Dropbox**, **NAS / network share** (all sync folder - no sign-in needed,
+  the sync client or the NAS does the upload, and picking one auto-detects
+  the folder for you), or **rclone remote** (advanced, needs a one-time
+  Google Cloud Console setup of your own OAuth client). GitHub plus one
+  cloud/NAS destination can be active at once; picking a different cloud/NAS
+  option replaces the current one - see
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
 - Single instance (a named mutex, on both platforms), single self-contained

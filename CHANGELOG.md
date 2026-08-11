@@ -32,18 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install or upgrade; choose "Custom" instead of "Full installation" on the
   installer's Components page if you would rather leave it out - the tray
   hides every backup control when the worker is not installed.
-- **Sync-folder Drive backup transport**, alongside the original rclone
-  transport: point the Drive destination at a folder your sync client already
-  watches (Google Drive for Desktop, OneDrive, Dropbox) or a NAS share, and
-  ClaudeCounter just writes a zip into it - no sign-in, no OAuth client, no
-  external binary. A new **Detect...** button on the Backup tab finds
-  candidate folders automatically (de-duplicating OneDrive's several
+- **Named backup destinations.** The Backup tab's "Back up to" list now names
+  every destination directly - GitHub, Google Drive, OneDrive, Dropbox, NAS /
+  network share, and rclone remote (advanced) - instead of a generic "Drive"
+  destination with a second, nested transport dropdown you had to open before
+  either word ever appeared anywhere in Settings. Picking Google Drive,
+  OneDrive, Dropbox, or NAS / network share auto-detects and fills in the
+  folder path for you right away (de-duplicating OneDrive's several
   environment variables, and offering a mapped NAS drive as its UNC path
   rather than the drive letter, since a drive letter mapping is not
-  guaranteed to resolve under a scheduled, non-interactive backup run). The
-  Drive destination uses one transport at a time - rclone remains available
-  as the advanced option for a destination the sync-folder method cannot
-  reach directly. See
+  guaranteed to resolve under a scheduled, non-interactive backup run); a
+  **Detect...** button lets you search again by hand, e.g. after signing into
+  a sync client that was not set up yet. Under the hood this is still the
+  same single Drive destination as before, so GitHub plus exactly one
+  cloud/NAS destination can be active at a time, and picking a different
+  cloud/NAS option replaces whichever one was configured before - the Backup
+  tab says so plainly next to the selector rather than leaving it to be
+  discovered by surprise. See
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
 - "Back up now" (tray menu and Settings) now waits for the backup to finish

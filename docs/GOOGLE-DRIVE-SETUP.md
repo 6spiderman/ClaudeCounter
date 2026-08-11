@@ -1,21 +1,25 @@
 # Drive backup setup
 
-ClaudeCounter's Drive destination has two transports. Pick one in **Settings** ->
-**Backup** -> destination selector -> **Google Drive** -> **Transport**:
+ClaudeCounter's Backup tab names each destination directly - **Settings** ->
+**Backup** -> **Back up to**:
 
-- **Sync folder** (recommended) - point ClaudeCounter at a folder your sync client
-  already watches (Google Drive for Desktop, OneDrive, Dropbox) or a NAS share.
-  No sign-in, no API setup, no external binary. The sync client - or the NAS
-  itself - does the actual upload; ClaudeCounter just writes a zip into an
-  ordinary folder.
-- **rclone remote** (advanced) - the original method: ClaudeCounter shells out to
+- **Google Drive**, **OneDrive**, **Dropbox**, or **NAS / network share** (all
+  sync folder, recommended) - point ClaudeCounter at a folder your sync client
+  already watches, or a NAS share. No sign-in, no API setup, no external
+  binary. The sync client - or the NAS itself - does the actual upload;
+  ClaudeCounter just writes a zip into an ordinary folder. Picking one of
+  these already tries to find and fill in the folder for you (see
+  [Detect...](#detect) below).
+- **rclone remote (advanced)** - the original method: ClaudeCounter shells out to
   [rclone](https://rclone.org), which you authorise once against your own Google
   OAuth client. More setup, but works with any rclone-supported remote, not just
   a folder a sync client already manages.
 
-They are **not** combined - the Drive destination uses one transport at a time,
-so you cannot back up to a NAS (sync folder) and an rclone remote simultaneously.
-GitHub plus one of them still works, since GitHub is a separate destination.
+They are **not** combined - underneath, this is still one Drive destination
+that uses one transport at a time, so you cannot back up to a NAS (sync
+folder) and an rclone remote simultaneously; picking a different cloud/NAS
+option replaces whichever one was configured before. GitHub plus one of them
+still works, since GitHub is a separate destination.
 
 This doc covers the sync-folder method first (start here unless you already know
 you need rclone), then OneDrive/Dropbox/NAS specifics, then the rclone method as
@@ -40,21 +44,28 @@ credential handling on ClaudeCounter's side either.
 
 ### Point ClaudeCounter at a folder
 
-**Settings** -> **Backup** -> destination selector -> **Google Drive**:
+**Settings** -> **Backup** -> **Back up to**:
 
-1. Tick **Back up to Drive**.
-2. **Transport**: **Sync folder (Google Drive, OneDrive, Dropbox, NAS)**.
-3. **Sync folder path**: click **Detect...** to find a candidate automatically
-   (see below), or **Browse...** to pick one by hand, or type a path directly.
-4. Choose what to back up with **Choose files...** - Drive has its own
-   selection, independent of GitHub.
+1. Pick **Google Drive**, **OneDrive**, **Dropbox**, or **NAS / network share** -
+   ClaudeCounter immediately tries to auto-detect and fill in the folder path for
+   this destination.
+2. Tick **Back up to this destination**.
+3. **Sync folder path**: already filled in if detection found exactly one match.
+   Left blank if it found none (never invents a path - use Detect... or Browse...
+   instead). If it found more than one match, a picker opened for you to choose.
+4. Choose what to back up with **Choose files...** - this destination has its
+   own selection, independent of GitHub.
 5. **Back up now** to confirm it works. On success you get a "Backup complete"
    message; check the log via **Open log folder** if anything looks wrong.
 
 ### Detect...
 
-Detect... probes this machine for sync-client folders and mapped drives it can
-find automatically, and lets you pick from whatever it finds:
+Picking a destination above already runs detection once automatically. The
+**Detect...** button re-runs it on demand - useful after signing into a sync
+client, or plugging in a NAS, that was not ready yet when Settings was first
+opened. Either way it probes this machine for sync-client folders and mapped
+drives, scoped to whichever destination is currently selected, and lets you
+pick from whatever it finds:
 
 - **OneDrive**: the `OneDrive`, `OneDriveConsumer`, and `OneDriveCommercial`
   environment variables (Windows sets whichever apply - a work/school account,
@@ -247,17 +258,16 @@ You should see `gdrive:`.
 
 ### Part 3 - Point ClaudeCounter at it
 
-**Settings** -> **Backup** -> destination selector -> **Google Drive**:
+**Settings** -> **Backup** -> **Back up to** -> **rclone remote (advanced)**:
 
-- Tick **Back up to Drive**
-- **Transport**: **rclone remote (advanced)**
+- Tick **Back up to this destination**
 - **Rclone remote**: `gdrive:ClaudeBackups`
 
 The `gdrive:` part must match the remote name from `rclone config`. The
 `ClaudeBackups` part is a folder rclone creates on first upload.
 
-Choose what to back up with **Choose files...** - Drive has its own selection,
-independent of GitHub.
+Choose what to back up with **Choose files...** - this destination has its own
+selection, independent of GitHub.
 
 Then **Back up now**. On success you get a "Backup complete" message; check the
 log via **Open log folder** if anything looks wrong.

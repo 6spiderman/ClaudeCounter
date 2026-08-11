@@ -422,6 +422,24 @@ public class SettingsFormSmokeTests
     // driveBlockHeight) was already being governed by GitHub's height before
     // this change, with enough spare margin that the new Transport row plus
     // the taller of the two swapped rows still does not exceed it.
+    //
+    // S16: replaced the two nested dropdowns (GitHub/Drive selector, then -
+    // only once "Drive" was picked - the "Transport" combo removed above)
+    // with one flat "Back up to" selector naming all six destinations
+    // directly, plus a new one-line note stating the one-at-a-time rule (see
+    // BuildBackupPage). Deleting the Transport combo did NOT give back a row
+    // here, despite removing a whole control: the Drive block was already
+    // shorter than the GitHub block by more than one row's worth (see the
+    // S14b paragraph above), so Math.Max(...) was already being governed by
+    // GitHub's height, not Drive's - shrinking Drive further changes
+    // nothing about that Math.Max. The new note line is the ONLY net
+    // addition, and it is added once, shared, above both blocks - not
+    // per-block - so its height is not absorbed by that same margin. First
+    // pass (unabridged note text, standard RowGap spacing) measured 694px,
+    // 7px over budget; shortening the note to one line and tightening the
+    // handful of pixels of spacing directly around it (not touched
+    // anywhere else in this file) brought it down to 684px - 3px of margin,
+    // thinner than this suite's history but genuinely under budget.
     [Fact]
     public void SettingsFormHeightStaysWithinTheDisplayBudget()
     {

@@ -236,6 +236,36 @@ public static class SyncFolderScanner
         return found;
     }
 
+    /// <summary>
+    /// Narrows a candidate list (normally the result of <see cref="Detect"/>)
+    /// down to the ones that plausibly belong to <paramref name="provider"/> -
+    /// the Backup tab's named-destination selector (S16) uses this so
+    /// picking "OneDrive" only ever offers OneDrive-shaped candidates, not
+    /// every sync folder found on the machine. Matches on <see
+    /// cref="SyncFolderCandidate.DisplayName"/>'s prefix, which <see
+    /// cref="DetectFrom"/> above already sets to one of a small fixed set
+    /// ("OneDrive...", "Google Drive...", "Dropbox", "NAS share (...)") for
+    /// every candidate it can produce. <see cref="SyncProvider.Other"/>
+    /// matches nothing - there is no "Other" entry in the named-destination
+    /// selector to filter for.
+    /// </summary>
+    public static IReadOnlyList<SyncFolderCandidate> FilterByProvider(
+        IReadOnlyList<SyncFolderCandidate> candidates, SyncProvider provider)
+    {
+        string? prefix = provider switch
+        {
+            SyncProvider.OneDrive => "OneDrive",
+            SyncProvider.GoogleDrive => "Google Drive",
+            SyncProvider.Dropbox => "Dropbox",
+            SyncProvider.Nas => "NAS share",
+            _ => null,
+        };
+        if (prefix is null)
+            return Array.Empty<SyncFolderCandidate>();
+
+        return candidates.Where(c => c.DisplayName.StartsWith(prefix, StringComparison.Ordinal)).ToList();
+    }
+
     private static void AddIfSet(
         List<SyncFolderCandidate> candidates, string displayName,
         IReadOnlyDictionary<string, string?> environmentVariables, string key)

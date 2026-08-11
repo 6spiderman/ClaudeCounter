@@ -34,21 +34,24 @@ public static class BackupHelpText
         "on the remote if it does not already exist.";
 
     public const string DriveEnabled =
-        "Copies a timestamped zip to the Drive destination, using whichever " +
-        "transport is selected below - a sync folder (no sign-in needed) or " +
-        "rclone (advanced). See Help for setup steps for either.";
+        "Copies a timestamped zip to the destination picked above - a sync " +
+        "folder (Google Drive, OneDrive, Dropbox, NAS - no sign-in needed) " +
+        "or an rclone remote (advanced). See Help for setup steps for " +
+        "either.";
 
     public const string SyncFolder =
         "No sign-in or API setup needed. Point this at a folder your sync " +
         "client already watches - Google Drive for Desktop, OneDrive, " +
         "Dropbox all present as ordinary folders, and the sync client does " +
-        "the actual upload on its own. A NAS share works the same way. Use " +
-        "Detect... to find one automatically, or Browse... to pick one by " +
-        "hand. For a NAS, prefer a UNC path (\\\\server\\share\\...) over a " +
-        "mapped drive letter (M:\\...) - a drive letter mapping is tied to " +
-        "your interactive sign-in session and is not guaranteed to resolve " +
-        "when the backup runs from Task Scheduler, so a letter-based path " +
-        "can silently fail once scheduled while a UNC path keeps working; " +
+        "the actual upload on its own. A NAS share works the same way. " +
+        "Picking Google Drive, OneDrive, Dropbox or NAS / network share " +
+        "above already tries to find and fill this in for you; use " +
+        "Detect... to search again, or Browse... to pick one by hand. For " +
+        "a NAS, prefer a UNC path (\\\\server\\share\\...) over a mapped " +
+        "drive letter (M:\\...) - a drive letter mapping is tied to your " +
+        "interactive sign-in session and is not guaranteed to resolve when " +
+        "the backup runs from Task Scheduler, so a letter-based path can " +
+        "silently fail once scheduled while a UNC path keeps working; " +
         "Detect... already offers the UNC form for a mapped drive for this " +
         "reason.";
 
@@ -108,20 +111,29 @@ public static class BackupHelpText
         "cannot verify that for you.\r\n" +
         "\r\n" +
         "DRIVE SETUP\r\n" +
-        "The Drive destination has two transports - pick one with the " +
-        "Transport dropdown. They are NOT combined: the Drive destination " +
-        "uses one transport at a time, so you cannot back up to both a NAS " +
-        "(sync folder) and an rclone remote at once. GitHub plus one of " +
-        "them still works fine, since GitHub is a separate destination.\r\n" +
+        "Settings -> Backup -> \"Back up to\" names each destination " +
+        "directly: GitHub, Google Drive, OneDrive, Dropbox, NAS / network " +
+        "share, or rclone remote (advanced). Google Drive, OneDrive, " +
+        "Dropbox and NAS / network share all use the sync-folder method " +
+        "below; rclone remote uses the advanced method further down. They " +
+        "are NOT combined: underneath, this is still one Drive " +
+        "destination that uses one transport at a time, so you cannot " +
+        "back up to a NAS (sync folder) and an rclone remote " +
+        "simultaneously - picking a different cloud/NAS option replaces " +
+        "whichever one was configured before. GitHub plus one of them " +
+        "still works fine, since GitHub is a separate destination.\r\n" +
         "\r\n" +
         "SYNC FOLDER (recommended) - no sign-in, no API setup\r\n" +
-        "Point it at a folder your sync client already watches - Google " +
-        "Drive for Desktop, OneDrive, and Dropbox all present as ordinary " +
-        "folders, and the sync client does the actual upload on its own; a " +
-        "NAS share works the same way. Click Detect... to find one " +
-        "automatically, or Browse... to pick one by hand. For a NAS, " +
-        "prefer a UNC path (\\\\server\\share\\...) over a mapped drive " +
-        "letter (M:\\...) - a drive letter mapping belongs to your " +
+        "Picking Google Drive, OneDrive, Dropbox, or NAS / network share " +
+        "above already tries to find and fill in the folder for you - see " +
+        "Detect... below if you want to search again, e.g. after signing " +
+        "into a sync client that was not set up yet when Settings was " +
+        "first opened. Google Drive for Desktop, OneDrive, and Dropbox " +
+        "all present as ordinary folders, and the sync client does the " +
+        "actual upload on its own; a NAS share works the same way. Click " +
+        "Detect... to search again, or Browse... to pick one by hand. For " +
+        "a NAS, prefer a UNC path (\\\\server\\share\\...) over a mapped " +
+        "drive letter (M:\\...) - a drive letter mapping belongs to your " +
         "interactive sign-in session and is not guaranteed to resolve when " +
         "the backup runs from Task Scheduler, so a letter-based path can " +
         "silently fail once scheduled while a UNC path keeps working; " +

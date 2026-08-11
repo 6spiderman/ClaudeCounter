@@ -28,6 +28,70 @@ public sealed class SettingsForm : Form
         ("hourly", "Hourly"),
     ];
 
+    /// <summary>
+    /// One entry per item in the Backup tab's "Back up to" selector (S16
+    /// design: named backup destinations, replacing the old two nested
+    /// dropdowns - see BuildBackupPage's own doc comment). GitHub is its own
+    /// row; the other five all describe the SAME underlying Drive slot
+    /// (DriveTarget has one Transport/FolderPath/RcloneRemote/SyncProvider,
+    /// not five) - picking one of them just picks what that slot's Transport
+    /// and, for the sync-folder transport, SyncProvider should be. Kept as a
+    /// single source of truth (index i's label IS item i in the ComboBox)
+    /// rather than parallel arrays matched only by SelectedIndex, mirroring
+    /// BackupFrequencies just above.
+    /// </summary>
+    private readonly record struct BackupDestinationOption(string Label, bool IsGithub, DriveTransport Transport, SyncProvider Provider);
+
+    private static readonly BackupDestinationOption[] BackupDestinationOptions =
+    [
+        new("GitHub", true, DriveTransport.Rclone, SyncProvider.Other),
+        new("Google Drive (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.GoogleDrive),
+        new("OneDrive (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.OneDrive),
+        new("Dropbox (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.Dropbox),
+        new("NAS / network share", false, DriveTransport.SyncFolder, SyncProvider.Nas),
+        new("rclone remote (advanced)", false, DriveTransport.Rclone, SyncProvider.Other),
+    ];
+
+    /// <summary>
+    /// Picks which item of <see cref="BackupDestinationOptions"/> the "Back
+    /// up to" selector should open on for <paramref name="config"/>. Public
+    /// and static (no Form) for the same reason as <see
+    /// cref="HasEmbeddedCredential"/> further down: this project's tests
+    /// never construct a Form except via the dedicated STA smoke-test
+    /// helper. Mirrors the old selector's own tie-break - GitHub wins when
+    /// it is enabled, or when neither destination is enabled - and then, for
+    /// Drive, reads its Transport (and, for the sync-folder transport, its
+    /// SyncProvider - inferring one from FolderPath via <see
+    /// cref="SyncProviderInference"/> when SyncProvider is still Other, e.g.
+    /// a backup.json written by the pre-S16 build) to land on the matching
+    /// item.
+    /// </summary>
+    public static int InitialDestinationIndex(BackupConfig config)
+    {
+        if (config.Github.Enabled || !config.Drive.Enabled)
+            return 0;
+
+        if (config.Drive.Transport != DriveTransport.SyncFolder)
+            return 5; // rclone remote (advanced)
+
+        var provider = config.Drive.SyncProvider == SyncProvider.Other
+            ? SyncProviderInference.InferFromPath(config.Drive.FolderPath)
+            : config.Drive.SyncProvider;
+
+        return provider switch
+        {
+            SyncProvider.OneDrive => 2,
+            SyncProvider.Dropbox => 3,
+            SyncProvider.Nas => 4,
+            // GoogleDrive, or Other (an unrecognised path) - Google Drive
+            // was the original combined "Sync folder" transport's first/
+            // default entry, so it is the least surprising fallback rather
+            // than inventing a sixth "Custom folder" item the design brief
+            // never asked for.
+            _ => 1,
+        };
+    }
+
     // Shared explicitly rather than relying on ambient Font inheritance: pages
     // are measured (PreferredHeight / GetPreferredSize) before they are ever
     // attached to the form's control tree, and an unattached control's ambient
@@ -81,25 +145,40 @@ public sealed class SettingsForm : Form
     // S5, fix round 1: GitHub's and Drive's connection fields plus their own
     // Include/Exclude now live in two separate blocks (see BuildGithubBlock /
     // BuildDriveBlock) that are both always constructed, with only one ever
-    // Visible - _backupSelectionTarget (GitHub / Drive) controls
-    // which. Every field below is therefore a genuinely separate Control per
-    // destination (not a single shared control whose content gets swapped),
-    // so OnSaveBackupSchedule can read both destinations' values directly at
-    // any time regardless of which block currently happens to be on screen.
+    // Visible - _backupDestination (S16: one flat "Back up to" list of named
+    // destinations) controls which. Every field below is therefore a
+    // genuinely separate Control per destination (not a single shared
+    // control whose content gets swapped), so OnSaveBackupSchedule can read
+    // both destinations' values directly at any time regardless of which
+    // block currently happens to be on screen.
     private CheckBox? _backupGithubEnabled;
     private TextBox? _backupGithubUrl;
     private TextBox? _backupGithubBranch;
     private TextBox? _backupGithubInclude;
     private TextBox? _backupGithubExclude;
     private CheckBox? _backupDriveEnabled;
-    private ComboBox? _backupDriveTransport;
     private TextBox? _backupDriveFolderPath;
     private TextBox? _backupDriveRemote;
     private TextBox? _backupDriveInclude;
     private TextBox? _backupDriveExclude;
-    private ComboBox? _backupSelectionTarget;
+    private ComboBox? _backupDestination;
     private Panel? _backupGithubBlock;
     private Panel? _backupDriveBlock;
+
+    // S16: replaces the old nested "Transport" dropdown - the top-level
+    // _backupDestination selector now encodes the Drive slot's transport AND
+    // (for the sync-folder transport) which named provider it is directly,
+    // so there is no separate control to read either back from. But
+    // _backupDestination's own SelectedIndex is not enough on its own to
+    // recover "what should be saved for Drive" at save time, because GitHub
+    // is one of the SAME selector's items now - picking GitHub must not
+    // forget whatever the Drive slot was last set to. These two fields are
+    // that memory: seeded from the loaded config, and updated only when the
+    // user picks one of the selector's non-GitHub items (see
+    // OnBackupDestinationChanged) - never touched while GitHub is selected,
+    // so switching to GitHub and back leaves them exactly as they were.
+    private DriveTransport _backupDriveTransportSelection;
+    private SyncProvider _backupDriveSyncProviderSelection;
     // S14b: the sync-folder-path row and the rclone-remote row occupy the
     // SAME y-range within the Drive block and are never both visible at
     // once - same "two blocks, one Visible" swap _backupGithubBlock/
@@ -412,14 +491,23 @@ public sealed class SettingsForm : Form
     /// remote) plus that destination's own Include/Exclude live in two
     /// separate blocks (see BuildGithubBlock / BuildDriveBlock) that are
     /// both built and added to the page up front, but only one is ever
-    /// Visible at a time - see the selector's SelectedIndexChanged handler
-    /// below. Fix round 1: this used to show BOTH destinations' connection
-    /// fields simultaneously with only the Include/Exclude boxes switching,
-    /// which made the Backup tab tall enough (705px) to run off the bottom
-    /// of a 1366x768 display at 100% DPI. Showing only one destination's
-    /// fields at a time both fixes the height and makes "which destination
-    /// am I editing" unambiguous without any extra dynamic labeling - the
-    /// visible block IS the answer.
+    /// Visible at a time - see OnBackupDestinationChanged. Fix round 1: this
+    /// used to show BOTH destinations' connection fields simultaneously with
+    /// only the Include/Exclude boxes switching, which made the Backup tab
+    /// tall enough (705px) to run off the bottom of a 1366x768 display at
+    /// 100% DPI. Showing only one destination's fields at a time both fixes
+    /// the height and makes "which destination am I editing" unambiguous
+    /// without any extra dynamic labeling - the visible block IS the answer.
+    ///
+    /// S16: the selector itself (_backupDestination) went from two nested
+    /// dropdowns ("Editing settings for": GitHub/Drive, then, only once
+    /// "Drive" was picked, a second "Transport" dropdown) to one flat,
+    /// named-destination list - see BackupDestinationOptions. The word
+    /// "OneDrive" (or "NAS") now appears directly in the list the user
+    /// actually picks from, which is the whole point of this change: a user
+    /// asked for OneDrive/NAS backup could not find either word anywhere in
+    /// Settings before this, because both were hidden a level down inside a
+    /// generic "Drive" destination's own transport choice.
     ///
     /// Only called when BackupTaskManager.WorkerAvailable() - current values
     /// are loaded from BackupConfig.DefaultPath().
@@ -482,39 +570,48 @@ public sealed class SettingsForm : Form
         page.Controls.Add(advancedButton);
         y += helpButton.Height + RowGap;
 
-        var selectorLabel = NewSectionLabel("Editing settings for", palette, y);
+        var selectorLabel = NewSectionLabel("Back up to", palette, y);
         page.Controls.Add(selectorLabel);
         y += selectorLabel.PreferredHeight + 2;
 
-        // Fix round 2: open on whichever destination is actually enabled in
-        // the saved config, not always GitHub - a Drive-only user should not
-        // land on a disabled GitHub block the moment they open Settings.
-        // Falls back to GitHub (index 0) when neither is enabled, since that
-        // is the same tie-break Default() and every other "pick a starting
-        // index" spot in this dialog already uses.
-        var initialShowGithub = config.Github.Enabled || !config.Drive.Enabled;
+        // S16: one named-destination list replaces the old two nested
+        // dropdowns (an "Editing settings for" GitHub/Drive picker, with a
+        // second "Transport" dropdown only shown once "Drive" was picked) -
+        // see BackupDestinationOptions and InitialDestinationIndex. Falls
+        // back to GitHub (index 0) when neither destination is enabled,
+        // exactly the same tie-break the old selector used.
+        var initialIndex = InitialDestinationIndex(config);
 
-        _backupSelectionTarget = NewCombo(palette, 150);
-        _backupSelectionTarget.Location = new Point(PagePadX, y);
-        _backupSelectionTarget.Items.Add("GitHub");
-        // "Drive", not "Google Drive" - transport-neutral, matching
-        // BuildDriveBlock's own "Back up to Drive" checkbox: this selector
-        // just picks which destination's Include/Exclude is being edited,
-        // and its label is fixed at construction time while the transport
-        // combo inside the Drive block can change live, so a transport-
-        // specific label here would go stale the moment the user switches
-        // transports without reopening Settings.
-        _backupSelectionTarget.Items.Add("Drive");
-        _backupSelectionTarget.SelectedIndex = initialShowGithub ? 0 : 1;
-        page.Controls.Add(_backupSelectionTarget);
-        y += _backupSelectionTarget.Height + RowGap;
+        _backupDestination = NewCombo(palette, 250);
+        _backupDestination.Location = new Point(PagePadX, y);
+        foreach (var option in BackupDestinationOptions)
+            _backupDestination.Items.Add(option.Label);
+        _backupDestination.SelectedIndex = initialIndex;
+        page.Controls.Add(_backupDestination);
+        y += _backupDestination.Height;
+
+        // Say the one-at-a-time rule plainly, right where the choice is made -
+        // GitHub plus exactly one cloud/NAS destination can be active; this
+        // is not a bug, but it must never be discovered by surprise. Kept to
+        // one short line (see the design note on this dialog's tight height
+        // budget) - the full rationale lives in the Help guide.
+        var oneAtATimeNote = NewSubtleLabel(
+            "GitHub + one cloud/NAS destination at a time; picking another replaces it.",
+            palette, fullWidth);
+        oneAtATimeNote.Location = new Point(PagePadX, y);
+        page.Controls.Add(oneAtATimeNote);
+        y += oneAtATimeNote.PreferredHeight;
+
+        var initialOption = BackupDestinationOptions[initialIndex];
+        _backupDriveTransportSelection = config.Drive.Transport;
+        _backupDriveSyncProviderSelection = config.Drive.SyncProvider;
 
         var (githubBlock, githubBlockHeight) = BuildGithubBlock(config.Github, config.SourceRoot, palette, fullWidth, rightEdgeX);
         var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, config.SourceRoot, palette, fullWidth, rightEdgeX);
         githubBlock.Location = new Point(0, y);
         driveBlock.Location = new Point(0, y);
-        githubBlock.Visible = initialShowGithub;
-        driveBlock.Visible = !initialShowGithub;
+        githubBlock.Visible = initialOption.IsGithub;
+        driveBlock.Visible = !initialOption.IsGithub;
         // Both blocks are added regardless of the selector's starting value -
         // only Visible toggles thereafter - so every control inside both
         // (including the ones not currently shown) is fully constructed and
@@ -524,12 +621,7 @@ public sealed class SettingsForm : Form
         page.Controls.Add(githubBlock);
         _backupGithubBlock = githubBlock;
         _backupDriveBlock = driveBlock;
-        _backupSelectionTarget.SelectedIndexChanged += (_, _) =>
-        {
-            var showGithub = _backupSelectionTarget.SelectedIndex == 0;
-            _backupGithubBlock!.Visible = showGithub;
-            _backupDriveBlock!.Visible = !showGithub;
-        };
+        _backupDestination.SelectedIndexChanged += (_, _) => OnBackupDestinationChanged(palette);
         y += Math.Max(githubBlockHeight, driveBlockHeight) + RowGap;
 
         page.Controls.Add(NewFieldLabel("Frequency", palette, y));
@@ -650,73 +742,72 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// Drive's connection fields (enable, transport selector, then EITHER
-    /// the sync-folder path row OR the rclone-remote row depending on that
-    /// selection) plus Drive's own Include/Exclude. See BuildGithubBlock's
-    /// doc comment for the general layout reasoning.
+    /// Drive's connection fields (enable checkbox, then EITHER the
+    /// sync-folder path row OR the rclone-remote row depending on the
+    /// top-level "Back up to" selection) plus Drive's own Include/Exclude.
+    /// See BuildGithubBlock's doc comment for the general layout reasoning.
     ///
-    /// S14b: the transport row-swap (BuildSyncFolderRow / BuildRcloneRow,
-    /// toggled by _backupDriveTransport.SelectedIndexChanged) is a nested
-    /// instance of the exact same "both built, only one Visible" pattern
-    /// BuildBackupPage already uses for _backupGithubBlock/_backupDriveBlock
-    /// - both row panels are always fully constructed (so
-    /// OnSaveBackupSchedule can read either one's controls regardless of
-    /// which is on screen), and the space reserved below them is
-    /// Math.Max(folderRowHeight, rcloneRowHeight), so swapping costs no more
-    /// dialog height than whichever row happens to be taller.
+    /// S14b: the transport row-swap (BuildSyncFolderRow / BuildRcloneRow) is
+    /// a nested instance of the exact same "both built, only one Visible"
+    /// pattern BuildBackupPage already uses for
+    /// _backupGithubBlock/_backupDriveBlock - both row panels are always
+    /// fully constructed (so OnSaveBackupSchedule can read either one's
+    /// controls regardless of which is on screen), and the space reserved
+    /// below them is Math.Max(folderRowHeight, rcloneRowHeight), so swapping
+    /// costs no more dialog height than whichever row happens to be taller.
+    ///
+    /// S16: what used to toggle that swap - this block's own "Transport"
+    /// ComboBox - is gone. The row-swap is now driven by
+    /// OnBackupDestinationChanged, reacting to the top-level "Back up to"
+    /// selector in BuildBackupPage instead - one flat selector instead of
+    /// two nested ones, but the same swap mechanics underneath.
     /// </summary>
     private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
     {
         var block = new Panel { BackColor = palette.Back };
         var y = 0;
 
-        // "Drive" (not "Google Drive (rclone)") - transport-neutral, since
-        // this destination now also covers OneDrive, Dropbox and a NAS share
-        // via the sync-folder transport chosen just below, not only rclone.
-        _backupDriveEnabled = NewCheckBox("Back up to Drive", target.Enabled, palette);
+        // S16: "Back up to this destination", not "Back up to Drive" - the
+        // "Back up to" selector above now names the destination directly
+        // (Google Drive / OneDrive / Dropbox / NAS / rclone remote), so a
+        // second, generic "Drive" label here would just be redundant noise
+        // next to it rather than adding information.
+        _backupDriveEnabled = NewCheckBox("Back up to this destination", target.Enabled, palette);
         _backupDriveEnabled.Location = new Point(PagePadX, y);
         block.Controls.Add(_backupDriveEnabled);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
         y += _backupDriveEnabled.Height + RowGap;
 
-        block.Controls.Add(NewFieldLabel("Transport", palette, y));
-        _backupDriveTransport = NewCombo(palette, 280);
-        _backupDriveTransport.Location = new Point(FieldX, y);
-        _backupDriveTransport.Items.Add("Sync folder (Google Drive, OneDrive, Dropbox, NAS)");
-        _backupDriveTransport.Items.Add("rclone remote (advanced)");
-        var showSyncFolder = target.Transport == DriveTransport.SyncFolder;
-        _backupDriveTransport.SelectedIndex = showSyncFolder ? 0 : 1;
-        block.Controls.Add(_backupDriveTransport);
-        y += _backupDriveTransport.Height + RowGap;
-
+        // S16: no more "Transport" combo here - the top-level "Back up to"
+        // selector (BuildBackupPage) now IS the transport choice, so this
+        // block only needs to show whichever row that selection implies.
+        // Initial visibility still comes from the loaded target.Transport
+        // (matches _backupDriveTransportSelection's own initial value, set
+        // by BuildBackupPage from the same config); OnBackupDestinationChanged
+        // takes over from there whenever the user changes the selector.
         var (folderRow, folderRowHeight) = BuildSyncFolderRow(target, palette, fullWidth, rightEdgeX);
         var (rcloneRow, rcloneRowHeight) = BuildRcloneRow(target, palette);
+        var showSyncFolder = target.Transport == DriveTransport.SyncFolder;
         folderRow.Location = new Point(0, y);
         rcloneRow.Location = new Point(0, y);
         folderRow.Visible = showSyncFolder;
         rcloneRow.Visible = !showSyncFolder;
-        // Both rows are added regardless of the transport combo's starting
-        // value - only Visible toggles thereafter - mirroring
-        // BuildBackupPage's own comment on githubBlock/driveBlock.
+        // Both rows are added regardless of the starting transport - only
+        // Visible toggles thereafter - mirroring BuildBackupPage's own
+        // comment on githubBlock/driveBlock.
         block.Controls.Add(rcloneRow);
         block.Controls.Add(folderRow);
         _backupDriveFolderRow = folderRow;
         _backupDriveRcloneRow = rcloneRow;
-        _backupDriveTransport.SelectedIndexChanged += (_, _) =>
-        {
-            var isSyncFolder = _backupDriveTransport.SelectedIndex == 0;
-            _backupDriveFolderRow!.Visible = isSyncFolder;
-            _backupDriveRcloneRow!.Visible = !isSyncFolder;
-        };
         y += Math.Max(folderRowHeight, rcloneRowHeight) + RowGap;
 
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         block.Controls.Add(includeLabel);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
-        // "Drive", not "Google Drive" - same transport-neutral reasoning as
-        // _backupSelectionTarget's "Drive" item above (this is only a picker
-        // dialog title, captured once in a closure at construction time, so
-        // it cannot track a later change to the transport combo either).
+        // "Drive", not the currently-picked destination's own name - this is
+        // only a picker dialog title, captured once in a closure at
+        // construction time, so it cannot track a later change to the "Back
+        // up to" selector above either.
         var chooseDriveButton = AddChooseFilesButton(
             block, palette, "Drive", sourceRoot, () => _backupDriveInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
         y += Math.Max(includeLabel.PreferredHeight, chooseDriveButton.Height) + 2;
@@ -826,13 +917,93 @@ public sealed class SettingsForm : Form
     /// SyncFolderDetectDialog, rather than making them go find the path
     /// themselves. On Cancel, or when the dialog is dismissed without a
     /// selection, the textbox is left untouched.
+    ///
+    /// S16: scoped to whichever destination is currently selected (via
+    /// SyncFolderScanner.FilterByProvider) rather than offering every
+    /// candidate found on the machine - picking "OneDrive" and then clicking
+    /// Detect... again (e.g. after signing into a sync client that was not
+    /// set up yet when Settings was first opened) should only ever offer
+    /// OneDrive candidates, not a Dropbox or NAS one the user did not ask
+    /// for here. Retained as a standalone button alongside the automatic
+    /// detect-on-select (see OnBackupDestinationChanged/AutoDetectForProvider)
+    /// rather than folded away entirely, specifically for this re-detect
+    /// case - the automatic version only runs once, at the moment the
+    /// selector changes.
     /// </summary>
     private void OnDetectSyncFolder(Palette palette)
     {
-        var candidates = SyncFolderScanner.Detect();
+        var provider = BackupDestinationOptions[_backupDestination!.SelectedIndex].Provider;
+        var candidates = SyncFolderScanner.FilterByProvider(SyncFolderScanner.Detect(), provider);
         using var dialog = new SyncFolderDetectDialog(palette, candidates);
         if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedPath is { } path)
             _backupDriveFolderPath!.Text = path;
+    }
+
+    /// <summary>
+    /// S16: fires whenever the user changes the "Back up to" selector (never
+    /// during construction - BuildBackupPage sets SelectedIndex before
+    /// wiring this handler, exactly like the old two-dropdown version did,
+    /// so opening Settings on an already-configured destination never
+    /// re-triggers detection or clears anything). Swaps which block/row is
+    /// visible, and - only when the newly-picked option is a sync-folder
+    /// destination - updates the two "what should be saved for Drive"
+    /// memory fields and runs auto-detection for it. Picking GitHub leaves
+    /// _backupDriveTransportSelection/_backupDriveSyncProviderSelection (and
+    /// the folder-path/rclone-remote textboxes) exactly as they were, so
+    /// switching to GitHub and back changes nothing about the Drive slot.
+    /// </summary>
+    private void OnBackupDestinationChanged(Palette palette)
+    {
+        var option = BackupDestinationOptions[_backupDestination!.SelectedIndex];
+        _backupGithubBlock!.Visible = option.IsGithub;
+        _backupDriveBlock!.Visible = !option.IsGithub;
+        if (option.IsGithub)
+            return;
+
+        _backupDriveTransportSelection = option.Transport;
+        var showSyncFolder = option.Transport == DriveTransport.SyncFolder;
+        _backupDriveFolderRow!.Visible = showSyncFolder;
+        _backupDriveRcloneRow!.Visible = !showSyncFolder;
+
+        if (!showSyncFolder)
+            return; // rclone remote (advanced): no auto-detection for this one.
+
+        _backupDriveSyncProviderSelection = option.Provider;
+        AutoDetectForProvider(option.Provider, palette);
+    }
+
+    /// <summary>
+    /// S16: the whole point of naming the destinations - selecting OneDrive/
+    /// Google Drive/Dropbox/NAS should do the path-finding work for the user
+    /// instead of making them go find it themselves (mirrors Detect...'s own
+    /// reasoning above, just triggered by the selection itself). Exactly one
+    /// match is applied directly; zero matches clears the box rather than
+    /// leaving a PREVIOUS destination's now-mismatched path sitting there -
+    /// never invents a path either; more than one match opens the same
+    /// SyncFolderDetectDialog Detect... uses, scoped to this provider, so
+    /// the user picks rather than this silently guessing - on Cancel the box
+    /// is left exactly as it was, the same as every other
+    /// Cancel-leaves-it-alone control in this dialog.
+    /// </summary>
+    private void AutoDetectForProvider(SyncProvider provider, Palette palette)
+    {
+        var candidates = SyncFolderScanner.FilterByProvider(SyncFolderScanner.Detect(), provider);
+        switch (candidates.Count)
+        {
+            case 0:
+                _backupDriveFolderPath!.Text = "";
+                break;
+            case 1:
+                _backupDriveFolderPath!.Text = candidates[0].Path;
+                break;
+            default:
+                using (var dialog = new SyncFolderDetectDialog(palette, candidates))
+                {
+                    if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedPath is { } path)
+                        _backupDriveFolderPath!.Text = path;
+                }
+                break;
+        }
     }
 
     /// <summary>
@@ -1145,7 +1316,14 @@ public sealed class SettingsForm : Form
         // blocked here (BackupRunner catches that at run time instead), and
         // the validator's own blank-path message ("...is enabled but no
         // folder is configured") is only accurate under that same condition.
-        var driveTransport = _backupDriveTransport!.SelectedIndex == 0 ? DriveTransport.SyncFolder : DriveTransport.Rclone;
+        //
+        // S16: driveTransport/driveProvider now come from
+        // _backupDriveTransportSelection/_backupDriveSyncProviderSelection -
+        // the "Back up to" selector's own SelectedIndex is not enough on its
+        // own here, because it may currently be showing GitHub, and these
+        // two fields are exactly what remembers the Drive slot's last
+        // selection through that (see their own doc comment).
+        var driveTransport = _backupDriveTransportSelection;
         var driveFolderPath = _backupDriveFolderPath!.Text.Trim();
         if (_backupDriveEnabled!.Checked && driveTransport == DriveTransport.SyncFolder)
         {
@@ -1164,6 +1342,7 @@ public sealed class SettingsForm : Form
         config.Github.Exclude = SplitLines(_backupGithubExclude!.Text);
         config.Drive.Enabled = _backupDriveEnabled.Checked;
         config.Drive.Transport = driveTransport;
+        config.Drive.SyncProvider = _backupDriveSyncProviderSelection;
         config.Drive.FolderPath = driveFolderPath;
         config.Drive.RcloneRemote = rcloneRemote;
         config.Drive.Include = SplitLines(_backupDriveInclude!.Text);

@@ -368,6 +368,88 @@ public class BackupConfigTests
         finally { File.Delete(path); }
     }
 
+    // S16: SyncProvider defaults to Other (0), same back-compat shape as
+    // Transport - a config with no SyncProvider property at all must load
+    // exactly as it did before this field existed.
+    [Fact]
+    public void DefaultSyncProviderIsOther()
+    {
+        var c = BackupConfig.Default();
+        Assert.Equal(SyncProvider.Other, c.Drive.SyncProvider);
+    }
+
+    [Fact]
+    public void SyncProviderRoundTripsThroughFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            var c = BackupConfig.Default();
+            c.Drive.Transport = DriveTransport.SyncFolder;
+            c.Drive.SyncProvider = SyncProvider.Nas;
+            c.Drive.FolderPath = @"\\192.168.1.210\media\ClaudeBackups";
+            c.Save(path);
+
+            var back = BackupConfig.Load(path);
+            Assert.Equal(SyncProvider.Nas, back.Drive.SyncProvider);
+            Assert.Equal(@"\\192.168.1.210\media\ClaudeBackups", back.Drive.FolderPath);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A backup.json written before this field existed - including one
+    // written by the 1.2 sync-folder-transport build, which had Transport
+    // and FolderPath but no SyncProvider property at all - must load with
+    // SyncProvider defaulting to Other, not throw and not silently guess a
+    // provider (that guessing is SyncProviderInference's job, and it is
+    // display-only - see SettingsForm.InitialDestinationIndex).
+    [Fact]
+    public void MissingSyncProviderFieldDefaultsToOther()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": true, "RcloneRemote": "", "Transport": 1, "FolderPath": "\\\\192.168.1.210\\media" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(SyncProvider.Other, loaded.Drive.SyncProvider);
+            Assert.Equal(DriveTransport.SyncFolder, loaded.Drive.Transport);
+            Assert.Equal(@"\\192.168.1.210\media", loaded.Drive.FolderPath);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // An out-of-range SyncProvider value (a hand-edited or future-version
+    // file) must be reset to Other by Normalize, mirroring Transport's own
+    // out-of-range guard just below.
+    [Fact]
+    public void OutOfRangeSyncProviderValueIsNormalizedToOtherOnLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "", "SyncProvider": 99 },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(SyncProvider.Other, loaded.Drive.SyncProvider);
+        }
+        finally { File.Delete(path); }
+    }
+
     // An out-of-range Transport value (a hand-edited or future-version file)
     // must be reset to Rclone by Normalize rather than reaching
     // BackupRunner's transport switch as an undefined enum value.

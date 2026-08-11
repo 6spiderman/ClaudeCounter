@@ -208,3 +208,99 @@ public class SyncFolderScannerTests : IDisposable
         Assert.NotNull(found);
     }
 }
+
+/// <summary>
+/// S16: SyncFolderScanner.FilterByProvider is what lets the Backup tab's
+/// named-destination selector ("OneDrive", "NAS / network share", ...) offer
+/// only the candidates that plausibly match whichever destination the user
+/// picked, instead of every sync folder found on the machine. Built on the
+/// same DisplayName-prefix convention DetectFrom itself already produces -
+/// see that method's own candidates.
+/// </summary>
+public class SyncFolderScannerFilterByProviderTests
+{
+    [Fact]
+    public void OneDriveFilterKeepsOnlyOneDriveCandidates()
+    {
+        var candidates = new[]
+        {
+            new SyncFolderCandidate("OneDrive - Work/School", @"C:\OneDriveWork"),
+            new SyncFolderCandidate("OneDrive - Personal", @"C:\OneDrivePersonal"),
+            new SyncFolderCandidate("Google Drive", @"C:\GDrive"),
+            new SyncFolderCandidate("Dropbox", @"C:\Dropbox"),
+        };
+
+        var filtered = SyncFolderScanner.FilterByProvider(candidates, SyncProvider.OneDrive);
+
+        Assert.Equal(2, filtered.Count);
+        Assert.All(filtered, c => Assert.StartsWith("OneDrive", c.DisplayName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GoogleDriveFilterKeepsOnlyGoogleDriveCandidates()
+    {
+        var candidates = new[]
+        {
+            new SyncFolderCandidate("Google Drive", @"C:\Users\me\Google Drive"),
+            new SyncFolderCandidate("Google Drive (G:)", @"G:\My Drive"),
+            new SyncFolderCandidate("OneDrive", @"C:\OneDrive"),
+        };
+
+        var filtered = SyncFolderScanner.FilterByProvider(candidates, SyncProvider.GoogleDrive);
+
+        Assert.Equal(2, filtered.Count);
+        Assert.All(filtered, c => Assert.StartsWith("Google Drive", c.DisplayName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DropboxFilterKeepsOnlyDropboxCandidates()
+    {
+        var candidates = new[]
+        {
+            new SyncFolderCandidate("Dropbox", @"C:\Dropbox"),
+            new SyncFolderCandidate("OneDrive", @"C:\OneDrive"),
+        };
+
+        var filtered = SyncFolderScanner.FilterByProvider(candidates, SyncProvider.Dropbox);
+
+        Assert.Single(filtered, c => c.Path == @"C:\Dropbox");
+    }
+
+    // The single most important behaviour of this filter: for NAS, it must
+    // only ever pass through the UNC-form candidates DetectFrom already
+    // produces for a mapped drive - never a drive-letter path - mirroring
+    // OffersTheUncPathNotTheDriveLetterForAMappedNetworkDrive above, just
+    // exercised through FilterByProvider instead of DetectFrom directly.
+    [Fact]
+    public void NasFilterKeepsOnlyUncCandidatesNeverADriveLetter()
+    {
+        var mappedDrives = new[] { ('M', @"\\192.168.1.210\media") };
+        var all = SyncFolderScanner.DetectFrom(
+            new Dictionary<string, string?> { ["OneDrive"] = @"C:\OneDrive" },
+            "", Array.Empty<string>(), mappedDrives, _ => true);
+
+        var filtered = SyncFolderScanner.FilterByProvider(all, SyncProvider.Nas);
+
+        var candidate = Assert.Single(filtered, c => c.Path == @"\\192.168.1.210\media");
+        Assert.StartsWith(@"\\", candidate.Path);
+        Assert.DoesNotContain(filtered, c => c.Path.StartsWith("M:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void OtherProviderMatchesNothing()
+    {
+        var candidates = new[]
+        {
+            new SyncFolderCandidate("Dropbox", @"C:\Dropbox"),
+            new SyncFolderCandidate("NAS share (M: -> \\\\nas\\share)", @"\\nas\share"),
+        };
+
+        Assert.Empty(SyncFolderScanner.FilterByProvider(candidates, SyncProvider.Other));
+    }
+
+    [Fact]
+    public void EmptyCandidateListProducesEmptyResult()
+    {
+        Assert.Empty(SyncFolderScanner.FilterByProvider(Array.Empty<SyncFolderCandidate>(), SyncProvider.OneDrive));
+    }
+}
