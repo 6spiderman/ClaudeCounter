@@ -60,7 +60,7 @@ public static class BackupHelpText
 
     public const string Include =
         "Glob patterns (one per line), relative to ~/.claude, for what gets " +
-        "copied - e.g. commands/**. GitHub and Google Drive each have their " +
+        "copied - e.g. commands/**. GitHub and Drive each have their " +
         "own Include list - use the selector above to switch which one you " +
         "are editing. Files that are never backed up (credentials, keys, " +
         "tokens - see Help) are skipped even if a pattern here would " +
@@ -68,7 +68,7 @@ public static class BackupHelpText
 
     public const string Exclude =
         "Glob patterns (one per line), relative to ~/.claude, for what to " +
-        "skip, checked after Include. GitHub and Google Drive each have " +
+        "skip, checked after Include. GitHub and Drive each have " +
         "their own Exclude list - use the selector above to switch which " +
         "one you are editing. Files that are never backed up (credentials, " +
         "keys, tokens - see Help) are always skipped regardless of this " +

@@ -166,7 +166,13 @@ public sealed class BackupAdvancedDialog : Form
         y += _backupStaleAfterDays.Height + RowGap;
 
         y += 6;
-        var driveHeader = NewSectionLabel("Google Drive retention", palette, y, bold: true);
+        // "Drive retention" (not "Google Drive retention") - the retention
+        // settings below apply to KeepLastCount/DeleteOlderThanDays on
+        // DriveTarget regardless of which transport is selected (see
+        // RcloneBackend and SyncFolderBackend, which both apply the same
+        // DriveRetention logic), so this header is transport-neutral by
+        // construction, not just by choice.
+        var driveHeader = NewSectionLabel("Drive retention", palette, y, bold: true);
         Controls.Add(driveHeader);
         y += driveHeader.PreferredHeight + 2;
 

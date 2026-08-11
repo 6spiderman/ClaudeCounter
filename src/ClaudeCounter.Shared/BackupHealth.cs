@@ -138,8 +138,14 @@ public static class BackupHealth
     /// OneDrive, Dropbox, or a NAS share, where "Google Drive" would be
     /// actively wrong, and disambiguating the rclone case too keeps the two
     /// names symmetric instead of one being oddly specific and the other not.
+    ///
+    /// Public so other transport-aware call sites (RestoreDialog's "restore
+    /// from" list, most notably - it would be actively wrong to offer to
+    /// restore from "Google Drive" when the configured transport is a NAS
+    /// share) reuse this exact mapping instead of growing a second,
+    /// possibly-drifting copy of the same switch.
     /// </summary>
-    private static string DriveDisplayName(DriveTarget target) => target.Transport switch
+    public static string DriveDisplayName(DriveTarget target) => target.Transport switch
     {
         DriveTransport.SyncFolder => "Sync folder",
         _ => "Google Drive (rclone)",

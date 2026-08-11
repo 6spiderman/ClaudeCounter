@@ -81,7 +81,7 @@ public sealed class SettingsForm : Form
     // S5, fix round 1: GitHub's and Drive's connection fields plus their own
     // Include/Exclude now live in two separate blocks (see BuildGithubBlock /
     // BuildDriveBlock) that are both always constructed, with only one ever
-    // Visible - _backupSelectionTarget (GitHub / Google Drive) controls
+    // Visible - _backupSelectionTarget (GitHub / Drive) controls
     // which. Every field below is therefore a genuinely separate Control per
     // destination (not a single shared control whose content gets swapped),
     // so OnSaveBackupSchedule can read both destinations' values directly at
@@ -497,7 +497,14 @@ public sealed class SettingsForm : Form
         _backupSelectionTarget = NewCombo(palette, 150);
         _backupSelectionTarget.Location = new Point(PagePadX, y);
         _backupSelectionTarget.Items.Add("GitHub");
-        _backupSelectionTarget.Items.Add("Google Drive");
+        // "Drive", not "Google Drive" - transport-neutral, matching
+        // BuildDriveBlock's own "Back up to Drive" checkbox: this selector
+        // just picks which destination's Include/Exclude is being edited,
+        // and its label is fixed at construction time while the transport
+        // combo inside the Drive block can change live, so a transport-
+        // specific label here would go stale the moment the user switches
+        // transports without reopening Settings.
+        _backupSelectionTarget.Items.Add("Drive");
         _backupSelectionTarget.SelectedIndex = initialShowGithub ? 0 : 1;
         page.Controls.Add(_backupSelectionTarget);
         y += _backupSelectionTarget.Height + RowGap;
@@ -706,8 +713,12 @@ public sealed class SettingsForm : Form
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         block.Controls.Add(includeLabel);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
+        // "Drive", not "Google Drive" - same transport-neutral reasoning as
+        // _backupSelectionTarget's "Drive" item above (this is only a picker
+        // dialog title, captured once in a closure at construction time, so
+        // it cannot track a later change to the transport combo either).
         var chooseDriveButton = AddChooseFilesButton(
-            block, palette, "Google Drive", sourceRoot, () => _backupDriveInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
+            block, palette, "Drive", sourceRoot, () => _backupDriveInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
         y += Math.Max(includeLabel.PreferredHeight, chooseDriveButton.Height) + 2;
         _backupDriveInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
         _backupDriveInclude.Location = new Point(PagePadX, y);
@@ -888,8 +899,10 @@ public sealed class SettingsForm : Form
         var config = BackupConfig.Load(BackupConfig.DefaultPath());
         if (!config.Github.Enabled && !config.Drive.Enabled)
         {
+            // Transport-neutral - mirrors RestoreDialog's identical "neither
+            // destination enabled" message (see its own comment there).
             MessageBox.Show(this,
-                "No backup destination is enabled. Enable and configure GitHub or Google Drive backup first.",
+                "No backup destination is enabled. Enable and configure GitHub or Drive backup first.",
                 "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

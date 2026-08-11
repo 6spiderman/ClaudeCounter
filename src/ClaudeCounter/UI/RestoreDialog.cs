@@ -181,7 +181,11 @@ public sealed class RestoreDialog : Form
         _zipSource = new RestoreZipSource(runner);
 
         if (config.Github.Enabled) _destinations.Add((Source.Github, "GitHub"));
-        if (config.Drive.Enabled) _destinations.Add((Source.Drive, "Google Drive"));
+        // Transport-aware, reusing BackupHealth's exact naming - a NAS or
+        // OneDrive user must not be offered "Google Drive" as the restore
+        // source (see this class's own note on RestoreDialog above and
+        // BackupHealth.DriveDisplayName's doc comment).
+        if (config.Drive.Enabled) _destinations.Add((Source.Drive, BackupHealth.DriveDisplayName(config.Drive)));
 
         Text = "Restore from backup";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -236,7 +240,13 @@ public sealed class RestoreDialog : Form
         // the user pick a snapshot.
         if (_destinations.Count == 0)
         {
-            SetSourceError("No backup destination is enabled. Enable and configure GitHub or Google Drive backup on the Backup tab first.");
+            // Transport-neutral here (unlike the destination list above):
+            // neither destination is enabled at this point, so there is no
+            // configured transport to name - "Drive" mirrors the same
+            // neutral choice SettingsForm's Drive block already made (see
+            // its own "Back up to Drive" checkbox comment) rather than
+            // naming a specific transport that is not actually in effect.
+            SetSourceError("No backup destination is enabled. Enable and configure GitHub or Drive backup on the Backup tab first.");
         }
         else
         {
