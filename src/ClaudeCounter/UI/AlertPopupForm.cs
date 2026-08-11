@@ -102,30 +102,49 @@ public sealed class AlertPopupForm : Form
     {
         // 100% always takes the center + focus; critical follows the setting.
         var centered = placement == PopupPlacement.Centered || e.Level == AlertLevel.Maxed;
-        var palette = Theme.Current();
-
-        // Maxed's red and Warn's amber are both fixed accent colors, not part
-        // of the light/dark theme pair, so they get their own fixed
-        // contrasting foreground rather than palette.Fore (which is tuned for
-        // palette.Back, not for an accent-colored card). Amber is the
-        // brighter of the two, so black reads better on it than white.
-        var (backColor, foreColor) = e.Level switch
-        {
-            AlertLevel.Maxed => (Theme.BandColor(Band.Red), Color.White),
-            AlertLevel.Warn => (Theme.BandColor(Band.Amber), Color.Black),
-            _ => (palette.Back, palette.Fore),
-        };
-        // Maxed and Warn both sit on a solid accent color rather than the
-        // neutral theme background, so their Dismiss button is a darkened
-        // overlay of that same accent rather than palette.BarBack (which
-        // would look like an unrelated gray patch dropped on top of it).
-        var dismissBackColor = e.Level is AlertLevel.Maxed or AlertLevel.Warn
-            ? Color.FromArgb(60, 0, 0, 0)
-            : palette.BarBack;
+        var (backColor, foreColor, dismissBackColor) = ColorsFor(e.Level, Theme.Current());
         var titleFontSize = e.Level == AlertLevel.Maxed ? 13f : 10.5f;
 
         var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
         ShowForm(title, body, titleFontSize, backColor, foreColor, dismissBackColor, centered, anchor, autoDismissSeconds);
+    }
+
+    /// <summary>
+    /// Pure color selection for a level's popup card, extracted so it is
+    /// unit-testable without constructing a Form (same reasoning as
+    /// <see cref="StackOffsetFor"/>).
+    ///
+    /// Maxed's red, Critical's (same) red, and Warn's amber are all fixed
+    /// accent colors, not part of the light/dark theme pair, so they get
+    /// their own fixed contrasting foreground rather than palette.Fore
+    /// (which is tuned for palette.Back, not for an accent-colored card).
+    /// Critical and Maxed deliberately share the same red band - their copy
+    /// already differentiates urgency ("touch some grass" at 100% vs. the
+    /// plain percentage at Critical) - but Critical uses Black text rather
+    /// than Maxed's existing White: measured against
+    /// Theme.BandColor(Band.Red) = (248, 81, 73), WCAG contrast is ~6.3:1
+    /// for black vs. only ~3.4:1 for white, and 3.4:1 fails the 4.5:1 AA
+    /// threshold this popup's normal-weight body text needs. Warn's amber
+    /// is brighter still, so black reads even better there.
+    ///
+    /// Maxed, Critical and Warn all sit on a solid accent color rather than
+    /// the neutral theme background, so their Dismiss button is a darkened
+    /// overlay of that same accent rather than palette.BarBack (which would
+    /// look like an unrelated gray patch dropped on top of it).
+    /// </summary>
+    public static (Color Back, Color Fore, Color DismissBack) ColorsFor(AlertLevel level, Palette palette)
+    {
+        var (back, fore) = level switch
+        {
+            AlertLevel.Maxed => (Theme.BandColor(Band.Red), Color.White),
+            AlertLevel.Critical => (Theme.BandColor(Band.Red), Color.Black),
+            AlertLevel.Warn => (Theme.BandColor(Band.Amber), Color.Black),
+            _ => (palette.Back, palette.Fore),
+        };
+        var dismissBack = level is AlertLevel.Maxed or AlertLevel.Critical or AlertLevel.Warn
+            ? Color.FromArgb(60, 0, 0, 0)
+            : palette.BarBack;
+        return (back, fore, dismissBack);
     }
 
     /// <summary>
