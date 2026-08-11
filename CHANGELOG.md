@@ -16,15 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entirely) in Settings.
 - **ClaudeBackup**, an optional install component: a standalone worker that
   backs up a subset of your Claude config (settings, CLAUDE.md, commands,
-  agents, top-level plugin manifests) to a private GitHub repo and/or Google
-  Drive (via rclone) on a schedule you set, or on demand from the tray menu
-  or Settings. Never sends anything to more than one destination without your
+  agents, top-level plugin manifests) to a private GitHub repo and/or a Drive
+  destination on a schedule you set, or on demand from the tray menu or
+  Settings. Never sends anything to more than one destination without your
   say-so, never backs up credential-shaped files (a denylist is applied
   before anything is read), and never writes a secret to `backup.json` or any
   log. The GitHub repo you point it at **must be private** - ClaudeCounter
   has no way to verify that automatically, so it warns in the log and says so
   in Settings. Opt-in at install time; the tray hides every backup control
   when the worker is not installed.
+- **Sync-folder Drive backup transport**, alongside the original rclone
+  transport: point the Drive destination at a folder your sync client already
+  watches (Google Drive for Desktop, OneDrive, Dropbox) or a NAS share, and
+  ClaudeCounter just writes a zip into it - no sign-in, no OAuth client, no
+  external binary. A new **Detect...** button on the Backup tab finds
+  candidate folders automatically (de-duplicating OneDrive's several
+  environment variables, and offering a mapped NAS drive as its UNC path
+  rather than the drive letter, since a drive letter mapping is not
+  guaranteed to resolve under a scheduled, non-interactive backup run). The
+  Drive destination uses one transport at a time - rclone remains available
+  as the advanced option for a destination the sync-folder method cannot
+  reach directly. See
+  [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
+  method first.
 - "Back up now" (tray menu and Settings) now waits for the backup to finish
   and reports the result - previously it fired the worker and forgot about
   it, so a failing backup looked identical to a successful one.
@@ -36,12 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requires being plugged in to run or to keep running - unlike Windows' own
   new-task defaults, which would have silently reintroduced the
   missed-backup problem this exists to fix.
-- **Google Drive backup retention**, in the same Advanced dialog: keep only
-  the most recent N backups, delete anything older than N days, or both.
-  Off by default. Applied only after a successful upload, never deletes the
-  single most recent backup no matter how the settings are set, and only
-  ever considers this app's own `claude-backup-*.zip` files - never anything
-  else stored in the same remote folder.
+- **Drive backup retention**, in the same Advanced dialog: keep only the most
+  recent N backups, delete anything older than N days, or both. Off by
+  default. Applied only after a successful upload, never deletes the single
+  most recent backup no matter how the settings are set, and only ever
+  considers this app's own `claude-backup-*.zip` files - never anything else
+  stored in the same remote folder. Applies to both Drive transports.
 
 ### Fixed
 

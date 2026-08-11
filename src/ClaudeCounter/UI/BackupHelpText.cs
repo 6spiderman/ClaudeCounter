@@ -34,10 +34,23 @@ public static class BackupHelpText
         "on the remote if it does not already exist.";
 
     public const string DriveEnabled =
-        "Uploads a timestamped zip to Google Drive via rclone. Requires " +
-        "rclone installed and authorised with 'rclone config' using your " +
-        "OWN Google OAuth client, published (not left in Testing) so the " +
-        "token does not expire after 7 days - see Help for setup steps.";
+        "Copies a timestamped zip to the Drive destination, using whichever " +
+        "transport is selected below - a sync folder (no sign-in needed) or " +
+        "rclone (advanced). See Help for setup steps for either.";
+
+    public const string SyncFolder =
+        "No sign-in or API setup needed. Point this at a folder your sync " +
+        "client already watches - Google Drive for Desktop, OneDrive, " +
+        "Dropbox all present as ordinary folders, and the sync client does " +
+        "the actual upload on its own. A NAS share works the same way. Use " +
+        "Detect... to find one automatically, or Browse... to pick one by " +
+        "hand. For a NAS, prefer a UNC path (\\\\server\\share\\...) over a " +
+        "mapped drive letter (M:\\...) - a drive letter mapping is tied to " +
+        "your interactive sign-in session and is not guaranteed to resolve " +
+        "when the backup runs from Task Scheduler, so a letter-based path " +
+        "can silently fail once scheduled while a UNC path keeps working; " +
+        "Detect... already offers the UNC form for a mapped drive for this " +
+        "reason.";
 
     public const string RcloneRemote =
         "The rclone remote and destination folder, e.g. gdrive:ClaudeBackups. " +
@@ -74,6 +87,7 @@ public static class BackupHelpText
             ["RemoteUrl"] = RemoteUrl,
             ["Branch"] = Branch,
             ["DriveEnabled"] = DriveEnabled,
+            ["SyncFolder"] = SyncFolder,
             ["RcloneRemote"] = RcloneRemote,
             ["Include"] = Include,
             ["Exclude"] = Exclude,
@@ -93,12 +107,35 @@ public static class BackupHelpText
         "rejected. The repository must be private, and ClaudeCounter " +
         "cannot verify that for you.\r\n" +
         "\r\n" +
-        "GOOGLE DRIVE SETUP\r\n" +
-        "Install rclone and authorise it once with 'rclone config'. You need " +
-        "YOUR OWN Google OAuth client ID for this - rclone's shared client " +
-        "is being retired and will stop working during 2026, and is heavily " +
-        "rate limited meanwhile. Create your own in the Google Cloud " +
-        "Console.\r\n" +
+        "DRIVE SETUP\r\n" +
+        "The Drive destination has two transports - pick one with the " +
+        "Transport dropdown. They are NOT combined: the Drive destination " +
+        "uses one transport at a time, so you cannot back up to both a NAS " +
+        "(sync folder) and an rclone remote at once. GitHub plus one of " +
+        "them still works fine, since GitHub is a separate destination.\r\n" +
+        "\r\n" +
+        "SYNC FOLDER (recommended) - no sign-in, no API setup\r\n" +
+        "Point it at a folder your sync client already watches - Google " +
+        "Drive for Desktop, OneDrive, and Dropbox all present as ordinary " +
+        "folders, and the sync client does the actual upload on its own; a " +
+        "NAS share works the same way. Click Detect... to find one " +
+        "automatically, or Browse... to pick one by hand. For a NAS, " +
+        "prefer a UNC path (\\\\server\\share\\...) over a mapped drive " +
+        "letter (M:\\...) - a drive letter mapping belongs to your " +
+        "interactive sign-in session and is not guaranteed to resolve when " +
+        "the backup runs from Task Scheduler, so a letter-based path can " +
+        "silently fail once scheduled while a UNC path keeps working; " +
+        "Detect... already offers the UNC form for a mapped drive for this " +
+        "reason. Each run copies a timestamped zip straight into the " +
+        "folder.\r\n" +
+        "\r\n" +
+        "ADVANCED: RCLONE REMOTE\r\n" +
+        "The original method, still available for a destination sync " +
+        "folder cannot reach directly. Install rclone and authorise it " +
+        "once with 'rclone config'. You need YOUR OWN Google OAuth client " +
+        "ID for this - rclone's shared client is being retired and will " +
+        "stop working during 2026, and is heavily rate limited meanwhile. " +
+        "Create your own in the Google Cloud Console.\r\n" +
         "\r\n" +
         "While creating it, PUBLISH the OAuth app rather than leaving it in " +
         "Testing. An app left in Testing issues refresh tokens that expire " +
@@ -119,8 +156,8 @@ public static class BackupHelpText
         "Then give the remote as remote:folder, e.g. gdrive:ClaudeBackups. " +
         "Each run uploads a timestamped zip.\r\n" +
         "\r\n" +
-        "Full walkthrough with every Google Cloud Console screen: " +
-        "docs/GOOGLE-DRIVE-SETUP.md in the repo.\r\n" +
+        "Full walkthrough, sync folder first and the rclone appendix after " +
+        "it: docs/GOOGLE-DRIVE-SETUP.md in the repo.\r\n" +
         "\r\n" +
         "WHAT IS BACKED UP BY DEFAULT\r\n" +
         "settings.json, CLAUDE.md, commands/, agents/, and top-level " +
@@ -170,9 +207,10 @@ public static class BackupHelpText
         "these on), and whether a failed run retries automatically (on by " +
         "default, every 15 minutes, up to 3 times).\r\n" +
         "\r\n" +
-        "GOOGLE DRIVE RETENTION\r\n" +
+        "DRIVE RETENTION\r\n" +
         "The same Advanced dialog can keep Drive from accumulating backups " +
-        "forever: keep only the most recent N, delete anything older than " +
+        "forever - the same rules apply to both transports, sync folder or " +
+        "rclone: keep only the most recent N, delete anything older than " +
         "N days, or both - both off by default. When both are on, a backup " +
         "is pruned if either rule would remove it. Pruning only ever " +
         "considers this app's own claude-backup-*.zip files, only runs " +

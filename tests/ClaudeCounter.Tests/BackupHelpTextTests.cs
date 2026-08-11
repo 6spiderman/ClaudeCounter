@@ -17,6 +17,7 @@ public class BackupHelpTextTests
     [InlineData("RemoteUrl")]
     [InlineData("Branch")]
     [InlineData("DriveEnabled")]
+    [InlineData("SyncFolder")]
     [InlineData("RcloneRemote")]
     [InlineData("Include")]
     [InlineData("Exclude")]
@@ -35,10 +36,32 @@ public class BackupHelpTextTests
         // the dictionary is limited to them.
         var expected = new[]
         {
-            "GithubEnabled", "RemoteUrl", "Branch", "DriveEnabled", "RcloneRemote", "Include", "Exclude",
+            "GithubEnabled", "RemoteUrl", "Branch", "DriveEnabled", "SyncFolder", "RcloneRemote", "Include", "Exclude",
         };
         Assert.Equal(expected.OrderBy(k => k, StringComparer.Ordinal),
             BackupHelpText.FieldTopics.Keys.OrderBy(k => k, StringComparer.Ordinal));
+    }
+
+    // S14b: the SyncFolder topic is the sync-folder transport's own help -
+    // must name every sync client this feature was designed for, state that
+    // no sign-in is needed, and give the UNC-over-mapped-letter guidance
+    // (the single most important correctness fact about it - a mapped drive
+    // letter is not guaranteed to resolve under Task Scheduler).
+    [Fact]
+    public void SyncFolderTopicNamesEverySupportedSyncClientAndTheNoSignInFact()
+    {
+        Assert.Contains("Google Drive", BackupHelpText.SyncFolder);
+        Assert.Contains("OneDrive", BackupHelpText.SyncFolder);
+        Assert.Contains("Dropbox", BackupHelpText.SyncFolder);
+        Assert.Contains("NAS", BackupHelpText.SyncFolder);
+        Assert.Contains("No sign-in", BackupHelpText.SyncFolder, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SyncFolderTopicPrefersUncOverAMappedDriveLetter()
+    {
+        Assert.Contains("UNC", BackupHelpText.SyncFolder);
+        Assert.Contains("mapped drive", BackupHelpText.SyncFolder, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -96,5 +119,26 @@ public class BackupHelpTextTests
         Assert.Contains("retention", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("either rule", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("never deletes the single most recent backup", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // S14b: the guide must lead with the sync-folder route (mentioned before
+    // the rclone appendix) and state plainly that the Drive destination uses
+    // one transport at a time - a real limitation (you cannot back up to a
+    // NAS and an rclone remote simultaneously), not something to gloss over.
+    [Fact]
+    public void GuideLeadsWithSyncFolderAheadOfTheRcloneAdvancedAppendix()
+    {
+        var syncFolderIndex = BackupHelpText.FullGuide.IndexOf("SYNC FOLDER", StringComparison.Ordinal);
+        var rcloneAdvancedIndex = BackupHelpText.FullGuide.IndexOf("ADVANCED: RCLONE REMOTE", StringComparison.Ordinal);
+        Assert.True(syncFolderIndex >= 0, "guide should have a SYNC FOLDER section");
+        Assert.True(rcloneAdvancedIndex >= 0, "guide should have an ADVANCED: RCLONE REMOTE section");
+        Assert.True(syncFolderIndex < rcloneAdvancedIndex,
+            "sync folder should be described before the rclone appendix");
+    }
+
+    [Fact]
+    public void GuideStatesDriveUsesOneTransportAtATime()
+    {
+        Assert.Contains("one transport at a time", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -203,13 +203,17 @@ to Claude...**
   independently in Settings.
 - **Backup** (optional install component, `ClaudeBackup.exe`): scheduled or
   on-demand backup of a subset of your Claude config to a private GitHub repo
-  and/or Google Drive (via rclone). Not installed by default - tick "Backup
-  tools" on the installer's Components page to include it, or it stays
-  entirely absent and every backup control in Settings stays hidden. The
-  GitHub repo you configure **must be private**; ClaudeCounter cannot verify
-  that automatically, so it warns you in Settings and in the log instead.
-  Google Drive needs a one-time Google Cloud Console setup of your own OAuth
-  client - see [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md).
+  and/or a Drive destination. Not installed by default - tick "Backup tools"
+  on the installer's Components page to include it, or it stays entirely
+  absent and every backup control in Settings stays hidden. The GitHub repo
+  you configure **must be private**; ClaudeCounter cannot verify that
+  automatically, so it warns you in Settings and in the log instead. The
+  Drive destination has two transports: a **sync folder** (point it at a
+  Google Drive/OneDrive/Dropbox folder or a NAS share - no sign-in needed,
+  the sync client does the upload) or an **rclone remote** (advanced, needs a
+  one-time Google Cloud Console setup of your own OAuth client) - see
+  [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
+  method first.
 - Single instance (a named mutex, on both platforms), single self-contained
   executable, no telemetry.
 
