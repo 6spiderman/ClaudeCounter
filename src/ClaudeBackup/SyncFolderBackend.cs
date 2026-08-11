@@ -128,27 +128,19 @@ public sealed class SyncFolderBackend
     /// would be written inside the tree being backed up, and every
     /// subsequent run would back up its own previous backups). Returns null
     /// when valid, or the exact message <see cref="Run"/> should fail with.
-    /// Side-effect-free (no filesystem I/O beyond path-string normalisation,
-    /// no network access even for a UNC path) so it is directly unit-testable
-    /// without a real NAS share or a real directory on disk. Internal (not
-    /// private) so it can be tested directly - mirrors GitBackend.IsWithinDirectory.
+    ///
+    /// S14b: now a thin forwarding wrapper around <see cref="SyncFolderPathValidator.Validate"/>
+    /// (ClaudeCounter.Shared) rather than owning the rules itself - SettingsForm
+    /// (ClaudeCounter.csproj, which has no ProjectReference to this project)
+    /// needs to run this exact same validation at Save time and cannot reach
+    /// an internal member here, so the rules moved to Shared and this method
+    /// now just delegates. Kept (not deleted) so every existing direct call
+    /// in SyncFolderBackendTests keeps compiling and passing unchanged.
+    /// Internal (not private) so it can still be tested directly - mirrors
+    /// GitBackend.IsWithinDirectory's own forwarding-wrapper pattern.
     /// </summary>
-    internal static string? ValidateFolderPath(string folderPath, string sourceRoot)
-    {
-        if (string.IsNullOrWhiteSpace(folderPath))
-            return "Sync folder backup is enabled but no folder is configured.";
-
-        if (!Path.IsPathRooted(folderPath))
-            return $"Sync folder path '{folderPath}' is not a full path - enter a full local or UNC path.";
-
-        if (RelativePathGuard.Overlaps(folderPath, sourceRoot))
-        {
-            return $"Sync folder path '{folderPath}' overlaps the backup source root '{sourceRoot}' - " +
-                   "choose a folder outside the tree being backed up.";
-        }
-
-        return null;
-    }
+    internal static string? ValidateFolderPath(string folderPath, string sourceRoot) =>
+        SyncFolderPathValidator.Validate(folderPath, sourceRoot);
 
     /// <summary>
     /// Drive retention (design spec, Part 2) for the sync-folder transport:
