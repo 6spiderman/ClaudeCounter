@@ -98,6 +98,34 @@ public class ThresholdTrackerTests
     }
 
     [Fact]
+    public void MicrosecondJitterInResetsAtDoesNotReArm()
+    {
+        // The actual production bug (see task S12): the API recomputes
+        // resets_at with microsecond precision on every request. The wall-
+        // clock reset boundary is stable, but a naive DateTimeOffset !=
+        // comparison sees a different value on every single poll and re-arms
+        // every time, so the same crossing alerts again and again forever.
+        // Real captured value: 2026-08-11T13:10:00.264965+02:00, jittering by
+        // a few hundred microseconds per call while the minute never moves.
+        var t = new ThresholdTracker();
+        var baseReset = new DateTimeOffset(2026, 8, 11, 13, 10, 0, TimeSpan.FromHours(2))
+            .AddTicks(2649650); // .264965s, matching the real captured value
+
+        var first = Assert.Single(t.Evaluate(FiveHour(90, baseReset), Settings()));
+        Assert.Equal(AlertLevel.Critical, first.Level);
+
+        // Five more polls, each with resets_at jittered by a few hundred
+        // microseconds (1 tick = 100ns, so a few thousand ticks), utilization
+        // still climbing but staying at/above Critical the whole time - must
+        // not re-alert even once.
+        for (var i = 1; i <= 5; i++)
+        {
+            var jittered = baseReset.AddTicks(i * 3000); // ~300 microseconds per poll
+            Assert.Empty(t.Evaluate(FiveHour(90 + i, jittered), Settings()));
+        }
+    }
+
+    [Fact]
     public void WarnCrossingEmitsOnce()
     {
         var t = new ThresholdTracker();
