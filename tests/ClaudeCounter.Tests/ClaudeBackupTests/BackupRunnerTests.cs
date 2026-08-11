@@ -177,6 +177,98 @@ public class BackupRunnerTests : IDisposable
         Assert.DoesNotContain(runner.Calls, call => call.StartsWith("rclone copy"));
     }
 
+    // S14: the sync-folder transport's own "not configured" check - a blank
+    // FolderPath - is a config error (exit 1), just like a blank
+    // RcloneRemote is for the original transport.
+    [Fact]
+    public void EnabledDriveSyncFolderWithoutFolderPathIsConfigError()
+    {
+        var c = Config();
+        c.Github.Enabled = false;
+        c.Drive.Enabled = true;
+        c.Drive.Transport = DriveTransport.SyncFolder;
+        c.Drive.FolderPath = "";
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
+    }
+
+    // A relative FolderPath is caught at the same "not configured" gate as a
+    // blank one - not left for SyncFolderBackend to fail at exit 2, mirroring
+    // how a blank GitHub Branch is caught before GitBackend ever runs.
+    [Fact]
+    public void EnabledDriveSyncFolderWithRelativeFolderPathIsConfigError()
+    {
+        var c = Config();
+        c.Github.Enabled = false;
+        c.Drive.Enabled = true;
+        c.Drive.Transport = DriveTransport.SyncFolder;
+        c.Drive.FolderPath = "relative\\path";
+        var runner = new OkRunner();
+
+        Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
+        Assert.Empty(runner.Calls);
+    }
+
+    // The dispatch wiring itself: a Drive destination configured for the
+    // sync-folder transport must invoke SyncFolderBackend (an archive
+    // actually lands in FolderPath) and must never touch rclone.
+    [Fact]
+    public void SyncFolderTransportCopiesArchiveIntoFolderPathWithoutInvokingRclone()
+    {
+        var c = Config();
+        c.Github.Enabled = false;
+        c.Drive.Enabled = true;
+        c.Drive.Transport = DriveTransport.SyncFolder;
+        var syncFolder = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}");
+        c.Drive.FolderPath = syncFolder;
+        c.Drive.Include = new() { "settings.json" };
+        var runner = new OkRunner();
+
+        try
+        {
+            var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+            Assert.Equal(0, code);
+            Assert.DoesNotContain(runner.Calls, call => call.StartsWith("rclone"));
+            Assert.Single(Directory.GetFiles(syncFolder, "claude-backup-*.zip"));
+        }
+        finally
+        {
+            if (Directory.Exists(syncFolder)) Directory.Delete(syncFolder, true);
+        }
+    }
+
+    // Backend independence must hold across transports too: GitHub enabled
+    // but half configured must not stop a properly configured sync-folder
+    // Drive destination from running.
+    [Fact]
+    public void EnabledGithubWithoutRemoteUrlDoesNotStopConfiguredSyncFolderDriveFromRunning()
+    {
+        var c = Config();
+        c.Github.RemoteUrl = "";
+        c.Drive.Enabled = true;
+        c.Drive.Transport = DriveTransport.SyncFolder;
+        var syncFolder = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}");
+        c.Drive.FolderPath = syncFolder;
+        c.Drive.Include = new() { "settings.json" };
+        var runner = new OkRunner();
+
+        try
+        {
+            var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+            Assert.Equal(0, code);
+            Assert.DoesNotContain(runner.Calls, call => call.StartsWith("git push"));
+            Assert.Single(Directory.GetFiles(syncFolder, "claude-backup-*.zip"));
+        }
+        finally
+        {
+            if (Directory.Exists(syncFolder)) Directory.Delete(syncFolder, true);
+        }
+    }
+
     [Fact]
     public void HappyPathReturnsZero()
     {

@@ -145,12 +145,33 @@ public static class BackupRunner
             githubAttempt = DestinationAttempt.Failed("GitHub backup is enabled but the branch is not configured.");
         }
 
+        // S14: which "not configured" check applies depends on the
+        // destination's own transport - a blank RcloneRemote is irrelevant
+        // when the user has switched to the sync-folder transport, and vice
+        // versa. Only a non-blank, rooted FolderPath counts as "configured"
+        // for SyncFolder here - the heavier checks (overlap with SourceRoot,
+        // actually creating the directory) happen inside SyncFolderBackend
+        // itself, at the point of write, exactly like RcloneBackend's own
+        // deeper checks (e.g. "rclone not found on PATH") are not duplicated
+        // up here either.
         var driveConfigured = true;
-        if (config.Drive.Enabled && string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
+        if (config.Drive.Enabled)
         {
-            Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured; skipping this destination.");
-            driveConfigured = false;
-            driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the rclone remote is not configured.");
+            if (config.Drive.Transport == DriveTransport.SyncFolder)
+            {
+                if (string.IsNullOrWhiteSpace(config.Drive.FolderPath) || !Path.IsPathRooted(config.Drive.FolderPath))
+                {
+                    Log.Warn("BackupRunner: Google Drive backup is enabled (sync folder transport) but FolderPath is not configured or not a full path; skipping this destination.");
+                    driveConfigured = false;
+                    driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the sync folder path is not configured.");
+                }
+            }
+            else if (string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
+            {
+                Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured; skipping this destination.");
+                driveConfigured = false;
+                driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the rclone remote is not configured.");
+            }
         }
 
         // "Active" = enabled AND configured. Everything from here on - the
@@ -266,8 +287,17 @@ public static class BackupRunner
             }
             else
             {
+                // S14: the transport switch on this single Drive destination
+                // (not a third destination - see the design doc's "Key
+                // structural decision") - the two backends share the same
+                // BackendResult shape, so everything above and below this
+                // call (selection, the offender backstop, RunBackend's own
+                // try/catch, DestinationAttempt bookkeeping) is unaware which
+                // one actually ran.
                 var ok = RunBackend("Google Drive",
-                    () => new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive),
+                    () => config.Drive.Transport == DriveTransport.SyncFolder
+                        ? new SyncFolderBackend(tempDir).Run(config.SourceRoot, driveFiles, config.Drive)
+                        : new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive),
                     out var message);
                 anyFailed |= !ok;
                 driveAttempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
