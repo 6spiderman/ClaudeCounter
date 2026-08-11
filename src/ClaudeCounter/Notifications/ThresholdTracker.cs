@@ -61,11 +61,76 @@ public sealed class ThresholdTracker
     {
         var effectiveNow = now ?? DateTimeOffset.UtcNow;
         var events = new List<AlertEvent>();
+
+        // S13 part B: the 5-hour window is the master clock for repeat-alert
+        // cadence. This check is deliberately done up front, BEFORE any of
+        // the four Eval calls below run - including five_hour's own - so the
+        // cross-window re-anchor does not silently depend on "five_hour
+        // happens to be evaluated first" (it currently is, but that ordering
+        // is an implementation detail of the Eval calls below, not something
+        // this should be fragile against). ReadFiveHourRollover only reads
+        // state, never mutates it, so evaluating it first and then still
+        // running five_hour's own Eval afterwards (which DOES mutate state)
+        // is safe and not a double-count of anything.
+        var fiveHourRolledOver = ReadFiveHourRollover(snapshot.FiveHour, settings.AlertFiveHour);
+        if (fiveHourRolledOver && settings.AlertRepeatMinutes > 0)
+        {
+            // Re-anchor every window's repeat clock to this rollover moment -
+            // not just five_hour's own. A weekly window sitting mid-alert
+            // (e.g. parked at Warn from hours ago) gets "time since last
+            // notified" reset to zero here, so its next repeat fires one full
+            // AlertRepeatMinutes after the rollover, not whenever its own
+            // last notification happened to land. Guarded on
+            // AlertRepeatMinutes > 0 so this is a true no-op in the default
+            // (repeat off) mode: LastNotifiedAt is otherwise unread when
+            // AlertRepeatMinutes is 0 (see the repeat block in Eval), but
+            // skipping the write entirely means the persisted state is
+            // byte-identical to before this feature, not merely
+            // behaviorally identical.
+            //
+            // Deliberately does NOT touch LastAlertedLevel: re-anchoring the
+            // repeat *timer* must not re-arm a window's crossing dedupe. A
+            // weekly window already alerted at (say) 95% stays recorded as
+            // alerted at 95% - only five_hour's own Eval call (via its own
+            // IsGenuineReset/collapsedToNone check) can clear a window's
+            // LastAlertedLevel back to None.
+            foreach (var state in _state.Values)
+                state.LastNotifiedAt = effectiveNow;
+        }
+
         Eval("five_hour", "5-hour session", snapshot.FiveHour, settings.AlertFiveHour, settings, effectiveNow, events);
         Eval("seven_day", "Weekly (all models)", snapshot.SevenDay, settings.AlertSevenDay, settings, effectiveNow, events);
         Eval("seven_day_opus", "Weekly (Opus)", snapshot.SevenDayOpus, settings.AlertSevenDayOpus, settings, effectiveNow, events);
         Eval("seven_day_sonnet", "Weekly (Sonnet)", snapshot.SevenDaySonnet, settings.AlertSevenDaySonnet, settings, effectiveNow, events);
         return events;
+    }
+
+    /// <summary>
+    /// S13 part B: pure read of whether the 5-hour window just genuinely
+    /// rolled over, using the exact same IsGenuineReset test Eval itself
+    /// uses for five_hour's own reset detection - not the collapsedToNone
+    /// fallback, only IsGenuineReset. Does not touch <see cref="_state"/> at
+    /// all (a plain lookup), so calling this ahead of Eval("five_hour", ...)
+    /// cannot interfere with or duplicate what that call does to state.
+    ///
+    /// When the 5-hour window is disabled (settings.AlertFiveHour is false),
+    /// Eval returns early for it before ever comparing resets_at - no reset
+    /// can be observed while the window is not being evaluated at all, so
+    /// this deliberately returns false rather than inventing a rollover.
+    /// The cadence anchor is simply inactive while five_hour is disabled;
+    /// per-window repeat timers fall back to running off their own
+    /// LastNotifiedAt, same as before this feature existed. If the user
+    /// re-enables five_hour later, the next observed rollover (compared
+    /// against whatever LastResetsAt was last recorded before it was
+    /// disabled) resumes the cross-window anchor normally.
+    /// </summary>
+    private bool ReadFiveHourRollover(UsageWindow? fiveHourWindow, bool fiveHourEnabled)
+    {
+        if (!fiveHourEnabled || fiveHourWindow is null)
+            return false;
+
+        _state.TryGetValue("five_hour", out var state);
+        return IsGenuineReset(state?.LastResetsAt, fiveHourWindow.ResetsAt);
     }
 
     private void Eval(string key, string label, UsageWindow? window, bool enabled,

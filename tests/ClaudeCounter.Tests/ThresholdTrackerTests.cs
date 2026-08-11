@@ -366,4 +366,163 @@ public class ThresholdTrackerTests
         // the ORIGINAL notification, it repeats normally.
         Assert.Single(resumed.Evaluate(FiveHour(91), s, start.AddMinutes(15)));
     }
+
+    // --- S13 part B: 5-hour window anchors the repeat cadence for everyone ---
+
+    private static readonly DateTimeOffset Start = new(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset FhReset1 = new(2026, 8, 11, 13, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset FhReset2 = new(2026, 8, 11, 18, 0, 0, TimeSpan.Zero); // FhReset1 + 5h
+
+    // Five-hour utilization kept low (10) throughout so it never itself
+    // crosses a threshold - these tests isolate the CROSS-window anchoring
+    // effect on seven_day/seven_day_opus, not five_hour's own alerting.
+    private static UsageSnapshot SnapFiveHourAndWeekly(
+        DateTimeOffset fiveHourReset, double sevenDayUtil, double? sevenDayOpusUtil = null) =>
+        new(new UsageWindow(10, fiveHourReset), new UsageWindow(sevenDayUtil, R1),
+            sevenDayOpusUtil is { } opus ? new UsageWindow(opus, R1) : null, null, null);
+
+    [Fact]
+    public void FiveHourRolloverReAnchorsAWeeklyWindowsRepeatClock()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+
+        // Weekly crosses Critical at Start; five-hour has not rolled over yet.
+        var first = Assert.Single(
+            t.Evaluate(SnapFiveHourAndWeekly(FhReset1, 91), s, Start), e => e.WindowKey == "seven_day");
+        Assert.Equal(AlertLevel.Critical, first.Level);
+
+        // 20 minutes later the 5-hour window genuinely rolls over (resets_at
+        // moves forward 5 hours, well past the jitter tolerance). Without the
+        // anchor, seven_day's own clock (started at Start) would already be
+        // overdue by 5 minutes and would fire a repeat right here. With the
+        // anchor, it must NOT fire on this poll - its clock resets to this
+        // rollover moment instead.
+        var atRollover = t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(20));
+        Assert.DoesNotContain(atRollover, e => e.WindowKey == "seven_day");
+
+        // 14 minutes after the rollover: still too soon.
+        Assert.Empty(t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(34))
+            .Where(e => e.WindowKey == "seven_day"));
+
+        // 15 minutes after the ROLLOVER (not after the original crossing at
+        // Start, and not the stale 15-minutes-after-Start mark either):
+        // seven_day repeats.
+        var repeat = Assert.Single(
+            t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(35)),
+            e => e.WindowKey == "seven_day");
+        Assert.Equal(AlertLevel.Critical, repeat.Level);
+    }
+
+    [Fact]
+    public void AWeeklyWindowsOwnResetDoesNotReAnchorOtherWindows()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        var sdReset1 = R1;
+        var sdReset2 = R1.AddDays(7);
+
+        UsageSnapshot Snap(double sevenDayUtil, DateTimeOffset sevenDayReset, double opusUtil) =>
+            new(new UsageWindow(10, FhReset1), new UsageWindow(sevenDayUtil, sevenDayReset),
+                new UsageWindow(opusUtil, R1), null, null);
+
+        // Both seven_day and seven_day_opus cross Critical at Start.
+        var firstEvents = t.Evaluate(Snap(91, sdReset1, 91), s, Start);
+        Assert.Equal(2, firstEvents.Count);
+
+        // 20 minutes later, seven_day itself genuinely resets (its own
+        // resets_at rolls forward, usage collapses) - five_hour does NOT
+        // roll over this poll. seven_day_opus sits unchanged at Critical.
+        var atReset = t.Evaluate(Snap(5, sdReset2, 91), s, Start.AddMinutes(20));
+
+        // seven_day: reset detected, back below threshold, no event.
+        Assert.DoesNotContain(atReset, e => e.WindowKey == "seven_day");
+
+        // seven_day_opus must NOT have had its clock re-anchored by
+        // seven_day's own reset - only a five_hour rollover re-anchors other
+        // windows. Its 15-minute clock (started at Start) is genuinely
+        // overdue by now (20 >= 15), so it correctly fires its own repeat.
+        var opusEvents = atReset.Where(e => e.WindowKey == "seven_day_opus").ToList();
+        var opusRepeat = Assert.Single(opusEvents);
+        Assert.Equal(AlertLevel.Critical, opusRepeat.Level);
+    }
+
+    [Fact]
+    public void RepeatMinutesZeroMeansFiveHourRolloverTouchesNothing()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        Assert.Equal(0, s.AlertRepeatMinutes);
+
+        t.Evaluate(SnapFiveHourAndWeekly(FhReset1, 91), s, Start);
+        var notifiedAtCrossing = t.State["seven_day"].LastNotifiedAt;
+
+        // Five-hour rolls over; with repeat off this must be a complete
+        // no-op for every other window - no event, and no state write either
+        // (persisted state stays byte-identical to pre-S13 behavior).
+        var atRollover = t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(20));
+        Assert.DoesNotContain(atRollover, e => e.WindowKey == "seven_day");
+        Assert.Equal(notifiedAtCrossing, t.State["seven_day"].LastNotifiedAt);
+
+        // ...and no repeat ever fires afterward either, no matter how much
+        // time passes - matches RepeatMinutesZeroMeansOnlyOncePerCrossingEvenWithTimePassing.
+        Assert.Empty(t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddDays(30))
+            .Where(e => e.WindowKey == "seven_day"));
+    }
+
+    [Fact]
+    public void FiveHourRolloverDoesNotReArmAWeeklyWindowsCrossingDedupe()
+    {
+        // The anti-nag property: re-anchoring the repeat TIMER must never
+        // re-arm a window's crossing dedupe (LastAlertedLevel). If it did, a
+        // weekly window parked at 95% would re-alert every single 5-hour
+        // rollover forever - exactly the nagging this feature exists to stop.
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+
+        var first = Assert.Single(
+            t.Evaluate(SnapFiveHourAndWeekly(FhReset1, 95), s, Start), e => e.WindowKey == "seven_day");
+        Assert.Equal(AlertLevel.Critical, first.Level);
+
+        // 1 minute later (nowhere near the 15-minute repeat interval) the
+        // 5-hour window rolls over. If the rollover incorrectly cleared
+        // seven_day's LastAlertedLevel back to None, this poll (still at
+        // 95%, Critical > None) would fire an ESCALATION event right here,
+        // regardless of the repeat interval - the exact bug this test guards
+        // against.
+        var atRollover = t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 95), s, Start.AddMinutes(1));
+        Assert.DoesNotContain(atRollover, e => e.WindowKey == "seven_day");
+    }
+
+    [Fact]
+    public void FiveHourRolloverWhileFiveHourDisabledDoesNotAnchorOtherWindows()
+    {
+        // settings.AlertFiveHour = false means Eval never even looks at
+        // five_hour's own state, so no rollover can ever be observed while
+        // it is off - the cross-window anchor is simply inactive, and every
+        // window's repeat clock keeps running off its own LastNotifiedAt,
+        // exactly as before S13.
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        s.AlertFiveHour = false;
+
+        var first = Assert.Single(
+            t.Evaluate(SnapFiveHourAndWeekly(FhReset1, 91), s, Start), e => e.WindowKey == "seven_day");
+        Assert.Equal(AlertLevel.Critical, first.Level);
+
+        // A resets_at value that WOULD have been a genuine 5-hour rollover if
+        // AlertFiveHour were on. With it off, this changes nothing about
+        // seven_day's own clock.
+        Assert.Empty(t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(10))
+            .Where(e => e.WindowKey == "seven_day")); // too soon on seven_day's own clock
+
+        var repeat = Assert.Single(
+            t.Evaluate(SnapFiveHourAndWeekly(FhReset2, 91), s, Start.AddMinutes(15)),
+            e => e.WindowKey == "seven_day"); // seven_day's own 15-minute clock, unaffected
+        Assert.Equal(AlertLevel.Critical, repeat.Level);
+    }
 }
