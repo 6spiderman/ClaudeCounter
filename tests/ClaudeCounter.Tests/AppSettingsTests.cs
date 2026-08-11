@@ -20,6 +20,8 @@ public class AppSettingsTests
         Assert.Equal(PopupPlacement.NearTray, s.PopupPlacement);
         Assert.Equal(12, s.PopupAutoDismissSeconds);
         Assert.NotNull(s.NotificationState);
+        // S11b: null until the first-ever backup poll observes a state.
+        Assert.Null(s.LastBackupHealthState);
     }
 
     [Fact]

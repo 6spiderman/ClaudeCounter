@@ -1,3 +1,4 @@
+using ClaudeBackup;
 using ClaudeCounter.Core;
 using ClaudeCounter.Core.Auth;
 using ClaudeCounter.Notifications;
@@ -38,7 +39,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     private AboutForm? _aboutForm;
     private SignInForm? _signInForm;
     private Icon? _currentIcon;
-    private (string Text, Band Band)? _iconKey;
+    // S11b: badge is now part of the key - see SetIcon's own remarks - or a
+    // backup-health change alone (no usage-text/band change) would never
+    // trigger a re-render.
+    private (string Text, Band Band, bool Badge)? _iconKey;
     private bool _updateCheckStarted;
     private bool _shutdownDone;
     private string? _updateUrl;
@@ -108,7 +112,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true,
         };
-        SetIcon("--", Band.Gray);
+        SetIcon("--", Band.Gray, badge: false);
         _notifyIcon.Text = "ClaudeCounter - waiting for first update";
         _notifyIcon.MouseClick += OnTrayClick;
 
@@ -274,10 +278,22 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OnPollUpdated(PollState state)
     {
-        UpdateIcon(state);
-        var tooltip = BuildTooltip(state);
+        // S11b: computed once per poll and threaded through the icon/tooltip/
+        // flyout below - loaded fresh from disk every time (like
+        // BackupTaskManager.RunNowAsync and SettingsForm.OnOpenRestoreDialog
+        // already do for backup.json), never cached, so a change made from
+        // the Settings dialog or an in-progress worker run updating
+        // backup-status.json is picked up on the very next poll with no
+        // extra invalidation plumbing. Every existing line below this point
+        // is unchanged in what it does - see UpdateIcon/BuildTooltip's own
+        // remarks for exactly how backupHealth is folded in.
+        var backupHealth = EvaluateBackupHealth();
+
+        UpdateIcon(state, backupHealth);
+        var tooltip = BuildTooltip(state, backupHealth);
         _notifyIcon.Text = tooltip;
         _flyout.UpdateState(state);
+        _flyout.UpdateBackupHealth(backupHealth);
         UpdateSignInItem(state);
         Log.Info($"Tooltip: {tooltip.Replace("\n", " | ")}");
 
@@ -291,6 +307,83 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
 
         EvaluateAlerts(state);
+
+        EvaluateBackupHealthNotification(backupHealth);
+    }
+
+    /// <summary>
+    /// S11b: loads backup.json and backup-status.json fresh from disk and
+    /// evaluates health via BackupHealth.Evaluate. Returns null when the
+    /// backup worker is not installed (BackupTaskManager.WorkerAvailable()) -
+    /// the feature does not exist at all in that case, so no badge, no
+    /// tooltip/flyout line, and no popup (every consumer below treats a null
+    /// result exactly like NotConfigured). Safe to call unguarded on the poll
+    /// timer: both Load calls degrade to safe defaults (BackupConfig.Load
+    /// falls back to Default(), BackupStatus.Load falls back to a fresh
+    /// status that reads as NeverRun) rather than throwing - see both types'
+    /// own doc comments, which call out this exact caller.
+    /// </summary>
+    private BackupHealthResult? EvaluateBackupHealth()
+    {
+        if (!BackupTaskManager.WorkerAvailable())
+            return null;
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var status = BackupStatus.Load(BackupStatus.DefaultPath());
+        return BackupHealth.Evaluate(status, config, DateTimeOffset.UtcNow, config.Schedule.BackupStaleAfterDays);
+    }
+
+    /// <summary>
+    /// S11b: one popup per transition into a problem state - see
+    /// BackupHealthPresenter.ShouldNotify, the pure decision this method
+    /// wraps with I/O (settings persistence) and UI (the popup itself, and
+    /// the same modal-dialog suppression EvaluateAlerts already applies to
+    /// usage alerts, for the same reason: a popup created while a modal
+    /// dialog is running would yank focus off it). <paramref
+    /// name="result"/> null means the worker is not installed - nothing to
+    /// evaluate, nothing to persist.
+    ///
+    /// _settings.LastBackupHealthState tracks the last OBSERVED state, not
+    /// just the last one that actually popped up - it is advanced whenever
+    /// the state changes, even when a popup for that change was suppressed by
+    /// a modal dialog, mirroring EvaluateAlerts' own "still persist state
+    /// even when suppressed, so the alert does not fire late once the dialog
+    /// closes" behaviour for usage alerts.
+    /// </summary>
+    private void EvaluateBackupHealthNotification(BackupHealthResult? result)
+    {
+        if (result is null)
+            return;
+
+        var previous = _settings.LastBackupHealthState;
+        if (BackupHealthPresenter.ShouldNotify(previous, result.State))
+        {
+            var modalActive = !_settings.OnboardingCompleted
+                || _settingsForm is { IsDisposed: false }
+                || _signInForm is { IsDisposed: false }
+                || _aboutForm is { IsDisposed: false };
+            if (modalActive)
+            {
+                Log.Info($"Backup health alert suppressed (modal dialog open): {result.State}.");
+            }
+            else
+            {
+                Log.Info($"Backup health alert: {result.State}.");
+                try
+                {
+                    AlertPopupForm.ShowBackupHealth(result, _settings.PopupPlacement, Cursor.Position, _settings.PopupAutoDismissSeconds);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Backup health popup failed: {ex.Message}");
+                }
+            }
+        }
+
+        if (previous != result.State)
+        {
+            _settings.LastBackupHealthState = result.State;
+            SaveSettings();
+        }
     }
 
     private void EvaluateAlerts(PollState state)
@@ -346,7 +439,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         SaveSettings();
     }
 
-    private void UpdateIcon(PollState state)
+    private void UpdateIcon(PollState state, BackupHealthResult? backupHealth)
     {
         string text;
         Band band;
@@ -362,22 +455,24 @@ public sealed class TrayApplicationContext : ApplicationContext
             text = "--";
             band = Band.Gray;
         }
-        SetIcon(text, band);
+        // S11b: keyed off WarrantsAttention() directly - never a hand-rolled
+        // Failed-or-Stale check (see BackupHealthPresenter's own remarks).
+        SetIcon(text, band, backupHealth?.State.WarrantsAttention() ?? false);
     }
 
-    private void SetIcon(string text, Band band)
+    private void SetIcon(string text, Band band, bool badge)
     {
-        if (_iconKey == (text, band))
+        if (_iconKey == (text, band, badge))
             return;
-        var icon = IconRenderer.Render(text, band);
+        var icon = IconRenderer.Render(text, band, badge);
         var previous = _currentIcon;
         _notifyIcon.Icon = icon;
         _currentIcon = icon;
-        _iconKey = (text, band);
+        _iconKey = (text, band, badge);
         previous?.Dispose();
     }
 
-    private string BuildTooltip(PollState state)
+    private string BuildTooltip(PollState state, BackupHealthResult? backupHealth)
     {
         string tooltip;
         if (state.Snapshot is { } s)
@@ -398,6 +493,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             tooltip = "ClaudeCounter\n" + (state.ProblemMessage ?? "Waiting for first update");
         }
+
+        // S11b: appended LAST, after the guaranteed Session/Week lines above -
+        // so if the 127-char clamp below has to cut anything, it cuts this
+        // line, never a usage number (see BackupHealthPresenter.TooltipLine's
+        // doc comment and the design spec's tooltip constraint).
+        if (BackupHealthPresenter.TooltipLine(backupHealth) is { } backupLine)
+            tooltip += "\n" + backupLine;
+
         return tooltip.Length <= MaxTooltipLength ? tooltip : tooltip[..MaxTooltipLength];
     }
 

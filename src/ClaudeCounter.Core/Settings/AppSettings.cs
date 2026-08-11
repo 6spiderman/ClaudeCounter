@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClaudeBackup;
 using ClaudeCounter.Notifications;
 
 namespace ClaudeCounter.Settings;
@@ -80,6 +81,22 @@ public sealed class AppSettings
     /// dropped onto the bootstrap path.
     /// </summary>
     public bool OnboardingCompleted { get; set; }
+
+    /// <summary>
+    /// S11b: the most recently OBSERVED overall backup health state - not
+    /// merely the last one a popup actually fired for. BackupHealthPresenter.
+    /// ShouldNotify compares this against each new poll's state to detect a
+    /// transition INTO a problem state; tracking every observed state (not
+    /// just ones that popped up - a popup can be suppressed by a modal
+    /// dialog, see TrayApplicationContext.EvaluateBackupHealthNotification)
+    /// is what lets a later real failure re-arm correctly after a recovery to
+    /// Healthy. Null before the first-ever backup poll, or forever on a
+    /// machine with no backup worker installed (BackupTaskManager.
+    /// WorkerAvailable) since that path never touches this field. Persisted
+    /// alongside NotificationState so a tray restart does not re-announce an
+    /// already-known failure.
+    /// </summary>
+    public BackupHealthState? LastBackupHealthState { get; set; }
 
     public void Normalize()
     {

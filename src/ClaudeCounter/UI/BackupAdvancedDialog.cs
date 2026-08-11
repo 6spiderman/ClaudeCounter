@@ -39,6 +39,7 @@ public sealed class BackupAdvancedDialog : Form
     private readonly ThemedCheckBox _restartOnFailure;
     private readonly NumericUpDown _restartIntervalMinutes;
     private readonly NumericUpDown _restartCount;
+    private readonly NumericUpDown _backupStaleAfterDays;
     private readonly ThemedCheckBox _keepLastEnabled;
     private readonly NumericUpDown _keepLastCount;
     private readonly ThemedCheckBox _deleteOlderEnabled;
@@ -51,6 +52,9 @@ public sealed class BackupAdvancedDialog : Form
     public bool RestartOnFailure => _restartOnFailure.Checked;
     public int RestartIntervalMinutes => (int)_restartIntervalMinutes.Value;
     public int RestartCount => (int)_restartCount.Value;
+
+    /// <summary>S11b: 0 means never warn about staleness - see ScheduleConfig.BackupStaleAfterDays's own doc comment.</summary>
+    public int BackupStaleAfterDays => (int)_backupStaleAfterDays.Value;
 
     /// <summary>Null when the "Keep only the most recent" checkbox is unticked - the rule is off.</summary>
     public int? KeepLastCount => _keepLastEnabled.Checked ? (int)_keepLastCount.Value : null;
@@ -141,6 +145,25 @@ public sealed class BackupAdvancedDialog : Form
         };
         _restartIntervalMinutes.Enabled = _restartOnFailure.Checked;
         _restartCount.Enabled = _restartOnFailure.Checked;
+
+        // S11b: the staleness threshold behind BackupHealthState.Stale (see
+        // BackupHealth.Evaluate) - lives here rather than on the Backup tab
+        // itself for the same reason as everything else in this dialog: see
+        // this class's own doc comment and
+        // SettingsFormHeightStaysWithinTheDisplayBudget.
+        y += 6;
+        var healthHeader = NewSectionLabel("Backup health", palette, y, bold: true);
+        Controls.Add(healthHeader);
+        y += healthHeader.PreferredHeight + 4;
+
+        var staleLabel = NewSectionLabel("Warn about stale backups after (days, 0 = never)", palette, y);
+        Controls.Add(staleLabel);
+        y += staleLabel.PreferredHeight + 2;
+
+        _backupStaleAfterDays = NewNumeric(palette, 0, 365, Math.Clamp(schedule.BackupStaleAfterDays, 0, 365));
+        _backupStaleAfterDays.Location = new Point(Pad, y);
+        Controls.Add(_backupStaleAfterDays);
+        y += _backupStaleAfterDays.Height + RowGap;
 
         y += 6;
         var driveHeader = NewSectionLabel("Google Drive retention", palette, y, bold: true);

@@ -115,6 +115,10 @@ public sealed class SettingsForm : Form
     private bool _scheduleRestartOnFailure = true;
     private int _scheduleRestartIntervalMinutes = 15;
     private int _scheduleRestartCount = 3;
+    // S11b: same "field seeded in BuildBackupPage, mutated only via the
+    // Advanced dialog's OK, read back in OnSaveBackupSchedule" shape as every
+    // other schedule field above.
+    private int _scheduleBackupStaleAfterDays = 3;
     private int? _driveKeepLastCount;
     private int? _driveDeleteOlderThanDays;
 
@@ -416,6 +420,7 @@ public sealed class SettingsForm : Form
         _scheduleRestartOnFailure = config.Schedule.RestartOnFailure;
         _scheduleRestartIntervalMinutes = config.Schedule.RestartIntervalMinutes;
         _scheduleRestartCount = config.Schedule.RestartCount;
+        _scheduleBackupStaleAfterDays = config.Schedule.BackupStaleAfterDays;
         _driveKeepLastCount = config.Drive.KeepLastCount;
         _driveDeleteOlderThanDays = config.Drive.DeleteOlderThanDays;
 
@@ -682,6 +687,7 @@ public sealed class SettingsForm : Form
             RestartOnFailure = _scheduleRestartOnFailure,
             RestartIntervalMinutes = _scheduleRestartIntervalMinutes,
             RestartCount = _scheduleRestartCount,
+            BackupStaleAfterDays = _scheduleBackupStaleAfterDays,
         };
         var drive = new DriveTarget
         {
@@ -700,6 +706,7 @@ public sealed class SettingsForm : Form
         _scheduleRestartOnFailure = dialog.RestartOnFailure;
         _scheduleRestartIntervalMinutes = dialog.RestartIntervalMinutes;
         _scheduleRestartCount = dialog.RestartCount;
+        _scheduleBackupStaleAfterDays = dialog.BackupStaleAfterDays;
         _driveKeepLastCount = dialog.KeepLastCount;
         _driveDeleteOlderThanDays = dialog.DeleteOlderThanDays;
     }
@@ -972,6 +979,7 @@ public sealed class SettingsForm : Form
         config.Schedule.RestartOnFailure = _scheduleRestartOnFailure;
         config.Schedule.RestartIntervalMinutes = _scheduleRestartIntervalMinutes;
         config.Schedule.RestartCount = _scheduleRestartCount;
+        config.Schedule.BackupStaleAfterDays = _scheduleBackupStaleAfterDays;
         config.Drive.KeepLastCount = _driveKeepLastCount;
         config.Drive.DeleteOlderThanDays = _driveDeleteOlderThanDays;
 

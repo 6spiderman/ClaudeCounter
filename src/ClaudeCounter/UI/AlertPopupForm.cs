@@ -1,3 +1,4 @@
+using ClaudeBackup;
 using ClaudeCounter.Core;
 using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
@@ -20,6 +21,17 @@ public static class AlertContent
     }
 }
 
+/// <summary>
+/// A small themed popup card, shown either for a usage-threshold crossing
+/// (<see cref="Show"/>) or (S11b) for a transition into a backup-health
+/// problem state (<see cref="ShowBackupHealth"/>). Both factories funnel into
+/// the same private constructor/<see cref="ShowForm"/> helper, so placement,
+/// stacking, auto-dismiss, Esc-to-close and rounded-corner chrome are all
+/// genuinely shared code, not two parallel implementations - "reusing the
+/// existing alert popup infrastructure so the user's placement and
+/// auto-dismiss settings are honoured" (design spec) is what this refactor
+/// exists to guarantee structurally rather than by convention.
+/// </summary>
 public sealed class AlertPopupForm : Form
 {
     private const int PopupWidth = 300;
@@ -34,10 +46,11 @@ public sealed class AlertPopupForm : Form
     private readonly bool _noActivate;
     private readonly System.Windows.Forms.Timer? _dismissTimer;
 
-    private AlertPopupForm(AlertEvent e, PopupPlacement placement, Point anchor, int autoDismissSeconds)
+    private AlertPopupForm(
+        string title, string body, float titleFontSize,
+        Color backColor, Color foreColor, Color dismissBackColor,
+        bool centered, Point anchor, int autoDismissSeconds)
     {
-        // 100% always takes the center + focus; critical follows the setting.
-        var centered = placement == PopupPlacement.Centered || e.Level == AlertLevel.Maxed;
         _noActivate = !centered;
 
         FormBorderStyle = FormBorderStyle.None;
@@ -48,16 +61,8 @@ public sealed class AlertPopupForm : Form
         StartPosition = FormStartPosition.Manual;
         KeyPreview = true;
 
-        var palette = Theme.Current();
-        BackColor = e.Level switch
-        {
-            AlertLevel.Maxed => Theme.BandColor(Band.Red),
-            AlertLevel.Warn => Theme.BandColor(Band.Amber),
-            _ => palette.Back,
-        };
-
-        var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
-        BuildContent(title, body, e.Level, palette);
+        BackColor = backColor;
+        BuildContent(title, body, titleFontSize, foreColor, dismissBackColor);
         Place(centered, anchor);
 
         // Esc-to-close as a safety valve: the centered/Maxed popup is
@@ -95,7 +100,59 @@ public sealed class AlertPopupForm : Form
     /// </summary>
     public static void Show(AlertEvent e, PopupPlacement placement, Point anchor, int autoDismissSeconds)
     {
-        var form = new AlertPopupForm(e, placement, anchor, autoDismissSeconds);
+        // 100% always takes the center + focus; critical follows the setting.
+        var centered = placement == PopupPlacement.Centered || e.Level == AlertLevel.Maxed;
+        var palette = Theme.Current();
+
+        // Maxed's red and Warn's amber are both fixed accent colors, not part
+        // of the light/dark theme pair, so they get their own fixed
+        // contrasting foreground rather than palette.Fore (which is tuned for
+        // palette.Back, not for an accent-colored card). Amber is the
+        // brighter of the two, so black reads better on it than white.
+        var (backColor, foreColor) = e.Level switch
+        {
+            AlertLevel.Maxed => (Theme.BandColor(Band.Red), Color.White),
+            AlertLevel.Warn => (Theme.BandColor(Band.Amber), Color.Black),
+            _ => (palette.Back, palette.Fore),
+        };
+        // Maxed and Warn both sit on a solid accent color rather than the
+        // neutral theme background, so their Dismiss button is a darkened
+        // overlay of that same accent rather than palette.BarBack (which
+        // would look like an unrelated gray patch dropped on top of it).
+        var dismissBackColor = e.Level is AlertLevel.Maxed or AlertLevel.Warn
+            ? Color.FromArgb(60, 0, 0, 0)
+            : palette.BarBack;
+        var titleFontSize = e.Level == AlertLevel.Maxed ? 13f : 10.5f;
+
+        var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
+        ShowForm(title, body, titleFontSize, backColor, foreColor, dismissBackColor, centered, anchor, autoDismissSeconds);
+    }
+
+    /// <summary>
+    /// S11b: show a popup for one transition into a backup-health problem
+    /// state. The caller (TrayApplicationContext) only invokes this on an
+    /// actual transition - see BackupHealthPresenter.ShouldNotify - never on
+    /// every poll, so no dedupe logic lives here. A backup problem is not the
+    /// "you are at 100%" emergency tier, so unlike Maxed it always follows
+    /// <paramref name="placement"/> rather than forcing centered
+    /// focus-stealing; otherwise it reuses exactly the same placement,
+    /// auto-dismiss, stacking, dismiss button and Esc-to-close behaviour as
+    /// <see cref="Show"/>.
+    /// </summary>
+    public static void ShowBackupHealth(BackupHealthResult result, PopupPlacement placement, Point anchor, int autoDismissSeconds)
+    {
+        var centered = placement == PopupPlacement.Centered;
+        var backColor = Theme.BandColor(Band.Amber);
+        var (title, body) = BackupHealthPresenter.PopupContent(result, DateTimeOffset.Now);
+        ShowForm(title, body, 10.5f, backColor, Color.Black, Color.FromArgb(60, 0, 0, 0), centered, anchor, autoDismissSeconds);
+    }
+
+    private static void ShowForm(
+        string title, string body, float titleFontSize,
+        Color backColor, Color foreColor, Color dismissBackColor,
+        bool centered, Point anchor, int autoDismissSeconds)
+    {
+        var form = new AlertPopupForm(title, body, titleFontSize, backColor, foreColor, dismissBackColor, centered, anchor, autoDismissSeconds);
         if (form._noActivate)
             form.Show();      // ShowWithoutActivation keeps focus with the active app
         else
@@ -134,32 +191,21 @@ public sealed class AlertPopupForm : Form
         base.OnFormClosed(e);
     }
 
-    private void BuildContent(string title, string body, AlertLevel level, Palette palette)
+    private void BuildContent(string title, string body, float titleFontSize, Color foreColor, Color dismissBackColor)
     {
-        // Maxed's red and Warn's amber are both fixed accent colors, not part
-        // of the light/dark theme pair, so they get their own fixed
-        // contrasting foreground rather than palette.Fore (which is tuned for
-        // palette.Back, not for an accent-colored card). Amber is the
-        // brighter of the two, so black reads better on it than white.
-        var fore = level switch
-        {
-            AlertLevel.Maxed => Color.White,
-            AlertLevel.Warn => Color.Black,
-            _ => palette.Fore,
-        };
         var pad = 14;
         var titleLabel = new Label
         {
             Text = title,
-            Font = new Font("Segoe UI Semibold", level == AlertLevel.Maxed ? 13f : 10.5f),
-            ForeColor = fore, BackColor = Color.Transparent, AutoSize = true,
+            Font = new Font("Segoe UI Semibold", titleFontSize),
+            ForeColor = foreColor, BackColor = Color.Transparent, AutoSize = true,
             MaximumSize = new Size(Width - pad * 2, 0), Location = new Point(pad, pad),
         };
         Controls.Add(titleLabel);
 
         var bodyLabel = new Label
         {
-            Text = body, ForeColor = fore, BackColor = Color.Transparent, AutoSize = true,
+            Text = body, ForeColor = foreColor, BackColor = Color.Transparent, AutoSize = true,
             MaximumSize = new Size(Width - pad * 2, 0),
             Location = new Point(pad, titleLabel.Bottom + 6),
         };
@@ -167,17 +213,8 @@ public sealed class AlertPopupForm : Form
 
         var dismiss = new Button
         {
-            Text = "Dismiss", FlatStyle = FlatStyle.Flat, ForeColor = fore,
-            // Maxed and Warn both sit on a solid accent color rather than the
-            // neutral theme background, so their Dismiss button is a darkened
-            // overlay of that same accent rather than palette.BarBack (which
-            // would look like an unrelated gray patch dropped on top of it).
-            BackColor = level switch
-            {
-                AlertLevel.Maxed => Color.FromArgb(60, 0, 0, 0),
-                AlertLevel.Warn => Color.FromArgb(60, 0, 0, 0),
-                _ => palette.BarBack,
-            },
+            Text = "Dismiss", FlatStyle = FlatStyle.Flat, ForeColor = foreColor,
+            BackColor = dismissBackColor,
             Size = new Size(80, 28),
             Location = new Point(Width - pad - 80, bodyLabel.Bottom + 10),
         };

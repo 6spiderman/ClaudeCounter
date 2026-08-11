@@ -13,10 +13,14 @@ public static class IconRenderer
 
     /// <summary>
     /// Renders a 32x32 tray icon: rounded square in the band color with the
-    /// percentage (or "--") in white. Caller owns the returned Icon and must
-    /// dispose the previously displayed one after swapping.
+    /// percentage (or "--") in white, plus (S11b) an optional small "problem"
+    /// badge in the top-right corner when <paramref name="badge"/> is true -
+    /// the caller passes <c>BackupHealthResult.State.WarrantsAttention()</c>,
+    /// never a hand-rolled Failed-or-Stale check of its own. Caller owns the
+    /// returned Icon and must dispose the previously displayed one after
+    /// swapping.
     /// </summary>
-    public static Icon Render(string text, Band band)
+    public static Icon Render(string text, Band band, bool badge = false)
     {
         const int size = 32;
         using var bitmap = new Bitmap(size, size);
@@ -43,6 +47,9 @@ public static class IconRenderer
                 LineAlignment = StringAlignment.Center,
             };
             g.DrawString(text, font, Brushes.White, new RectangleF(0, 0, size, size + 1), format);
+
+            if (badge)
+                DrawBadge(g, size);
         }
 
         // GDI handle hygiene: GetHicon allocates an unmanaged HICON that
@@ -58,6 +65,31 @@ public static class IconRenderer
         {
             NativeMethods.DestroyIcon(hIcon);
         }
+    }
+
+    /// <summary>
+    /// A small white-ringed red dot in the top-right corner, sized (roughly a
+    /// third of the icon) to stay a clearly visible dot rather than a
+    /// near-invisible speck once Windows downsamples this 32x32 source
+    /// bitmap to the 16x16 the tray strip actually shows - the requirement
+    /// this exists to satisfy is that the marker is legible at both sizes.
+    /// Deliberately a fixed style regardless of which backup health
+    /// sub-state triggered it (NeverRun/Failed/Stale all draw the same badge -
+    /// the tooltip/flyout carry which one it is), and deliberately confined
+    /// to the extreme corner so it does not obscure the centered percentage
+    /// text this icon exists to keep readable.
+    /// </summary>
+    private static void DrawBadge(Graphics g, int size)
+    {
+        var diameter = size * 0.3125f; // 10px at the 32px size this renders
+        var ringRect = new RectangleF(size - diameter - 1, 1, diameter, diameter);
+        using var ring = new SolidBrush(Color.White);
+        g.FillEllipse(ring, ringRect);
+
+        var dotInset = diameter * 0.15f;
+        var dotRect = RectangleF.Inflate(ringRect, -dotInset, -dotInset);
+        using var dot = new SolidBrush(Color.FromArgb(237, 28, 36));
+        g.FillEllipse(dot, dotRect);
     }
 
     private static GraphicsPath RoundedRect(Rectangle bounds, int radius)

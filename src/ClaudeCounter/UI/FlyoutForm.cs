@@ -1,4 +1,6 @@
+using ClaudeBackup;
 using ClaudeCounter.Core;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
@@ -12,6 +14,11 @@ public sealed class FlyoutForm : Form
     private readonly System.Windows.Forms.Timer _countdownTimer;
     private PollState? _state;
     private string? _updateVersion;
+
+    // S11b: null when the backup worker is not installed - BackupHealthPresenter.FlyoutLines
+    // already treats a null result the same as NotConfigured (no lines at
+    // all), so no separate "is backup available" flag is needed here.
+    private BackupHealthResult? _backupHealth;
 
     /// <summary>Used by the tray click handler to ignore the click that just closed us.</summary>
     public DateTime HiddenAtUtc { get; private set; } = DateTime.MinValue;
@@ -61,6 +68,21 @@ public sealed class FlyoutForm : Form
     public void UpdateState(PollState state)
     {
         _state = state;
+        if (Visible)
+            RebuildContent();
+    }
+
+    /// <summary>
+    /// S11b: called every poll (see TrayApplicationContext.OnPollUpdated)
+    /// with the freshly-evaluated backup health, or null when the backup
+    /// worker is not installed. Mirrors <see cref="UpdateState"/>'s
+    /// rebuild-only-if-visible pattern - the flyout is usually hidden, and
+    /// rebuilding invisible content on every 5-minute poll would be wasted
+    /// work.
+    /// </summary>
+    public void UpdateBackupHealth(BackupHealthResult? result)
+    {
+        _backupHealth = result;
         if (Visible)
             RebuildContent();
     }
@@ -157,6 +179,20 @@ public sealed class FlyoutForm : Form
             updateLink.LinkClicked += (_, _) => UpdateRequested?.Invoke();
             Controls.Add(updateLink);
             y += updateLink.PreferredHeight + 6;
+        }
+
+        // S11b: absent entirely when the worker is not installed or backup is
+        // NotConfigured - BackupHealthPresenter.FlyoutLines already encodes
+        // that "never nag a user who does not use backup" rule, so this is
+        // just "render whatever it returned", never a hand-rolled state check.
+        var backupLines = BackupHealthPresenter.FlyoutLines(_backupHealth, DateTimeOffset.UtcNow);
+        if (backupLines.Count > 0)
+        {
+            var warrants = _backupHealth is { } bh && bh.State.WarrantsAttention();
+            var color = warrants ? Theme.BandColor(Band.Amber) : palette.SubtleFore;
+            foreach (var line in backupLines)
+                y = AddLabel(line, Font, color, y, wrap: true);
+            y += 4;
         }
 
         y += 6;

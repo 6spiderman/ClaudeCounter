@@ -145,11 +145,49 @@ public class SettingsFormSmokeTests
             RestartOnFailure = false,
             RestartIntervalMinutes = 30,
             RestartCount = 5,
+            BackupStaleAfterDays = 7,
         };
         var drive = new DriveTarget { KeepLastCount = 14, DeleteOlderThanDays = 60 };
 
         var error = ConstructOnStaThread(() => new BackupAdvancedDialog(Theme.Current(), schedule, drive));
         Assert.Null(error);
+    }
+
+    // S11b: the Advanced dialog is only reachable by clicking "Advanced..."
+    // on the Backup tab, so BackupStaleAfterDays' NumericUpDown (like every
+    // other control here) is only exercised by an STA smoke test. This one
+    // goes further than "does not throw" - it captures the constructed
+    // dialog's BackupStaleAfterDays property from inside the STA thread
+    // (mirroring SettingsFormHeightStaysWithinTheDisplayBudget's pattern for
+    // reading a value before the `using` disposes the form) and asserts it
+    // actually reflects the seeded ScheduleConfig value, proving the new row
+    // is wired up rather than merely present on screen.
+    [Fact]
+    public void BackupAdvancedDialogExposesTheSeededBackupStaleAfterDays()
+    {
+        var schedule = new ScheduleConfig { BackupStaleAfterDays = 9 };
+        int? observed = null;
+        Exception? captured = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                using var dialog = new BackupAdvancedDialog(Theme.Current(), schedule, new DriveTarget());
+                _ = dialog.Handle;
+                observed = dialog.BackupStaleAfterDays;
+            }
+            catch (Exception e)
+            {
+                captured = e;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "Dialog construction did not complete within 30s.");
+        Assert.Null(captured);
+        Assert.Equal(9, observed);
     }
 
     // S9b: fake IProcessRunner for RestoreDialogConstructsWithAPopulatedSnapshotListWithoutThrowing
