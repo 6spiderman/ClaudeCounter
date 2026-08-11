@@ -54,11 +54,17 @@ public class RestoreZipSourceTests : IDisposable
     // for the overlap check.
     private readonly string _protected = Path.Combine(Path.GetTempPath(), $"rzsprotected-{Guid.NewGuid():N}");
 
+    // S14: a sync-folder transport's source directory - the equivalent of
+    // "the remote" for the rclone tests above, except real backup zips are
+    // written to it directly on disk instead of via a faked rclone call.
+    private readonly string _syncFolder = Path.Combine(Path.GetTempPath(), $"rzssync-{Guid.NewGuid():N}");
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true);
         if (Directory.Exists(_destDir)) Directory.Delete(_destDir, true);
         if (Directory.Exists(_protected)) Directory.Delete(_protected, true);
+        if (Directory.Exists(_syncFolder)) Directory.Delete(_syncFolder, true);
     }
 
     private static byte[] BuildZip(Action<ZipArchive> populate)
@@ -324,6 +330,155 @@ public class RestoreZipSourceTests : IDisposable
 
         var result = new RestoreZipSource(runner).Materialize(
             new DriveTarget { RcloneRemote = "gdrive:X" }, "claude-backup-a.zip", _tempDir, _destDir, _protected);
+
+        Assert.True(result.Ok);
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(_destDir, "settings.json")));
+        Assert.False(File.Exists(Path.Combine(_destDir, ".credentials.json")));
+    }
+
+    // --- S14: sync-folder transport ------------------------------------------
+    //
+    // No IProcessRunner involved at all for this transport - a real zip file
+    // is written directly under _syncFolder, exactly what SyncFolderBackend
+    // itself would have left there.
+
+    private DriveTarget SyncTarget() => new() { Transport = DriveTransport.SyncFolder, FolderPath = _syncFolder };
+
+    private string WriteRealZip(string fileName, byte[] bytes, DateTimeOffset? modified = null)
+    {
+        Directory.CreateDirectory(_syncFolder);
+        var path = Path.Combine(_syncFolder, fileName);
+        File.WriteAllBytes(path, bytes);
+        if (modified is { } m) File.SetLastWriteTimeUtc(path, m.UtcDateTime);
+        return path;
+    }
+
+    [Fact]
+    public void ListSnapshotsFromFolderReturnsEmptySuccessWhenFolderDoesNotExistYet()
+    {
+        var result = new RestoreZipSource(new FakeRunner()).ListSnapshots(SyncTarget());
+
+        Assert.True(result.Ok);
+        Assert.Empty(result.Snapshots);
+    }
+
+    [Fact]
+    public void ListSnapshotsFromFolderFailsCleanlyWhenFolderPathIsBlank()
+    {
+        var result = new RestoreZipSource(new FakeRunner())
+            .ListSnapshots(new DriveTarget { Transport = DriveTransport.SyncFolder, FolderPath = "" });
+
+        Assert.False(result.Ok);
+    }
+
+    [Fact]
+    public void ListSnapshotsFromFolderListsRealFilesNewestFirstAndIgnoresNonMatchingNames()
+    {
+        var now = DateTimeOffset.UtcNow;
+        WriteRealZip("claude-backup-20260101-090000-aaaa.zip", Encoding.UTF8.GetBytes("old"), now.AddDays(-10));
+        WriteRealZip("claude-backup-20260201-090000-bbbb.zip", Encoding.UTF8.GetBytes("newer"), now);
+        WriteRealZip("notes.txt", Encoding.UTF8.GetBytes("not ours"), now);
+
+        var result = new RestoreZipSource(new FakeRunner()).ListSnapshots(SyncTarget());
+
+        Assert.True(result.Ok);
+        Assert.Equal(2, result.Snapshots.Count);
+        Assert.Equal("claude-backup-20260201-090000-bbbb.zip", result.Snapshots[0].Id);
+        Assert.Equal("claude-backup-20260101-090000-aaaa.zip", result.Snapshots[1].Id);
+        Assert.DoesNotContain(result.Snapshots, s => s.Id == "notes.txt");
+    }
+
+    [Fact]
+    public void MaterializeFromFolderRejectsAnInvalidSnapshotId()
+    {
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "../escape.zip", _tempDir, _destDir, _protected);
+
+        Assert.False(result.Ok);
+    }
+
+    [Fact]
+    public void MaterializeFromFolderFailsCleanlyWhenSnapshotIsMissing()
+    {
+        Directory.CreateDirectory(_syncFolder);
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "claude-backup-missing.zip", _tempDir, _destDir, _protected);
+
+        Assert.False(result.Ok);
+    }
+
+    // No download step: the zip is opened directly out of FolderPath, and -
+    // unlike the rclone transport's disposable temp copy - nothing is ever
+    // deleted from FolderPath, because that zip IS the backup.
+    [Fact]
+    public void MaterializeFromFolderExtractsInPlaceAndNeverDeletesTheSourceZip()
+    {
+        var zipBytes = BuildZip(zip =>
+        {
+            AddEntry(zip, "settings.json", "{}");
+            AddEntry(zip, "commands/a.md", "hello");
+        });
+        var zipPath = WriteRealZip("claude-backup-a.zip", zipBytes);
+
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "claude-backup-a.zip", _tempDir, _destDir, _protected);
+
+        Assert.True(result.Ok);
+        Assert.Equal(_destDir, result.StagedRoot);
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(_destDir, "settings.json")));
+        Assert.Equal("hello", File.ReadAllText(Path.Combine(_destDir, "commands", "a.md")));
+        // The source zip in the sync folder must still be there afterwards -
+        // it is the actual backup, not a disposable temp copy.
+        Assert.True(File.Exists(zipPath));
+    }
+
+    [Fact]
+    public void MaterializeFromFolderRefusesADestinationEqualToTheProtectedRoot()
+    {
+        WriteRealZip("claude-backup-a.zip", BuildZip(zip => AddEntry(zip, "settings.json", "{}")));
+
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "claude-backup-a.zip", _tempDir, _protected, _protected);
+
+        Assert.False(result.Ok);
+    }
+
+    // Restore rule 5, sync-folder side: a zip-slip entry must be refused
+    // while legitimate sibling entries still extract normally - the shared
+    // ExtractSafely path, exercised through this transport specifically.
+    [Fact]
+    public void MaterializeFromFolderRefusesZipSlipEntryAndStillExtractsLegitimateEntries()
+    {
+        var zipBytes = BuildZip(zip =>
+        {
+            AddEntry(zip, "settings.json", "{}");
+            AddEntry(zip, "../evil.json", "should never be written");
+        });
+        WriteRealZip("claude-backup-a.zip", zipBytes);
+
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "claude-backup-a.zip", _tempDir, _destDir, _protected);
+
+        Assert.True(result.Ok);
+        Assert.Equal("{}", File.ReadAllText(Path.Combine(_destDir, "settings.json")));
+        var escapedPath = Path.Combine(Path.GetDirectoryName(_destDir)!, "evil.json");
+        Assert.False(File.Exists(escapedPath));
+    }
+
+    // Restore rule 4, sync-folder side: a denylisted entry must be refused
+    // while legitimate sibling entries still extract normally.
+    [Fact]
+    public void MaterializeFromFolderRefusesDenylistedEntryAndStillExtractsLegitimateEntries()
+    {
+        var zipBytes = BuildZip(zip =>
+        {
+            AddEntry(zip, "settings.json", "{}");
+            AddEntry(zip, ".credentials.json", "secret");
+        });
+        WriteRealZip("claude-backup-a.zip", zipBytes);
+
+        var result = new RestoreZipSource(new FakeRunner())
+            .Materialize(SyncTarget(), "claude-backup-a.zip", _tempDir, _destDir, _protected);
 
         Assert.True(result.Ok);
         Assert.Equal("{}", File.ReadAllText(Path.Combine(_destDir, "settings.json")));

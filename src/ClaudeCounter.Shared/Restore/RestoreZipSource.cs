@@ -6,12 +6,30 @@ using ClaudeCounter.Core;
 namespace ClaudeBackup;
 
 /// <summary>
-/// Restore source for Google Drive (design spec step 2/3, Drive half): lists
-/// <c>claude-backup-*.zip</c> entries via <c>rclone lsjson</c>, and
-/// materialises a chosen zip into a staging folder via <c>rclone copy</c> +
-/// extraction. All rclone invocations go through <see cref="IProcessRunner"/>,
-/// exactly like <see cref="RcloneBackend"/>, so this is fully unit-testable
-/// without a real rclone binary or a real remote.
+/// Restore source for the Drive destination (design spec step 2/3, Drive
+/// half), for EITHER transport (S14: rclone or sync-folder - see the design
+/// doc's "Key structural decision", a transport switch on this one
+/// destination, not a third one). <see cref="ListSnapshots"/> and <see
+/// cref="Materialize"/> both branch internally on <see
+/// cref="DriveTarget.Transport"/> - their signatures take the whole <see
+/// cref="DriveTarget"/> already, so the branch is invisible to every caller,
+/// including <c>RestoreDialog</c>, which needed no changes at all for this.
+///
+/// Rclone transport: lists <c>claude-backup-*.zip</c> entries via <c>rclone
+/// lsjson</c>, and materialises a chosen zip into a staging folder via
+/// <c>rclone copy</c> + extraction. All rclone invocations go through <see
+/// cref="IProcessRunner"/>, exactly like <see cref="RcloneBackend"/>, so this
+/// is fully unit-testable without a real rclone binary or a real remote.
+///
+/// Sync-folder transport: lists <c>claude-backup-*.zip</c> entries directly
+/// out of <see cref="DriveTarget.FolderPath"/> via
+/// <see cref="Directory.EnumerateFiles(string, string)"/> (filtered through
+/// <see cref="DriveRetention.IsOurs"/>, the same ownership check
+/// SyncFolderBackend's own retention pruning uses), and materialises a
+/// chosen snapshot by opening it directly in place - there is no download
+/// step, and critically nothing is ever deleted from FolderPath here: unlike
+/// the rclone transport's downloaded temp copy, the zip IS the backup, not a
+/// disposable local copy of it.
 ///
 /// Extraction (<see cref="ExtractSafely"/>) enforces restore rule 5
 /// (containment: a zip-slip entry such as "../evil.json" is refused, logged,
@@ -20,7 +38,9 @@ namespace ClaudeBackup;
 /// zip entry before anything is written - this is the "on the way IN" check
 /// the design spec calls for, so a tampered archive cannot drop a secret or
 /// an out-of-tree file into the destination even before <see
-/// cref="RestoreClassifier"/> or <see cref="RestoreApplier"/> ever run.
+/// cref="RestoreClassifier"/> or <see cref="RestoreApplier"/> ever run. This,
+/// like the destination-overlap refusal and <see cref="IsPlausibleSnapshotId"/>,
+/// is shared by both transports untouched.
 /// </summary>
 public sealed class RestoreZipSource
 {
@@ -32,12 +52,18 @@ public sealed class RestoreZipSource
     private const string FileSuffix = ".zip";
 
     /// <summary>
-    /// Lists available Drive snapshots, newest first. Filters to
-    /// <c>claude-backup-*.zip</c> - anything else living in the same remote
-    /// folder (a user's own file, a different tool's output) is silently
-    /// ignored rather than offered as a restorable snapshot.
+    /// Lists available Drive snapshots, newest first, for whichever
+    /// transport <paramref name="target"/> is configured for. Filters to
+    /// <c>claude-backup-*.zip</c> - anything else living alongside it (a
+    /// user's own file, a different tool's output) is silently ignored
+    /// rather than offered as a restorable snapshot.
     /// </summary>
-    public RestoreListResult ListSnapshots(DriveTarget target)
+    public RestoreListResult ListSnapshots(DriveTarget target) =>
+        target.Transport == DriveTransport.SyncFolder
+            ? ListSnapshotsFromFolder(target)
+            : ListSnapshotsFromRclone(target);
+
+    private RestoreListResult ListSnapshotsFromRclone(DriveTarget target)
     {
         if (!_runner.Exists("rclone"))
             return RestoreListResult.Failure(ScrubAndLog("rclone not found on PATH - install and run 'rclone config' first."));
@@ -69,14 +95,51 @@ public sealed class RestoreZipSource
     }
 
     /// <summary>
-    /// Downloads <paramref name="snapshotId"/> (the exact zip file name, as
-    /// returned by <see cref="ListSnapshots"/>) into <paramref name="tempDir"/>
-    /// via <c>rclone copy</c>, then extracts it into <paramref
+    /// S14: the sync-folder equivalent of <see cref="ListSnapshotsFromRclone"/> -
+    /// no process invocation, just a directory listing. A FolderPath that
+    /// does not exist yet (the common case for a destination that has never
+    /// completed a single backup) is treated the same as "no backups found",
+    /// not as a failure - SyncFolderBackend.Run is what creates this
+    /// directory, so its absence here just means nothing has landed yet.
+    /// </summary>
+    private static RestoreListResult ListSnapshotsFromFolder(DriveTarget target)
+    {
+        if (string.IsNullOrWhiteSpace(target.FolderPath))
+            return RestoreListResult.Failure("Sync folder backup is enabled but no folder is configured.");
+
+        if (!Directory.Exists(target.FolderPath))
+            return RestoreListResult.Success(Array.Empty<RestoreSnapshot>());
+
+        try
+        {
+            var snapshots = Directory.EnumerateFiles(target.FolderPath, "claude-backup-*.zip")
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && DriveRetention.IsOurs(name))
+                .Select(name =>
+                {
+                    var path = Path.Combine(target.FolderPath, name!);
+                    var info = new FileInfo(path);
+                    return new RestoreSnapshot(
+                        name!, new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero), name!, info.Length);
+                })
+                .OrderByDescending(s => s.Timestamp)
+                .ToList();
+
+            return RestoreListResult.Success(snapshots);
+        }
+        catch (Exception ex)
+        {
+            return RestoreListResult.Failure(ScrubAndLog($"Could not list '{target.FolderPath}': {ex.Message}"));
+        }
+    }
+
+    /// <summary>
+    /// Materialises <paramref name="snapshotId"/> (the exact zip file name,
+    /// as returned by <see cref="ListSnapshots"/>) into <paramref
     /// name="destinationDir"/> with the containment and denylist checks
-    /// described on this class. The downloaded zip is deleted from <paramref
-    /// name="tempDir"/> afterwards on a best-effort basis (mirrors
-    /// RcloneBackend's own temp-zip cleanup) - a leftover zip would be a
-    /// second plaintext copy of the user's Claude config sitting on disk.
+    /// described on this class, for whichever transport <paramref
+    /// name="target"/> is configured for - see <see cref="MaterializeFromRclone"/>
+    /// and <see cref="MaterializeFromFolder"/> for what differs between them.
     ///
     /// <paramref name="destinationDir"/> is CLEARED before extraction (fix
     /// round 1, Important 1) - restoring snapshot A into it and then, later,
@@ -90,14 +153,13 @@ public sealed class RestoreZipSource
     /// that <paramref name="destinationDir"/> must never be, contain, or be
     /// contained by - refused up front, before the clear above or any write,
     /// so a caller mistake here cannot delete or overwrite live config with
-    /// no safety copy and no preview.
+    /// no safety copy and no preview. This check, and the snapshot-id
+    /// plausibility check right above it, apply identically to both
+    /// transports and so are done once here rather than once per transport.
     /// </summary>
     public RestoreMaterializeResult Materialize(
         DriveTarget target, string snapshotId, string tempDir, string destinationDir, string protectedRoot)
     {
-        if (!_runner.Exists("rclone"))
-            return RestoreMaterializeResult.Failure(ScrubAndLog("rclone not found on PATH - install and run 'rclone config' first."));
-
         if (!IsPlausibleSnapshotId(snapshotId))
             return RestoreMaterializeResult.Failure("Invalid snapshot id.");
 
@@ -106,6 +168,25 @@ public sealed class RestoreZipSource
             return RestoreMaterializeResult.Failure(
                 "Refusing to materialise into the live config root, or a directory that contains or is contained by it.");
         }
+
+        return target.Transport == DriveTransport.SyncFolder
+            ? MaterializeFromFolder(target, snapshotId, destinationDir)
+            : MaterializeFromRclone(target, snapshotId, tempDir, destinationDir);
+    }
+
+    /// <summary>
+    /// Downloads <paramref name="snapshotId"/> into <paramref
+    /// name="tempDir"/> via <c>rclone copy</c>, then extracts it into
+    /// <paramref name="destinationDir"/>. The downloaded zip is deleted from
+    /// <paramref name="tempDir"/> afterwards on a best-effort basis (mirrors
+    /// RcloneBackend's own temp-zip cleanup) - a leftover zip would be a
+    /// second plaintext copy of the user's Claude config sitting on disk.
+    /// </summary>
+    private RestoreMaterializeResult MaterializeFromRclone(
+        DriveTarget target, string snapshotId, string tempDir, string destinationDir)
+    {
+        if (!_runner.Exists("rclone"))
+            return RestoreMaterializeResult.Failure(ScrubAndLog("rclone not found on PATH - install and run 'rclone config' first."));
 
         try
         {
@@ -140,6 +221,42 @@ public sealed class RestoreZipSource
         finally
         {
             TryDeleteDownloadedZip(tempDir, snapshotId);
+        }
+    }
+
+    /// <summary>
+    /// S14 sync-folder transport: no download step at all - the archive
+    /// already lives at <see cref="DriveTarget.FolderPath"/> (a local path,
+    /// or a mapped/UNC path a sync client or NAS presents as one), so this
+    /// opens it directly in place. Nothing under FolderPath is ever deleted
+    /// here - unlike the rclone transport's downloaded temp copy, this zip
+    /// IS the backup, not a disposable local copy of it.
+    /// </summary>
+    private static RestoreMaterializeResult MaterializeFromFolder(
+        DriveTarget target, string snapshotId, string destinationDir)
+    {
+        if (string.IsNullOrWhiteSpace(target.FolderPath))
+            return RestoreMaterializeResult.Failure("Sync folder backup is enabled but no folder is configured.");
+
+        var zipPath = Path.Combine(target.FolderPath, snapshotId);
+        if (!File.Exists(zipPath))
+            return RestoreMaterializeResult.Failure($"Backup '{snapshotId}' was not found in '{target.FolderPath}'.");
+
+        try
+        {
+            Directory.CreateDirectory(destinationDir);
+            ClearDirectoryContents(destinationDir);
+            ExtractSafely(zipPath, destinationDir);
+
+            return RestoreMaterializeResult.Success(destinationDir);
+        }
+        catch (InvalidDataException ex)
+        {
+            return RestoreMaterializeResult.Failure($"Backup is not a valid zip archive: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return RestoreMaterializeResult.Failure(ScrubAndLog(ex.Message));
         }
     }
 
