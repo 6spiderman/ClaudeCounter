@@ -92,11 +92,23 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-; Optional component. No [Types] section is defined, so this entry with no
-; Types renders unchecked on the Components page unless the user ticks it -
-; the backup worker is opt-in, not part of a default/full install.
+; Backup is a headline feature as of 1.2, so it ships checked by default
+; instead of the opt-in stance from earlier releases (when it was
+; experimental and a default/full install deliberately left it out). A
+; [Types] section is required to get a checked-by-default component: without
+; one, a [Components] entry always starts unchecked regardless of flags. The
+; "full" type is the one preselected when the wizard opens, so listing
+; "backup" under it is what makes the checkbox start ticked; "custom" is
+; still offered so a user who wants the smaller install can untick it.
+; Trade-off accepted: ClaudeBackup.exe is ~35 MB, so a default install is
+; meaningfully larger than before - worth it for the feature to actually be
+; discovered instead of silently absent.
+[Types]
+Name: "full"; Description: "Full installation"
+Name: "custom"; Description: "Custom installation"; Flags: iscustom
+
 [Components]
-Name: "backup"; Description: "Backup tools (ClaudeBackup)"
+Name: "backup"; Description: "Backup tools (ClaudeBackup)"; Types: full custom
 
 [Files]
 Source: "{#SourceDir}\{#AppName}.exe"; DestDir: "{app}"; Flags: ignoreversion

@@ -201,17 +201,18 @@ to Claude...**
 - **Alert popups** when a window crosses your critical threshold or hits 100%,
   placed near the tray or centered on screen, each configurable (or turned off)
   independently in Settings.
-- **Backup** (optional install component, `ClaudeBackup.exe`): scheduled or
-  on-demand backup of a subset of your Claude config to a private GitHub repo
-  and/or a Drive destination. Not installed by default - tick "Backup tools"
-  on the installer's Components page to include it, or it stays entirely
-  absent and every backup control in Settings stays hidden. The GitHub repo
-  you configure **must be private**; ClaudeCounter cannot verify that
-  automatically, so it warns you in Settings and in the log instead. The
-  Drive destination has two transports: a **sync folder** (point it at a
-  Google Drive/OneDrive/Dropbox folder or a NAS share - no sign-in needed,
-  the sync client does the upload) or an **rclone remote** (advanced, needs a
-  one-time Google Cloud Console setup of your own OAuth client) - see
+- **Backup** (`ClaudeBackup.exe`): scheduled or on-demand backup of a subset
+  of your Claude config to a private GitHub repo and/or a Drive destination,
+  with restore built in. Installed by default; untick "Backup tools" on the
+  installer's Components page (choose "Custom installation") if you would
+  rather leave it out, and every backup control in Settings stays hidden when
+  it is not installed. The GitHub repo you configure **must be private**;
+  ClaudeCounter cannot verify that automatically, so it warns you in Settings
+  and in the log instead. The Drive destination has two transports: a **sync
+  folder** (point it at a Google Drive/OneDrive/Dropbox folder or a NAS share
+  - no sign-in needed, the sync client or the NAS does the upload) or an
+  **rclone remote** (advanced, needs a one-time Google Cloud Console setup of
+  your own OAuth client) - see
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
 - Single instance (a named mutex, on both platforms), single self-contained

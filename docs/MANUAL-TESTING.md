@@ -257,6 +257,9 @@ Best on a clean VM. Minimum: a spare user account.
 ```
 
 - [ ] Installer runs with **no UAC prompt**
+- [ ] The Select Components page shows "Backup tools (ClaudeBackup)"
+      **checked** by default (Full installation) - unchecking it via
+      Custom installation must leave `ClaudeBackup.exe` out of `{app}`
 - [ ] Installs to `%LocalAppData%\Programs\ClaudeCounter`
 - [ ] Start Menu shortcut works
 - [ ] "Launch ClaudeCounter" on the final page works

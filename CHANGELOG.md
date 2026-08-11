@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-11
+
 ### Added
 
 - **Alert popups.** A configurable popup when a usage window crosses your
@@ -14,17 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rolling 7-day window, and the per-model (Opus/Sonnet) windows. Placement is
   near the tray or centered on screen, all configurable (or turned off
   entirely) in Settings.
-- **ClaudeBackup**, an optional install component: a standalone worker that
-  backs up a subset of your Claude config (settings, CLAUDE.md, commands,
-  agents, top-level plugin manifests) to a private GitHub repo and/or a Drive
-  destination on a schedule you set, or on demand from the tray menu or
-  Settings. Never sends anything to more than one destination without your
-  say-so, never backs up credential-shaped files (a denylist is applied
-  before anything is read), and never writes a secret to `backup.json` or any
-  log. The GitHub repo you point it at **must be private** - ClaudeCounter
-  has no way to verify that automatically, so it warns in the log and says so
-  in Settings. Opt-in at install time; the tray hides every backup control
-  when the worker is not installed.
+- **Configurable alert repeat cadence.** A new "Repeat every" option for alert
+  popups (Settings -> Alerts) lets you choose how often ClaudeCounter re-shows
+  a popup while a window stays at or above an already-alerted level, instead
+  of only once per crossing. Off by default.
+- **ClaudeBackup**, a standalone worker that backs up a subset of your Claude
+  config (settings, CLAUDE.md, commands, agents, top-level plugin manifests)
+  to a private GitHub repo and/or a Drive destination on a schedule you set,
+  or on demand from the tray menu or Settings. Never sends anything to more
+  than one destination without your say-so, never backs up credential-shaped
+  files (a denylist is applied before anything is read), and never writes a
+  secret to `backup.json` or any log. The GitHub repo you point it at **must
+  be private** - ClaudeCounter has no way to verify that automatically, so it
+  warns in the log and says so in Settings. Included by default when you
+  install or upgrade; choose "Custom" instead of "Full installation" on the
+  installer's Components page if you would rather leave it out - the tray
+  hides every backup control when the worker is not installed.
 - **Sync-folder Drive backup transport**, alongside the original rclone
   transport: point the Drive destination at a folder your sync client already
   watches (Google Drive for Desktop, OneDrive, Dropbox) or a NAS share, and
@@ -57,8 +64,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   considers this app's own `claude-backup-*.zip` files - never anything else
   stored in the same remote folder. Applies to both Drive transports.
 
+### Changed
+
+- When alert repeat is turned on, a new 5-hour session now resets the repeat
+  timer for every window - 5-hour, weekly, and per-model - not just its own,
+  so a fresh 5-hour period does not leave another window's popup waiting out
+  a stale interval.
+
 ### Fixed
 
+- **Usage alert popups no longer repeat every few minutes for the same
+  threshold crossing.** A quirk in how the API reports each window's reset
+  time made ClaudeCounter think the reset time had changed on every poll,
+  which cleared the "already alerted" flag and re-showed the same popup
+  again and again instead of once.
+- **The Critical (90%) alert popup now has a red accent**, matching the 100%
+  popup. Previously it had no accent color at all and ended up looking less
+  urgent than the amber 75% Warn popup.
 - A repointed GitHub remote or a changed backup branch now actually takes
   effect on the next scheduled or manual run, instead of silently continuing
   to push to whichever remote/branch was configured the very first time.
@@ -192,6 +214,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.2.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.0
 [1.1.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.1
 [1.1.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.0
 [1.0.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.0.0
