@@ -288,6 +288,109 @@ public class BackupConfigTests
         }
         finally { File.Delete(path); }
     }
+
+    // S14: Transport defaults to Rclone (0) and FolderPath defaults to "" -
+    // an existing config with neither field present must load exactly as it
+    // did before this feature existed.
+    [Fact]
+    public void DefaultDriveTransportIsRcloneWithBlankFolderPath()
+    {
+        var c = BackupConfig.Default();
+        Assert.Equal(DriveTransport.Rclone, c.Drive.Transport);
+        Assert.Equal("", c.Drive.FolderPath);
+    }
+
+    [Fact]
+    public void TransportAndFolderPathRoundTripThroughFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            var c = BackupConfig.Default();
+            c.Drive.Transport = DriveTransport.SyncFolder;
+            c.Drive.FolderPath = @"D:\SyncFolder\ClaudeBackups";
+            c.Save(path);
+
+            var back = BackupConfig.Load(path);
+            Assert.Equal(DriveTransport.SyncFolder, back.Drive.Transport);
+            Assert.Equal(@"D:\SyncFolder\ClaudeBackups", back.Drive.FolderPath);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A backup.json written before this feature existed has no Transport or
+    // FolderPath property at all - deserializing it must produce Rclone/""
+    // (unchanged behaviour), not throw and not silently switch transport.
+    [Fact]
+    public void MissingTransportAndFolderPathFieldsDefaultToRcloneAndBlank()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": true, "RcloneRemote": "gdrive:X" },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(DriveTransport.Rclone, loaded.Drive.Transport);
+            Assert.Equal("", loaded.Drive.FolderPath);
+            Assert.Equal("gdrive:X", loaded.Drive.RcloneRemote);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // An explicit JSON null for FolderPath (rather than the field simply
+    // being absent) must not NRE - Normalize's defensive guard converts it
+    // to "".
+    [Fact]
+    public void NullFolderPathInJsonDoesNotThrowAndNormalizesToEmpty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "", "FolderPath": null },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal("", loaded.Drive.FolderPath);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // An out-of-range Transport value (a hand-edited or future-version file)
+    // must be reset to Rclone by Normalize rather than reaching
+    // BackupRunner's transport switch as an undefined enum value.
+    [Fact]
+    public void OutOfRangeTransportValueIsNormalizedToRcloneOnLoad()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"bkcfg-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": { "Enabled": false, "RemoteUrl": "", "Branch": "main" },
+                  "Drive": { "Enabled": false, "RcloneRemote": "", "Transport": 99 },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+            Assert.Equal(DriveTransport.Rclone, loaded.Drive.Transport);
+        }
+        finally { File.Delete(path); }
+    }
 }
 
 /// <summary>

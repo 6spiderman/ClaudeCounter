@@ -13,10 +13,55 @@ public sealed class GitTarget
     public List<string> Exclude { get; set; } = new();
 }
 
+/// <summary>
+/// Which mechanism <see cref="DriveTarget"/> uploads through (S14 design
+/// doc: "sync-folder backup transport"). A switch on the SAME destination,
+/// not a third destination - see the design doc's "Key structural decision"
+/// for why: BackupRunResult/BackupStatus/BackupStatusWriter/BackupHealth/
+/// BackupRunner/RestoreDialog all encode exactly two destinations as
+/// positional fields, and a third would fan out across every one of them.
+/// <see cref="Rclone"/> = 0 is the default specifically so a backup.json
+/// written before this field existed loads with Transport already correct -
+/// a property absent from old JSON deserializing to its type default is
+/// exactly the intended back-compat behaviour, which is also why this change
+/// does not bump <see cref="BackupConfig.CurrentBackupConfigVersion"/>.
+/// </summary>
+public enum DriveTransport
+{
+    /// <summary>Upload via the rclone binary to <see cref="DriveTarget.RcloneRemote"/> - unchanged, original behaviour.</summary>
+    Rclone = 0,
+
+    /// <summary>
+    /// Copy the archive straight into <see cref="DriveTarget.FolderPath"/> -
+    /// a plain folder a sync client (Google Drive for Desktop, OneDrive,
+    /// Dropbox) or a NAS share already watches/replicates on its own. No
+    /// external binary, no authentication: the sync client (or the NAS
+    /// itself) does the actual upload.
+    /// </summary>
+    SyncFolder = 1,
+}
+
 public sealed class DriveTarget
 {
     public bool Enabled { get; set; }
     public string RcloneRemote { get; set; } = "";
+
+    /// <summary>Which transport this destination uses - see <see cref="DriveTransport"/>. Defaults to <see cref="DriveTransport.Rclone"/> so an existing config keeps behaving exactly as before.</summary>
+    public DriveTransport Transport { get; set; } = DriveTransport.Rclone;
+
+    /// <summary>
+    /// Destination folder for the <see cref="DriveTransport.SyncFolder"/>
+    /// transport. A SEPARATE field from <see cref="RcloneRemote"/> on
+    /// purpose - the two have different validation rules (this one is a
+    /// filesystem path checked for rootedness and for not overlapping <see
+    /// cref="BackupConfig.SourceRoot"/>; the rclone remote is checked for a
+    /// leading dash and an embedded credential, neither of which applies
+    /// here since no process arguments are involved) - conflating the two
+    /// fields would mean applying the wrong checks, or none at all. A UNC
+    /// path (e.g. "\\nas\share\claude") is explicitly a valid value - a NAS
+    /// share is a first-class target for this transport, not an edge case.
+    /// </summary>
+    public string FolderPath { get; set; } = "";
 
     /// <summary>Drive's own include/exclude selection - independent of <see cref="GitTarget"/>'s.</summary>
     public List<string> Include { get; set; } = new();
@@ -214,6 +259,20 @@ public sealed class BackupConfig
     {
         Schedule ??= new();
         Schedule.BackupStaleAfterDays = Math.Clamp(Schedule.BackupStaleAfterDays, 0, 365);
+
+        // S14: defensive null-guard for a JSON payload with an explicit null
+        // FolderPath (rather than the field simply being absent) - same
+        // pattern as every other string/list field this method and
+        // MigrateLegacySelection already guard. An out-of-range Transport
+        // (e.g. a hand-edited backup.json with "Transport": 99) is not a
+        // value this enum ever produces itself, so it is treated the same
+        // way an out-of-range BackupStaleAfterDays is above: reset to the
+        // default (Rclone) rather than let an undefined enum value reach
+        // BackupRunner's transport switch.
+        Drive ??= new();
+        Drive.FolderPath ??= "";
+        if (!Enum.IsDefined(typeof(DriveTransport), Drive.Transport))
+            Drive.Transport = DriveTransport.Rclone;
     }
 
     /// <summary>
@@ -250,6 +309,7 @@ public sealed class BackupConfig
         Github.Exclude ??= new();
         Drive.Include ??= new();
         Drive.Exclude ??= new();
+        Drive.FolderPath ??= ""; // S14: same defensive guard as Include/Exclude above, for an explicit JSON null
 
         if (BackupConfigVersion >= CurrentBackupConfigVersion)
             return;
