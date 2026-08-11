@@ -9,6 +9,23 @@ public sealed class WindowAlertState
 {
     public AlertLevel LastAlertedLevel { get; set; }
     public DateTimeOffset? LastResetsAt { get; set; }
+
+    /// <summary>
+    /// S12 part B: wall-clock time of the most recent notification (initial
+    /// crossing OR a repeat re-notify) for this window's current alerted
+    /// level. Null when no notification has happened yet for the current
+    /// level (including right after a reset clears it - see
+    /// ThresholdTracker.Eval). Only consulted when
+    /// AppSettings.AlertRepeatMinutes is greater than 0; a missing value on
+    /// an old settings.json (property simply absent) reads back as null via
+    /// ordinary JSON deserialization, which is exactly the safe default - it
+    /// just means "not due to repeat yet, wait a full interval from the next
+    /// notification" rather than an immediate repeat on restart. Does not
+    /// need a schema version bump: AlertLevel's int encoding is unchanged,
+    /// and an absent property on old data is not ambiguous the way a
+    /// renumbered enum value would be.
+    /// </summary>
+    public DateTimeOffset? LastNotifiedAt { get; set; }
 }
 
 public sealed record AlertEvent(
@@ -31,18 +48,28 @@ public sealed class ThresholdTracker
 
     public Dictionary<string, WindowAlertState> State => _state;
 
-    public List<AlertEvent> Evaluate(UsageSnapshot snapshot, AppSettings settings)
+    /// <summary>
+    /// S12 part B: <paramref name="now"/> defaults to DateTimeOffset.UtcNow
+    /// when omitted, so production callers (TrayApplicationContext) do not
+    /// have to pass anything, while tests exercising AlertRepeatMinutes'
+    /// cadence can supply deterministic timestamps instead of depending on
+    /// wall-clock time. Only used for the repeat-notification check below -
+    /// reset and crossing detection are otherwise unchanged and still driven
+    /// purely by the snapshot's own values.
+    /// </summary>
+    public List<AlertEvent> Evaluate(UsageSnapshot snapshot, AppSettings settings, DateTimeOffset? now = null)
     {
+        var effectiveNow = now ?? DateTimeOffset.UtcNow;
         var events = new List<AlertEvent>();
-        Eval("five_hour", "5-hour session", snapshot.FiveHour, settings.AlertFiveHour, settings, events);
-        Eval("seven_day", "Weekly (all models)", snapshot.SevenDay, settings.AlertSevenDay, settings, events);
-        Eval("seven_day_opus", "Weekly (Opus)", snapshot.SevenDayOpus, settings.AlertSevenDayOpus, settings, events);
-        Eval("seven_day_sonnet", "Weekly (Sonnet)", snapshot.SevenDaySonnet, settings.AlertSevenDaySonnet, settings, events);
+        Eval("five_hour", "5-hour session", snapshot.FiveHour, settings.AlertFiveHour, settings, effectiveNow, events);
+        Eval("seven_day", "Weekly (all models)", snapshot.SevenDay, settings.AlertSevenDay, settings, effectiveNow, events);
+        Eval("seven_day_opus", "Weekly (Opus)", snapshot.SevenDayOpus, settings.AlertSevenDayOpus, settings, effectiveNow, events);
+        Eval("seven_day_sonnet", "Weekly (Sonnet)", snapshot.SevenDaySonnet, settings.AlertSevenDaySonnet, settings, effectiveNow, events);
         return events;
     }
 
     private void Eval(string key, string label, UsageWindow? window, bool enabled,
-        AppSettings settings, List<AlertEvent> events)
+        AppSettings settings, DateTimeOffset now, List<AlertEvent> events)
     {
         if (window is null || !enabled)
             return;
@@ -83,7 +110,14 @@ public sealed class ThresholdTracker
         var resetsAtChanged = IsGenuineReset(state.LastResetsAt, window.ResetsAt);
         var collapsedToNone = level == AlertLevel.None && state.LastAlertedLevel > AlertLevel.None;
         if (resetsAtChanged || collapsedToNone)
+        {
             state.LastAlertedLevel = AlertLevel.None;
+            // S12 part B: a reset also clears the repeat-notification clock -
+            // the window is starting over, so any future re-notify timer
+            // should count from the NEXT crossing, not from however long ago
+            // the old window last repeated.
+            state.LastNotifiedAt = null;
+        }
         state.LastResetsAt = window.ResetsAt;
 
         // Warn has a master on/off switch on top of the per-window enabled
@@ -96,8 +130,36 @@ public sealed class ThresholdTracker
 
         if (!warnGated && level > state.LastAlertedLevel)
         {
+            // Escalation (or a fresh crossing): fires immediately regardless
+            // of AlertRepeatMinutes - a jump from Warn to Critical must not
+            // wait out whatever is left of the repeat interval.
             events.Add(new AlertEvent(key, label, level, window.Utilization, window.ResetsAt));
             state.LastAlertedLevel = level;
+            state.LastNotifiedAt = now;
+            return;
+        }
+
+        // S12 part B repeat cadence: AppSettings.AlertRepeatMinutes == 0 (the
+        // default) means "only once per crossing" - the behavior restored by
+        // part A's reset-detection fix - so this block is a no-op in that
+        // case. When greater than 0, a window sitting AT (not below) its
+        // already-alerted level re-notifies every N minutes. warnGated still
+        // applies here: if Warn alerts are switched off, a window parked at
+        // Warn must not repeat-notify either, same as it cannot initially
+        // notify. Critical/Maxed's own master toggles are not checked here -
+        // TrayApplicationContext already filters those out of every event
+        // (initial or repeat) it receives before showing a popup, exactly as
+        // it already did for the initial crossing before this feature
+        // existed, so repeat events are never shown for a disabled level.
+        // `level == state.LastAlertedLevel` (rather than >=) is deliberate: a
+        // window that dipped below its last-alerted level (still > None) is
+        // "DipBelowDoesNotReArm" territory and must stay silent, not repeat.
+        if (!warnGated && settings.AlertRepeatMinutes > 0 && level != AlertLevel.None
+            && level == state.LastAlertedLevel && state.LastNotifiedAt is { } lastNotified
+            && now - lastNotified >= TimeSpan.FromMinutes(settings.AlertRepeatMinutes))
+        {
+            events.Add(new AlertEvent(key, label, level, window.Utilization, window.ResetsAt));
+            state.LastNotifiedAt = now;
         }
     }
 

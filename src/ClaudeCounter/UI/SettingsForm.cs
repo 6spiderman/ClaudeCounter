@@ -68,6 +68,7 @@ public sealed class SettingsForm : Form
     private CheckBox _alertSonnet = null!;
     private ComboBox _placement = null!;
     private NumericUpDown _autoDismissInput = null!;
+    private NumericUpDown _alertRepeatInput = null!;
 
     // Only created when BackupTaskManager.WorkerAvailable() - the Backup tab is
     // entirely absent (fields stay null, and no tab button is created) when
@@ -377,6 +378,18 @@ public sealed class SettingsForm : Form
         autoDismissHint.Location = new Point(PagePadX, y);
         page.Controls.Add(autoDismissHint);
         y += autoDismissHint.PreferredHeight + RowGap;
+
+        // S12 part B: same "label on its own line above the field" layout as
+        // the auto-dismiss row just above it - long enough that side-by-side
+        // would run into the NumericUpDown.
+        var repeatLabel = NewSectionLabel("Re-notify every (minutes, 0 = only once until reset)", palette, y);
+        page.Controls.Add(repeatLabel);
+        y += repeatLabel.PreferredHeight + 2;
+
+        _alertRepeatInput = NewNumeric(palette, 0, 1440, current.AlertRepeatMinutes);
+        _alertRepeatInput.Location = new Point(PagePadX, y);
+        page.Controls.Add(_alertRepeatInput);
+        y += _alertRepeatInput.Height + RowGap;
 
         return (page, y + 10);
     }
@@ -1095,6 +1108,7 @@ public sealed class SettingsForm : Form
         settings.PopupPlacement = _placement.SelectedIndex == 1
             ? PopupPlacement.Centered : PopupPlacement.NearTray;
         settings.PopupAutoDismissSeconds = (int)_autoDismissInput.Value;
+        settings.AlertRepeatMinutes = (int)_alertRepeatInput.Value;
     }
 
     /// <summary>

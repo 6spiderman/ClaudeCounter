@@ -19,6 +19,7 @@ public class AppSettingsTests
         Assert.False(s.AlertSevenDaySonnet);
         Assert.Equal(PopupPlacement.NearTray, s.PopupPlacement);
         Assert.Equal(12, s.PopupAutoDismissSeconds);
+        Assert.Equal(0, s.AlertRepeatMinutes); // 0 = only once per crossing (S12 part B)
         Assert.NotNull(s.NotificationState);
         // S11b: null until the first-ever backup poll observes a state.
         Assert.Null(s.LastBackupHealthState);
@@ -80,6 +81,20 @@ public class AppSettingsTests
         var s = new AppSettings { PopupAutoDismissSeconds = input };
         s.Normalize();
         Assert.Equal(expected, s.PopupAutoDismissSeconds);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]         // default/off, meaningful - must survive, not coerce away
+    [InlineData(15, 15)]       // in range, untouched
+    [InlineData(-5, 0)]        // negative clamps up to the floor
+    [InlineData(1440, 1440)]   // ceiling itself is in range
+    [InlineData(1441, 1440)]   // just past the ceiling clamps down
+    [InlineData(100000, 1440)] // absurd value still clamps to the ceiling
+    public void NormalizeClampsAlertRepeatMinutes(int input, int expected)
+    {
+        var s = new AppSettings { AlertRepeatMinutes = input };
+        s.Normalize();
+        Assert.Equal(expected, s.AlertRepeatMinutes);
     }
 
     [Fact]

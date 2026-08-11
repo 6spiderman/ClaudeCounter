@@ -69,6 +69,7 @@ public class SettingsFormSmokeTests
             AlertSevenDaySonnet = true,
             PopupPlacement = PopupPlacement.Centered,
             PopupAutoDismissSeconds = 0,
+            AlertRepeatMinutes = 15,
         };
         settings.Normalize();
 

@@ -34,6 +34,20 @@ public sealed class AppSettings
     /// </summary>
     public int PopupAutoDismissSeconds { get; set; } = 12;
 
+    /// <summary>
+    /// S12 part B: how often (in minutes) an already-alerted window that is
+    /// STILL at or above the level it alerted at gets re-notified, on top of
+    /// the always-on "once per crossing" behavior. 0 (the default) means
+    /// "only once per crossing, until reset" - i.e. repeat is off - which is
+    /// also the behavior restored by the S12 part A fix to reset detection.
+    /// Like PopupAutoDismissSeconds, 0 is a meaningful, deliberate value
+    /// here, not "unset" - see Normalize, which clamps but must not coerce
+    /// it away from 0. ThresholdTracker.Eval is where this is actually
+    /// consulted; escalating to a higher level (e.g. Warn -> Critical)
+    /// always fires immediately and is never delayed by this interval.
+    /// </summary>
+    public int AlertRepeatMinutes { get; set; }
+
     // Persisted alert dedupe state so restarts do not re-pop.
     public Dictionary<string, WindowAlertState> NotificationState { get; set; } = new();
 
@@ -106,6 +120,12 @@ public sealed class AppSettings
         // a plain clamp, not a fallback-to-default like the thresholds below -
         // coercing 0 to 12 here would silently revert a deliberate choice.
         PopupAutoDismissSeconds = Math.Clamp(PopupAutoDismissSeconds, 0, 300);
+        // Same "0 is meaningful, not a fallback" convention as
+        // PopupAutoDismissSeconds just above: 0 ("only once per crossing") is
+        // a deliberate in-range value and must survive Normalize unchanged.
+        // Ceiling of 1440 (24 hours) is generous enough for any repeat cadence
+        // a user would actually want while still rejecting garbage input.
+        AlertRepeatMinutes = Math.Clamp(AlertRepeatMinutes, 0, 1440);
         WarnThreshold = Math.Clamp(WarnThreshold, 1, 100);
         CriticalThreshold = Math.Clamp(CriticalThreshold, 1, 100);
         if (WarnThreshold >= CriticalThreshold)

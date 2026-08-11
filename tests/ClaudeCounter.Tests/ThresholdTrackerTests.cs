@@ -236,4 +236,134 @@ public class ThresholdTrackerTests
         var resumed = new ThresholdTracker(restored);
         Assert.Empty(resumed.Evaluate(FiveHour(91), Settings())); // remembers it alerted
     }
+
+    // --- S12 part B: AlertRepeatMinutes cadence ---
+
+    [Fact]
+    public void RepeatMinutesZeroMeansOnlyOncePerCrossingEvenWithTimePassing()
+    {
+        // Default (0) must reproduce exactly the restored "once per crossing"
+        // behavior, regardless of how much wall-clock time passes.
+        var t = new ThresholdTracker();
+        var s = Settings();
+        Assert.Equal(0, s.AlertRepeatMinutes);
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Single(t.Evaluate(FiveHour(91), s, start));
+        Assert.Empty(t.Evaluate(FiveHour(91), s, start.AddHours(10))); // way past any interval, still no repeat
+    }
+
+    [Fact]
+    public void RepeatFiresAfterIntervalElapsedButNotBefore()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        var first = Assert.Single(t.Evaluate(FiveHour(91), s, start));
+        Assert.Equal(AlertLevel.Critical, first.Level);
+
+        Assert.Empty(t.Evaluate(FiveHour(91), s, start.AddMinutes(10))); // too soon
+        Assert.Empty(t.Evaluate(FiveHour(91), s, start.AddMinutes(14))); // still too soon
+
+        var repeat = Assert.Single(t.Evaluate(FiveHour(91), s, start.AddMinutes(15)));
+        Assert.Equal(AlertLevel.Critical, repeat.Level);
+
+        // Cadence continues from the last notification, not the first crossing.
+        Assert.Empty(t.Evaluate(FiveHour(91), s, start.AddMinutes(29)));
+        Assert.Single(t.Evaluate(FiveHour(91), s, start.AddMinutes(30)));
+    }
+
+    [Fact]
+    public void EscalationFiresImmediatelyWithoutWaitingForRepeatInterval()
+    {
+        // Crossing Warn -> Critical must not be delayed by whatever is left
+        // of the repeat interval that started when Warn first alerted.
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 60;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        var warn = Assert.Single(t.Evaluate(FiveHour(80), s, start));
+        Assert.Equal(AlertLevel.Warn, warn.Level);
+
+        // One minute later - nowhere near the 60-minute repeat interval - but
+        // this is an escalation, so it must still fire.
+        var critical = Assert.Single(t.Evaluate(FiveHour(91), s, start.AddMinutes(1)));
+        Assert.Equal(AlertLevel.Critical, critical.Level);
+    }
+
+    [Fact]
+    public void RepeatDoesNotFireForDippedBelowLastAlertedLevel()
+    {
+        // Sitting below the last-alerted level (but still above None) must
+        // stay silent even with repeat enabled - matches DipBelowDoesNotReArm.
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Single(t.Evaluate(FiveHour(91), s, start)); // Critical
+        Assert.Empty(t.Evaluate(FiveHour(80), s, start.AddMinutes(20))); // dropped to Warn band, past interval, still silent
+    }
+
+    [Fact]
+    public void RepeatRespectsWarnAlertsDisabledToggle()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        s.WarnAlertsEnabled = false;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Empty(t.Evaluate(FiveHour(80), s, start)); // warn suppressed entirely
+        Assert.Empty(t.Evaluate(FiveHour(80), s, start.AddMinutes(30))); // still suppressed, no repeat either
+    }
+
+    [Fact]
+    public void ResetClearsRepeatCadenceSoNewWindowWaitsAFullInterval()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+        var r2 = new DateTimeOffset(2026, 8, 11, 17, 0, 0, TimeSpan.Zero);
+
+        Assert.Single(t.Evaluate(FiveHour(91, start), s, start)); // Critical, notified at `start`
+        Assert.Empty(t.Evaluate(FiveHour(5, r2), s, start.AddMinutes(1))); // window resets, back to normal
+
+        // Immediately re-crosses Critical in the new window: this is a fresh
+        // crossing (escalation from None), so it fires right away...
+        var again = Assert.Single(t.Evaluate(FiveHour(91, r2), s, start.AddMinutes(2)));
+        Assert.Equal(AlertLevel.Critical, again.Level);
+
+        // ...but the repeat clock restarted at the new crossing, not the old
+        // one - 14 minutes later (which would have been >15 min since the
+        // very first alert) must still be silent.
+        Assert.Empty(t.Evaluate(FiveHour(91, r2), s, start.AddMinutes(16)));
+    }
+
+    [Fact]
+    public void LastNotifiedAtRoundTripsThroughJsonSoRestartDoesNotImmediatelyRepeat()
+    {
+        var t = new ThresholdTracker();
+        var s = Settings();
+        s.AlertRepeatMinutes = 15;
+        var start = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Single(t.Evaluate(FiveHour(91), s, start));
+        var json = System.Text.Json.JsonSerializer.Serialize(t.State);
+        var restored = System.Text.Json.JsonSerializer
+            .Deserialize<Dictionary<string, WindowAlertState>>(json)!;
+        var resumed = new ThresholdTracker(restored);
+
+        // Restart happens 1 minute after the original alert - must not
+        // immediately re-notify just because the process restarted.
+        Assert.Empty(resumed.Evaluate(FiveHour(91), s, start.AddMinutes(1)));
+
+        // But the cadence itself survived the round-trip: 15 minutes after
+        // the ORIGINAL notification, it repeats normally.
+        Assert.Single(resumed.Evaluate(FiveHour(91), s, start.AddMinutes(15)));
+    }
 }

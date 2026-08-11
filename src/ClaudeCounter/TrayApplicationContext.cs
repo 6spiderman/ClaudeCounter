@@ -391,7 +391,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
             return;
 
-        var events = _tracker.Evaluate(snapshot, _settings);
+        var events = _tracker.Evaluate(snapshot, _settings, DateTimeOffset.UtcNow);
         if (events.Count == 0)
             return;
 
