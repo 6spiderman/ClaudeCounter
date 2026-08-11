@@ -118,11 +118,16 @@ public sealed class BackupStatus
 
     /// <summary>
     /// Loads the status file at <paramref name="path"/>. A missing, corrupt,
-    /// or partially-null file degrades to a fresh <see cref="BackupStatus"/>
-    /// (which BackupHealth reads as NeverRun for every destination) rather
-    /// than throwing - this is read on every worker run before writing, and
-    /// a status file with no history to lose must never crash a backup that
-    /// would otherwise have succeeded.
+    /// ACL-denied, or partially-null file degrades to a fresh <see
+    /// cref="BackupStatus"/> (which BackupHealth reads as NeverRun for every
+    /// destination) rather than throwing. This is read on every worker run
+    /// before writing (a status file with no history to lose must never
+    /// crash a backup that would otherwise have succeeded), AND - unlike
+    /// BackupConfig.Load, whose only production caller sits inside another
+    /// method's blanket try/catch - S11b's tray is expected to call this
+    /// directly on a poll timer with no surrounding try of its own, so a
+    /// throw here would take the tray down. Degrading, not throwing, is the
+    /// whole contract.
     /// </summary>
     public static BackupStatus Load(string path)
     {
@@ -140,7 +145,13 @@ public sealed class BackupStatus
             status.Drive ??= new();
             return status;
         }
-        catch (Exception e) when (e is JsonException or IOException)
+        // Fix round 1 (Important 2): widened from JsonException/IOException,
+        // matching BackupConfig.Load's identical widening and for the same
+        // reason - UnauthorizedAccessException does not derive from
+        // IOException, and NotSupportedException can come from
+        // JsonSerializer for a shape it cannot handle. Both must degrade to
+        // a fresh BackupStatus here exactly like a corrupt file does.
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return new BackupStatus();
         }

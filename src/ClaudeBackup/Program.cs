@@ -27,11 +27,32 @@ internal static class Program
             return 0;
         }
 
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var staging = Path.Combine(local, "ClaudeCounter", "backup-repo");
-        var temp = Path.Combine(local, "ClaudeCounter", "backup-tmp");
+        try
+        {
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var staging = Path.Combine(local, "ClaudeCounter", "backup-repo");
+            var temp = Path.Combine(local, "ClaudeCounter", "backup-tmp");
 
-        return RunWorker(BackupConfig.DefaultPath(), BackupStatus.DefaultPath(), new ProcessRunner(), staging, temp);
+            return RunWorker(BackupConfig.DefaultPath(), BackupStatus.DefaultPath(), new ProcessRunner(), staging, temp);
+        }
+        catch (Exception ex)
+        {
+            // Fix round 1 (Minor): path computation lives here, in Main,
+            // outside RunWorker's own try - deliberately, so RunWorker can
+            // take stagingDir/tempDir as plain parameters for testability
+            // (see RunWorker's own doc comment) rather than recomputing them
+            // itself. That means it needs its own narrow safety net: without
+            // it, an exception from Environment.GetFolderPath or Path.Combine
+            // (vanishingly unlikely, but exactly the kind of "unforeseen
+            // exception" RunWorker's own catch exists to guard against one
+            // layer down) would exit the process with the CLR's unhandled-
+            // exception code instead of one of the documented 0/1/2 codes.
+            // No status write here: BackupStatus.DefaultPath() calls the same
+            // Environment.GetFolderPath that just failed, so there is no
+            // reliable path to write to either.
+            Log.Error($"ClaudeBackup: unhandled exception before startup completed: {CredentialScrubber.Scrub(ex.ToString())}");
+            return 2;
+        }
     }
 
     /// <summary>
@@ -68,16 +89,16 @@ internal static class Program
 
         // Task Scheduler only ever sees this method's return value. Without
         // this guard, anything that escapes BackupConfig.Load or
-        // BackupRunner.RunDetailed - an UnauthorizedAccessException from an
-        // ACL-locked backup.json (does NOT derive from IOException, so
-        // BackupConfig.Load's own catch does not see it), a
-        // NotSupportedException from JsonSerializer, or any other unforeseen
-        // exception - would exit the process with the CLR's unhandled-
-        // exception code instead of one of the documented 0/1/2 codes, and
-        // with nothing in the log explaining why. Log itself never throws
-        // (every failure inside it is swallowed - see Log.Write), so this
-        // catch can always record what happened before returning a
-        // meaningful "a backend failed" style code.
+        // BackupRunner.RunDetailed - a NotSupportedException from
+        // JsonSerializer, or any other unforeseen exception (BackupConfig.Load
+        // itself now also catches UnauthorizedAccessException/
+        // NotSupportedException directly - fix round 1, Important 2 - but
+        // this remains the final backstop for anything else) - would exit the
+        // process with the CLR's unhandled-exception code instead of one of
+        // the documented 0/1/2 codes, and with nothing in the log explaining
+        // why. Log itself never throws (every failure inside it is swallowed
+        // - see Log.Write), so this catch can always record what happened
+        // before returning a meaningful "a backend failed" style code.
         try
         {
             config = BackupConfig.Load(configPath);
@@ -91,17 +112,24 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            // Scrubbed: an exception thrown deep in a process-runner or
-            // config layer can carry a remote spec (a URL with an embedded
-            // credential) in its message or stack trace.
-            var scrubbed = CredentialScrubber.Scrub(ex.ToString());
-            Log.Error($"ClaudeBackup: unhandled exception: {scrubbed}");
+            // The full exception (message + stack trace) is scrubbed and
+            // logged - that is where a stack trace and local paths belong.
+            // Fix round 1 (Minor): what gets stored in the status file's
+            // LastMessage is a SEPARATE, narrower scrub of just ex.Message -
+            // S11b will render LastMessage in a tooltip/flyout, and a full
+            // ToString() (stack frames, local file paths) has no business
+            // there, on top of being far more than a user needs to see.
+            var scrubbedForLog = CredentialScrubber.Scrub(ex.ToString());
+            Log.Error($"ClaudeBackup: unhandled exception: {scrubbedForLog}");
+            var scrubbedForStatus = CredentialScrubber.Scrub(ex.Message);
             // config may be null (BackupConfig.Load itself threw) or the
             // config that was in hand when something later threw -
-            // RecordUnhandledException uses it best-effort to mark whichever
-            // destinations it confirms were enabled as a failed attempt, so
-            // even this path is visible to BackupHealth, not a silent gap.
-            BackupStatusWriter.RecordUnhandledException(statusPath, config, scrubbed, now);
+            // RecordUnhandledException uses it (falling back to persisted
+            // history when null - see its own doc comment, fix round 1
+            // Important 1) to mark whichever destinations it confirms were
+            // enabled as a failed attempt, so even this path is visible to
+            // BackupHealth, not a silent gap.
+            BackupStatusWriter.RecordUnhandledException(statusPath, config, scrubbedForStatus, now);
             return 2;
         }
     }

@@ -184,7 +184,14 @@ public sealed class BackupConfig
             config.Normalize();
             return config;
         }
-        catch (Exception e) when (e is JsonException or IOException)
+        // Fix round 1 (Important 2): widened from JsonException/IOException.
+        // UnauthorizedAccessException (an ACL-locked backup.json) does NOT
+        // derive from IOException and was previously escaping this catch
+        // entirely - see Program.RunWorker's remarks for why that mattered
+        // (it is the root cause of Important 1). NotSupportedException can
+        // come from JsonSerializer for a shape it cannot handle. Both are
+        // exactly as "degrade to Default(), never throw" as a corrupt file.
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return Default();
         }

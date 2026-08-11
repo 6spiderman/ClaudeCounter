@@ -85,20 +85,36 @@ defeat the whole feature.
 
 ## Surfacing
 
-**Tray icon** - a small problem marker drawn in a corner of the existing icon when
-the state is Failed or Stale. The icon already carries a percentage and a colour
-band; the marker must not make the number unreadable at 16x16 as well as 32x32.
-Reuse `IconRenderer`; the marker is a variant of the existing render, not a new
-icon pipeline. The tooltip gains a line naming the problem.
+**Fix round 1 (Important 4):** a "problem state" for every surfacing purpose below
+means `NeverRun`, `Failed`, or `Stale` - not just `Failed`/`Stale` as originally
+written here. A backup that never runs at all - the scheduled task never
+registered, the machine is always asleep at the scheduled time - sits at `NeverRun`
+forever, and that is this spec's own opening scenario for why silence is
+unacceptable. `ClaudeCounter.Shared`'s `BackupHealthStateExtensions.WarrantsAttention()`
+(added in the S11a task) is the single source of truth for this: it returns true
+for `NeverRun`/`Failed`/`Stale` and false for `Healthy`/`NotConfigured`. S11b must
+key every surfacing decision below off `WarrantsAttention()`, not off a
+hand-rolled `Failed or Stale` check.
 
-**Flyout** - a line showing backup health, and when there is a problem, which
-destination and when it last succeeded. Absent entirely when NotConfigured.
+**Tray icon** - a small problem marker drawn in a corner of the existing icon when
+`WarrantsAttention()` is true (i.e. `NeverRun`, `Failed`, or `Stale`). The icon
+already carries a percentage and a colour band; the marker must not make the
+number unreadable at 16x16 as well as 32x32. Reuse `IconRenderer`; the marker is
+a variant of the existing render, not a new icon pipeline. The tooltip gains a
+line naming the problem.
+
+**Flyout** - a line showing backup health, and when there is a problem
+(`WarrantsAttention()` true, including `NeverRun`), which destination and when it
+last succeeded (or that it has never succeeded, for `NeverRun`). Absent entirely
+when `NotConfigured`.
 
 **Popup** - one per transition into a problem state, reusing the existing alert
 popup infrastructure so placement and auto-dismiss settings are honoured. It must
 **not** re-fire every poll: remember the last state notified, and only notify when
-the state changes (Healthy -> Failed, or Healthy -> Stale). Recovery back to
-Healthy is worth a quieter acknowledgement - no popup, just the badge clearing.
+the state changes into one where `WarrantsAttention()` is true from one where it
+was false (e.g. Healthy -> Failed, Healthy -> Stale, or NotConfigured/first-ever
+poll -> NeverRun). Recovery back to Healthy is worth a quieter acknowledgement -
+no popup, just the badge clearing.
 
 Dedupe state persists across restarts, in `AppSettings` alongside the existing alert
 dedupe state, so restarting the tray does not re-announce a known failure.

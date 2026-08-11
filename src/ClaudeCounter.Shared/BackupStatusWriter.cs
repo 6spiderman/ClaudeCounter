@@ -44,28 +44,39 @@ public static class BackupStatusWriter
     /// <see cref="BackupRunResult"/> - Program.RunWorker's outer catch-all,
     /// covering an exception thrown by BackupConfig.Load itself or by
     /// anything else escaping BackupRunner.RunDetailed. Marks every
-    /// destination <paramref name="bestEffortConfig"/> reports as enabled as
-    /// a failed attempt with <paramref name="scrubbedMessage"/>, so an
-    /// unhandled exception is exactly as visible to BackupHealth as an
-    /// ordinary backend failure, not a silent gap in the status file.
+    /// destination this method can confirm was enabled as a failed attempt
+    /// with <paramref name="scrubbedMessage"/>, so an unhandled exception is
+    /// exactly as visible to BackupHealth as an ordinary backend failure, not
+    /// a silent gap in the status file.
+    ///
     /// <paramref name="bestEffortConfig"/> is whatever config the caller
-    /// already had in hand (possibly null, if the exception came from
-    /// BackupConfig.Load itself) - this method does not attempt to reload it,
-    /// since BackupConfig.Load already swallows the exception types it can
-    /// recover from, so a caller reaching this method has nothing more
-    /// reliable to try. A destination this method cannot confirm was enabled
-    /// is left untouched (carried forward via DestinationAttempt.NotAttempted),
-    /// rather than guessed at.
+    /// already had in hand - possibly null, when the exception came from
+    /// BackupConfig.Load itself before any config existed. Fix round 1
+    /// (Important 1): a null config here used to mean "treat both
+    /// destinations as NotAttempted", which carries the PREVIOUS run's
+    /// outcome forward unchanged via DestinationStatus.WithAttempt - so a
+    /// destination that had last succeeded, and has now been failing on
+    /// every subsequent run (e.g. an ACL-locked backup.json throwing
+    /// UnauthorizedAccessException before BackupConfig.Load could even
+    /// return, every single run), would keep reading Success/Healthy
+    /// forever. That is precisely the bug this whole feature exists to
+    /// prevent. When <paramref name="bestEffortConfig"/> cannot say whether a
+    /// destination is enabled, this now falls back to that destination's own
+    /// persisted <see cref="DestinationStatus.WasEnabled"/> - written by
+    /// every prior run that DID have a config - rather than guessing
+    /// "unknown means not enabled". Only a destination with no config AND no
+    /// prior history at all (a status file that has never seen that
+    /// destination enabled) stays <see cref="DestinationAttempt.NotAttempted"/>.
     /// </summary>
     public static void RecordUnhandledException(
         string path, BackupConfig? bestEffortConfig, string scrubbedMessage, DateTimeOffset now)
     {
-        var github = bestEffortConfig?.Github.Enabled == true
-            ? DestinationAttempt.Failed(scrubbedMessage)
-            : DestinationAttempt.NotAttempted(bestEffortConfig?.Github.Enabled ?? false);
-        var drive = bestEffortConfig?.Drive.Enabled == true
-            ? DestinationAttempt.Failed(scrubbedMessage)
-            : DestinationAttempt.NotAttempted(bestEffortConfig?.Drive.Enabled ?? false);
+        var previous = BackupStatus.Load(path);
+        var githubEnabled = bestEffortConfig?.Github.Enabled ?? previous.Github.WasEnabled;
+        var driveEnabled = bestEffortConfig?.Drive.Enabled ?? previous.Drive.WasEnabled;
+
+        var github = githubEnabled ? DestinationAttempt.Failed(scrubbedMessage) : DestinationAttempt.NotAttempted(false);
+        var drive = driveEnabled ? DestinationAttempt.Failed(scrubbedMessage) : DestinationAttempt.NotAttempted(false);
 
         Record(path, new BackupRunResult(2, github, drive), now);
     }

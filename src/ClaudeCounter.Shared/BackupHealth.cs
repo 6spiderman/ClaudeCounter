@@ -6,7 +6,17 @@ public enum BackupHealthState
     /// <summary>No destination enabled. Produces silence - never nag a user who does not use backup.</summary>
     NotConfigured,
 
-    /// <summary>Configured, but no enabled destination has ever recorded an attempt.</summary>
+    /// <summary>
+    /// Configured, but no enabled destination has ever recorded an attempt.
+    /// Fix round 1 (Important 4): this is a WARNING state, not a quiet one -
+    /// treat it exactly like Failed/Stale for surfacing purposes (see <see
+    /// cref="BackupHealthStateExtensions.WarrantsAttention"/>). A scheduled
+    /// task that never registered, or a machine that is always asleep at the
+    /// scheduled time, produces exactly this state forever: it is the
+    /// opening scenario the whole design spec exists to fix, so it must not
+    /// end up invisible again by being left out of S11b's badge/popup
+    /// trigger.
+    /// </summary>
     NeverRun,
 
     /// <summary>Every enabled destination succeeded within the staleness threshold.</summary>
@@ -24,6 +34,31 @@ public enum BackupHealthState
     /// than overall NeverRun.
     /// </summary>
     Stale,
+}
+
+/// <summary>
+/// Fix round 1 (Important 4): tells a caller (S11b's tray) which overall
+/// states warrant a badge/tooltip/popup, so that decision lives in one place
+/// instead of being re-derived (and potentially mis-derived, e.g. forgetting
+/// NeverRun) at every surfacing call site.
+/// </summary>
+public static class BackupHealthStateExtensions
+{
+    /// <summary>
+    /// True for every state that should surface something to the user -
+    /// everything except <see cref="BackupHealthState.Healthy"/> and <see
+    /// cref="BackupHealthState.NotConfigured"/>, the two "nothing to see"
+    /// states. <see cref="BackupHealthState.NeverRun"/> is deliberately
+    /// included - see that state's own doc comment for why leaving it out
+    /// would silently recreate the exact failure mode this feature exists to
+    /// fix.
+    /// </summary>
+    public static bool WarrantsAttention(this BackupHealthState state) => state switch
+    {
+        BackupHealthState.NeverRun or BackupHealthState.Failed or BackupHealthState.Stale => true,
+        BackupHealthState.Healthy or BackupHealthState.NotConfigured => false,
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
+    };
 }
 
 /// <summary>One enabled destination's own contribution to the overall <see cref="BackupHealthState"/>.</summary>

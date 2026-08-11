@@ -362,6 +362,61 @@ public class BackupRunnerTests : IDisposable
         Assert.Empty(runner.Calls);
     }
 
+    // Fix round 1 (Minor, BackupRunner.cs:214): the two offender-abort
+    // branches build their DestinationAttempt results with a DIFFERENT
+    // ternary expression each (see RunDetailed's own comments on each
+    // branch) - "GitHub offending, is Drive active?" and "Drive offending,
+    // is GitHub active?" are not textually symmetric, and neither one was
+    // exercised via RunDetailed before this round: the two tests above only
+    // assert on the bare exit code from the old Run(...) overload. These
+    // two prove both expressions produce the same observable result -
+    // BOTH active destinations reported as a failed, attempted attempt -
+    // regardless of which destination's selection actually tripped the
+    // offender check.
+    [Fact]
+    public void GithubOffenderAbortMarksBothActiveDestinationsFailedInDetailedResult()
+    {
+        var c = Config();
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        var runner = new OkRunner();
+
+        var result = BackupRunner.RunDetailed(
+            c, runner, _stg, _tmp,
+            (_, _, _) => (new[] { ".credentials.json" }, new List<string>()));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(result.Github.Attempted);
+        Assert.False(result.Github.Success);
+        Assert.True(result.Drive.Attempted);
+        Assert.False(result.Drive.Success);
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public void DriveOffenderAbortMarksBothActiveDestinationsFailedInDetailedResult()
+    {
+        var c = Config();
+        c.Github.Include = new() { "github-clean-marker" };
+        c.Drive.Enabled = true;
+        c.Drive.RcloneRemote = "gdrive:X";
+        c.Drive.Include = new() { "drive-offender-marker" };
+        var runner = new OkRunner();
+
+        var result = BackupRunner.RunDetailed(
+            c, runner, _stg, _tmp,
+            (_, include, _) => include.Contains("drive-offender-marker")
+                ? (new[] { "session.dat" }, new List<string>())
+                : (new[] { "settings.json" }, new List<string>()));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(result.Github.Attempted);
+        Assert.False(result.Github.Success);
+        Assert.True(result.Drive.Attempted);
+        Assert.False(result.Drive.Success);
+        Assert.Empty(runner.Calls);
+    }
+
     // The 4-arg FileSelector.Select overload must be used (not the 3-arg
     // convenience overload that silently discards what the secret denylist
     // withheld) and what it withheld must be logged by name, not just by

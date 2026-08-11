@@ -183,4 +183,42 @@ public class BackupHealthTests
         Assert.Equal(DestinationHealthState.Failed, github.State);
         Assert.Equal(DestinationHealthState.Healthy, drive.State);
     }
+
+    // Fix round 1 (Important 3): pins the one branch in Evaluate with no
+    // prior coverage - a healthy destination alongside one that has simply
+    // never run rolls up into overall Stale (not Healthy, not NeverRun). A
+    // future edit that flipped this to Healthy would silently hide a
+    // destination that has never once backed up anything, with the suite
+    // still green - this test exists specifically to catch that.
+    [Fact]
+    public void MixedHealthyAndNeverRunRollsUpToStaleWithNeverRunDestinationVisible()
+    {
+        var status = new BackupStatus
+        {
+            Github = Succeeded(Now.AddHours(-1)), // healthy
+            Drive = new DestinationStatus(), // never run
+        };
+        var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
+
+        Assert.Equal(BackupHealthState.Stale, result.State);
+        var drive = result.Destinations.Single(d => d.Name == "Google Drive");
+        Assert.Equal(DestinationHealthState.NeverRun, drive.State);
+        Assert.Null(drive.LastSuccessUtc);
+    }
+
+    // Fix round 1 (Important 4): NeverRun must warrant exactly the same
+    // surfacing treatment as Failed/Stale - a scheduled task that never
+    // registered produces NeverRun forever, which is the spec's own opening
+    // scenario for why silence is unacceptable. Healthy and NotConfigured
+    // are the only two states that should stay quiet.
+    [Theory]
+    [InlineData(BackupHealthState.NeverRun, true)]
+    [InlineData(BackupHealthState.Failed, true)]
+    [InlineData(BackupHealthState.Stale, true)]
+    [InlineData(BackupHealthState.Healthy, false)]
+    [InlineData(BackupHealthState.NotConfigured, false)]
+    public void WarrantsAttentionMatchesTheSurfacingContract(BackupHealthState state, bool expected)
+    {
+        Assert.Equal(expected, state.WarrantsAttention());
+    }
 }
