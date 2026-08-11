@@ -352,6 +352,30 @@ current usage, or wait for a real one.
 
 ---
 
+## 15. Backup - Google Drive
+
+Full setup is in [docs/GOOGLE-DRIVE-SETUP.md](GOOGLE-DRIVE-SETUP.md); this is
+just the pre-release checklist. Needs a machine with rclone already
+authorised against a published (not Testing) OAuth client - see that doc if
+you have not done this yet.
+
+- [ ] `rclone` is installed and on `PATH`:
+      `rclone version`
+- [ ] The remote is configured and listed:
+      `rclone listremotes` shows your `gdrive:` (or equivalent) entry
+- [ ] Settings -> Backup -> Google Drive is enabled with a valid
+      `remote:folder` and at least one file selected
+- [ ] **Back up now** produces a timestamped zip in the remote folder -
+      confirm in the Drive web UI or `rclone ls gdrive:ClaudeBackups`
+- [ ] With retention configured (Advanced...), running backups past the
+      configured count/age prunes older zips, and the single most recent
+      backup always survives
+- [ ] Restore from a Drive snapshot: open the restore dialog, pick a Drive
+      backup, preview it, and restore it - confirm the restored files land
+      where expected and a safety copy of what was overwritten is made
+
+---
+
 ## 14. Linux (KDE Plasma and GNOME)
 
 On a real desktop session, ideally Kubuntu/KDE Plasma on Wayland plus one

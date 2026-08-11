@@ -35,12 +35,15 @@ public static class BackupHelpText
 
     public const string DriveEnabled =
         "Uploads a timestamped zip to Google Drive via rclone. Requires " +
-        "rclone installed and authorised once with 'rclone config' before " +
-        "this will work.";
+        "rclone installed and authorised with 'rclone config' using your " +
+        "OWN Google OAuth client, published (not left in Testing) so the " +
+        "token does not expire after 7 days - see Help for setup steps.";
 
     public const string RcloneRemote =
         "The rclone remote and destination folder, e.g. gdrive:ClaudeBackups. " +
-        "Must name a remote you already created with 'rclone config'.";
+        "Must name a remote you already created with 'rclone config'. If you " +
+        "used the recommended drive.file scope, let rclone create this " +
+        "folder on first upload rather than making it yourself in Drive.";
 
     public const string Include =
         "Glob patterns (one per line), relative to ~/.claude, for what gets " +
@@ -91,9 +94,33 @@ public static class BackupHelpText
         "cannot verify that for you.\r\n" +
         "\r\n" +
         "GOOGLE DRIVE SETUP\r\n" +
-        "Install rclone and run 'rclone config' once to authorise Drive. " +
+        "Install rclone and authorise it once with 'rclone config'. You need " +
+        "YOUR OWN Google OAuth client ID for this - rclone's shared client " +
+        "is being retired and will stop working during 2026, and is heavily " +
+        "rate limited meanwhile. Create your own in the Google Cloud " +
+        "Console.\r\n" +
+        "\r\n" +
+        "While creating it, PUBLISH the OAuth app rather than leaving it in " +
+        "Testing. An app left in Testing issues refresh tokens that expire " +
+        "after 7 days, so a scheduled backup works for a week and then " +
+        "starts failing silently - the worst failure mode for a backup you " +
+        "are not watching. Publishing does not require Google's " +
+        "verification for personal use under 100 users; you will just see " +
+        "an 'unverified app' warning at sign-in, which is safe to click " +
+        "through.\r\n" +
+        "\r\n" +
+        "When rclone asks for a scope, choose option 3, drive.file, rather " +
+        "than full drive access - rclone then only ever touches files it " +
+        "created itself, so a compromised client cannot reach the rest of " +
+        "your Drive. The catch: rclone cannot see folders it did not " +
+        "create, so do not pre-create the backup folder in the Drive web " +
+        "UI - let the first upload create it.\r\n" +
+        "\r\n" +
         "Then give the remote as remote:folder, e.g. gdrive:ClaudeBackups. " +
         "Each run uploads a timestamped zip.\r\n" +
+        "\r\n" +
+        "Full walkthrough with every Google Cloud Console screen: " +
+        "docs/GOOGLE-DRIVE-SETUP.md in the repo.\r\n" +
         "\r\n" +
         "WHAT IS BACKED UP BY DEFAULT\r\n" +
         "settings.json, CLAUDE.md, commands/, agents/, and top-level " +

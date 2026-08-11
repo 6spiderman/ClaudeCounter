@@ -208,6 +208,8 @@ to Claude...**
   entirely absent and every backup control in Settings stays hidden. The
   GitHub repo you configure **must be private**; ClaudeCounter cannot verify
   that automatically, so it warns you in Settings and in the log instead.
+  Google Drive needs a one-time Google Cloud Console setup of your own OAuth
+  client - see [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md).
 - Single instance (a named mutex, on both platforms), single self-contained
   executable, no telemetry.
 
