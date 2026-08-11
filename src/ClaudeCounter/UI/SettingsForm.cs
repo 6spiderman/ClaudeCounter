@@ -92,12 +92,23 @@ public sealed class SettingsForm : Form
     private TextBox? _backupGithubInclude;
     private TextBox? _backupGithubExclude;
     private CheckBox? _backupDriveEnabled;
+    private ComboBox? _backupDriveTransport;
+    private TextBox? _backupDriveFolderPath;
     private TextBox? _backupDriveRemote;
     private TextBox? _backupDriveInclude;
     private TextBox? _backupDriveExclude;
     private ComboBox? _backupSelectionTarget;
     private Panel? _backupGithubBlock;
     private Panel? _backupDriveBlock;
+    // S14b: the sync-folder-path row and the rclone-remote row occupy the
+    // SAME y-range within the Drive block and are never both visible at
+    // once - same "two blocks, one Visible" swap _backupGithubBlock/
+    // _backupDriveBlock already use one level up, just nested one level
+    // deeper (within Drive's own block) so adding the sync-folder transport
+    // costs no extra dialog height beyond whichever row is taller. See
+    // BuildDriveBlock.
+    private Panel? _backupDriveFolderRow;
+    private Panel? _backupDriveRcloneRow;
     private ComboBox? _backupFrequency;
     private TextBox? _backupTime;
 
@@ -632,27 +643,65 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// Drive's connection fields (enable, rclone remote) plus Drive's own
-    /// Include/Exclude. See BuildGithubBlock's doc comment for the layout
-    /// reasoning - identical here, just for the Drive target.
+    /// Drive's connection fields (enable, transport selector, then EITHER
+    /// the sync-folder path row OR the rclone-remote row depending on that
+    /// selection) plus Drive's own Include/Exclude. See BuildGithubBlock's
+    /// doc comment for the general layout reasoning.
+    ///
+    /// S14b: the transport row-swap (BuildSyncFolderRow / BuildRcloneRow,
+    /// toggled by _backupDriveTransport.SelectedIndexChanged) is a nested
+    /// instance of the exact same "both built, only one Visible" pattern
+    /// BuildBackupPage already uses for _backupGithubBlock/_backupDriveBlock
+    /// - both row panels are always fully constructed (so
+    /// OnSaveBackupSchedule can read either one's controls regardless of
+    /// which is on screen), and the space reserved below them is
+    /// Math.Max(folderRowHeight, rcloneRowHeight), so swapping costs no more
+    /// dialog height than whichever row happens to be taller.
     /// </summary>
     private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
     {
         var block = new Panel { BackColor = palette.Back };
         var y = 0;
 
-        _backupDriveEnabled = NewCheckBox("Back up to Google Drive (rclone)", target.Enabled, palette);
+        // "Drive" (not "Google Drive (rclone)") - transport-neutral, since
+        // this destination now also covers OneDrive, Dropbox and a NAS share
+        // via the sync-folder transport chosen just below, not only rclone.
+        _backupDriveEnabled = NewCheckBox("Back up to Drive", target.Enabled, palette);
         _backupDriveEnabled.Location = new Point(PagePadX, y);
         block.Controls.Add(_backupDriveEnabled);
         AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
         y += _backupDriveEnabled.Height + RowGap;
 
-        block.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
-        _backupDriveRemote = NewTextBox(target.RcloneRemote, palette, 130);
-        _backupDriveRemote.Location = new Point(FieldX, y);
-        block.Controls.Add(_backupDriveRemote);
-        AddInfoButton(block, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
-        y += _backupDriveRemote.Height + RowGap;
+        block.Controls.Add(NewFieldLabel("Transport", palette, y));
+        _backupDriveTransport = NewCombo(palette, 280);
+        _backupDriveTransport.Location = new Point(FieldX, y);
+        _backupDriveTransport.Items.Add("Sync folder (Google Drive, OneDrive, Dropbox, NAS)");
+        _backupDriveTransport.Items.Add("rclone remote (advanced)");
+        var showSyncFolder = target.Transport == DriveTransport.SyncFolder;
+        _backupDriveTransport.SelectedIndex = showSyncFolder ? 0 : 1;
+        block.Controls.Add(_backupDriveTransport);
+        y += _backupDriveTransport.Height + RowGap;
+
+        var (folderRow, folderRowHeight) = BuildSyncFolderRow(target, palette, fullWidth, rightEdgeX);
+        var (rcloneRow, rcloneRowHeight) = BuildRcloneRow(target, palette);
+        folderRow.Location = new Point(0, y);
+        rcloneRow.Location = new Point(0, y);
+        folderRow.Visible = showSyncFolder;
+        rcloneRow.Visible = !showSyncFolder;
+        // Both rows are added regardless of the transport combo's starting
+        // value - only Visible toggles thereafter - mirroring
+        // BuildBackupPage's own comment on githubBlock/driveBlock.
+        block.Controls.Add(rcloneRow);
+        block.Controls.Add(folderRow);
+        _backupDriveFolderRow = folderRow;
+        _backupDriveRcloneRow = rcloneRow;
+        _backupDriveTransport.SelectedIndexChanged += (_, _) =>
+        {
+            var isSyncFolder = _backupDriveTransport.SelectedIndex == 0;
+            _backupDriveFolderRow!.Visible = isSyncFolder;
+            _backupDriveRcloneRow!.Visible = !isSyncFolder;
+        };
+        y += Math.Max(folderRowHeight, rcloneRowHeight) + RowGap;
 
         var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
         block.Controls.Add(includeLabel);
@@ -676,6 +725,103 @@ public sealed class SettingsForm : Form
 
         block.Size = new Size(fullWidth + PagePadX * 2, y);
         return (block, y);
+    }
+
+    /// <summary>
+    /// The sync-folder transport's own row: a "Sync folder path" label with
+    /// Browse... and Detect... inline on the SAME row (mirrors
+    /// AddChooseFilesButton's "button inline on the label row, not a row of
+    /// its own" trick - see that method's doc comment on why the Backup
+    /// tab's height budget makes this matter), then the path textbox on the
+    /// row below. A plain Panel positioned by the caller (BuildDriveBlock)
+    /// at 0,0 - like every other block/row Panel in this file, its
+    /// children's absolute X coordinates (PagePadX, FieldX, ...) are
+    /// unaffected by the panel's own Location.
+    /// </summary>
+    private (Panel Row, int Height) BuildSyncFolderRow(DriveTarget target, Palette palette, int fullWidth, int rightEdgeX)
+    {
+        var row = new Panel { BackColor = palette.Back };
+        var y = 0;
+
+        var label = NewSectionLabel("Sync folder path", palette, y);
+        row.Controls.Add(label);
+        AddInfoButton(row, palette, rightEdgeX, y, BackupHelpText.SyncFolder);
+
+        var detectButton = NewFlatButton("Detect...", palette);
+        var browseButton = NewFlatButton("Browse...", palette);
+        detectButton.Location = new Point(rightEdgeX - InfoButtonSize - 8 - detectButton.Width, y - 3);
+        browseButton.Location = new Point(detectButton.Left - 8 - browseButton.Width, y - 3);
+        detectButton.Click += (_, _) => OnDetectSyncFolder(palette);
+        browseButton.Click += (_, _) => OnBrowseSyncFolder();
+        row.Controls.Add(detectButton);
+        row.Controls.Add(browseButton);
+        y += Math.Max(label.PreferredHeight, Math.Max(detectButton.Height, browseButton.Height)) + 2;
+
+        _backupDriveFolderPath = NewTextBox(target.FolderPath, palette, fullWidth);
+        _backupDriveFolderPath.Location = new Point(PagePadX, y);
+        row.Controls.Add(_backupDriveFolderPath);
+        y += _backupDriveFolderPath.Height + RowGap;
+
+        row.Size = new Size(fullWidth + PagePadX * 2, y);
+        return (row, y);
+    }
+
+    /// <summary>
+    /// The rclone transport's own row: exactly the pre-S14b "Rclone remote"
+    /// label + textbox + info button, just extracted into its own Panel so
+    /// it can swap visibility against BuildSyncFolderRow's panel instead of
+    /// always being on screen.
+    /// </summary>
+    private (Panel Row, int Height) BuildRcloneRow(DriveTarget target, Palette palette)
+    {
+        var row = new Panel { BackColor = palette.Back };
+        var y = 0;
+
+        row.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
+        _backupDriveRemote = NewTextBox(target.RcloneRemote, palette, 130);
+        _backupDriveRemote.Location = new Point(FieldX, y);
+        row.Controls.Add(_backupDriveRemote);
+        AddInfoButton(row, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
+        y += _backupDriveRemote.Height + RowGap;
+
+        row.Size = new Size(FieldX + 130 + 8 + InfoButtonSize, y);
+        return (row, y);
+    }
+
+    /// <summary>
+    /// Opens a standard FolderBrowserDialog seeded from the textbox's
+    /// current (possibly unsaved) text when that text is itself an existing
+    /// directory, matching AddChooseFilesButton's "seed from what is on
+    /// screen, not from disk" rule. On Cancel the textbox is untouched.
+    /// </summary>
+    private void OnBrowseSyncFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Choose a folder your sync client (Google Drive, OneDrive, Dropbox) or NAS already watches.",
+            UseDescriptionForTitle = true,
+        };
+        if (Directory.Exists(_backupDriveFolderPath!.Text.Trim()))
+            dialog.SelectedPath = _backupDriveFolderPath.Text.Trim();
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+            _backupDriveFolderPath.Text = dialog.SelectedPath;
+    }
+
+    /// <summary>
+    /// S14b: the biggest usability win of the sync-folder transport - runs
+    /// SyncFolderScanner.Detect() (never throws - see its own doc comment)
+    /// and lets the user pick from whatever it found via
+    /// SyncFolderDetectDialog, rather than making them go find the path
+    /// themselves. On Cancel, or when the dialog is dismissed without a
+    /// selection, the textbox is left untouched.
+    /// </summary>
+    private void OnDetectSyncFolder(Palette palette)
+    {
+        var candidates = SyncFolderScanner.Detect();
+        using var dialog = new SyncFolderDetectDialog(palette, candidates);
+        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedPath is { } path)
+            _backupDriveFolderPath!.Text = path;
     }
 
     /// <summary>
@@ -974,12 +1120,38 @@ public sealed class SettingsForm : Form
         // which one the user currently has on screen. No flush-from-whichever-
         // is-visible step is needed any more.
         var config = BackupConfig.Load(BackupConfig.DefaultPath());
+
+        // S14b: validate the sync-folder path the same way SyncFolderBackend
+        // itself would at write time - SyncFolderPathValidator.Validate is
+        // the exact same rule set (ClaudeCounter.csproj has no
+        // ProjectReference to ClaudeBackup.csproj, so it cannot call
+        // SyncFolderBackend.ValidateFolderPath directly; both now forward to
+        // this one shared implementation - see that class's doc comment).
+        // Gated on "Drive enabled and sync-folder transport selected" rather
+        // than run unconditionally: a blank rclone remote is likewise never
+        // blocked here (BackupRunner catches that at run time instead), and
+        // the validator's own blank-path message ("...is enabled but no
+        // folder is configured") is only accurate under that same condition.
+        var driveTransport = _backupDriveTransport!.SelectedIndex == 0 ? DriveTransport.SyncFolder : DriveTransport.Rclone;
+        var driveFolderPath = _backupDriveFolderPath!.Text.Trim();
+        if (_backupDriveEnabled!.Checked && driveTransport == DriveTransport.SyncFolder)
+        {
+            var folderError = SyncFolderPathValidator.Validate(driveFolderPath, config.SourceRoot);
+            if (folderError is not null)
+            {
+                MessageBox.Show(this, folderError, "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+        }
+
         config.Github.Enabled = _backupGithubEnabled!.Checked;
         config.Github.RemoteUrl = remoteUrl;
         config.Github.Branch = _backupGithubBranch!.Text.Trim();
         config.Github.Include = SplitLines(_backupGithubInclude!.Text);
         config.Github.Exclude = SplitLines(_backupGithubExclude!.Text);
-        config.Drive.Enabled = _backupDriveEnabled!.Checked;
+        config.Drive.Enabled = _backupDriveEnabled.Checked;
+        config.Drive.Transport = driveTransport;
+        config.Drive.FolderPath = driveFolderPath;
         config.Drive.RcloneRemote = rcloneRemote;
         config.Drive.Include = SplitLines(_backupDriveInclude!.Text);
         config.Drive.Exclude = SplitLines(_backupDriveExclude!.Text);

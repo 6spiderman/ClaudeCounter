@@ -86,6 +86,32 @@ public class SettingsFormSmokeTests
         Assert.Null(error);
     }
 
+    // S14b: the sync-folder Detect dialog is only reachable by clicking
+    // Detect... on the Backup tab's Drive block, so - like BackupHelpDialog
+    // above - it would otherwise never be constructed by any test at all.
+    // Exercised with an empty candidate list (the "nothing found" state,
+    // where "Use this folder" must start disabled rather than letting a
+    // no-op OK through) and a populated one (the normal path).
+    [Fact]
+    public void SyncFolderDetectDialogConstructsWithNoCandidatesWithoutThrowing()
+    {
+        var error = ConstructOnStaThread(() =>
+            new SyncFolderDetectDialog(Theme.Current(), Array.Empty<SyncFolderCandidate>()));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void SyncFolderDetectDialogConstructsWithCandidatesWithoutThrowing()
+    {
+        var candidates = new[]
+        {
+            new SyncFolderCandidate("OneDrive", @"C:\Users\someone\OneDrive"),
+            new SyncFolderCandidate("NAS share (M: -> \\\\192.168.1.210\\media)", @"\\192.168.1.210\media"),
+        };
+        var error = ConstructOnStaThread(() => new SyncFolderDetectDialog(Theme.Current(), candidates));
+        Assert.Null(error);
+    }
+
     // S6: the file picker is only reachable by clicking "Choose files..." on
     // the Backup tab, so - like BackupHelpDialog above - it would otherwise
     // never be constructed by any test at all. A populated tree (some files,
@@ -382,6 +408,20 @@ public class SettingsFormSmokeTests
     // measured height is unchanged at 671px: the row's height is already
     // governed by the taller of two identical buttons, so adding the
     // second one costs zero extra pixels.
+    //
+    // S14b: added a "Transport" combo row plus a sync-folder-path row
+    // (label + Browse.../Detect... inline + textbox) to the Drive block.
+    // Kept to a row-SWAP against the existing rclone-remote row (see
+    // SettingsForm.BuildDriveBlock/BuildSyncFolderRow/BuildRcloneRow - the
+    // same "both built, only one Visible" trick BuildBackupPage already
+    // uses for the GitHub/Drive blocks themselves, nested one level deeper)
+    // rather than stacking both rows permanently. Re-measured (via this same
+    // technique) at 671px - EXACTLY unchanged: the Drive block was already
+    // shorter than the GitHub block (which has an extra "Remote URL" +
+    // privacy-caption + branch row), and Math.Max(githubBlockHeight,
+    // driveBlockHeight) was already being governed by GitHub's height before
+    // this change, with enough spare margin that the new Transport row plus
+    // the taller of the two swapped rows still does not exceed it.
     [Fact]
     public void SettingsFormHeightStaysWithinTheDisplayBudget()
     {
