@@ -296,10 +296,18 @@ public class SettingsFormSmokeTests
     public void RestoreDialogConstructsWithAPopulatedSnapshotListWithoutThrowing()
     {
         var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
+        // S17b: RestoreDialog reads BackupConfig.Destinations directly now,
+        // not the Github/Drive shim - a config built via a plain object
+        // initializer (as here) never syncs the shim into Destinations on
+        // its own (that only happens on Save()/Load()), so this constructs
+        // Destinations directly with the well-known "github"/"drive" ids.
         var config = new BackupConfig
         {
-            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
-            Drive = new DriveTarget { Enabled = true, RcloneRemote = "gdrive:ClaudeBackups" },
+            Destinations = new()
+            {
+                new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+                new BackupDestination { Id = "drive", Name = "Google Drive (rclone)", Kind = DestinationKind.Rclone, Enabled = true, RcloneRemote = "gdrive:ClaudeBackups" },
+            },
         };
         var runner = new FakeRestoreRunner();
 
@@ -324,7 +332,10 @@ public class SettingsFormSmokeTests
         var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
         var config = new BackupConfig
         {
-            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+            Destinations = new()
+            {
+                new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+            },
         };
         var runner = new FakeRestoreRunner();
 
@@ -359,7 +370,10 @@ public class SettingsFormSmokeTests
         var scratchRoot = Path.Combine(Path.GetTempPath(), $"restore-smoke-{Guid.NewGuid():N}");
         var config = new BackupConfig
         {
-            Github = new GitTarget { Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+            Destinations = new()
+            {
+                new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true, RemoteUrl = "git@example.com:org/repo.git", Branch = "main" },
+            },
         };
         var runner = new FakeRestoreRunner { ThrowOnLog = true };
 
@@ -368,7 +382,11 @@ public class SettingsFormSmokeTests
             var error = ConstructOnStaThread(() => new RestoreDialog(Theme.Current(), config, runner, scratchRoot));
             Assert.Null(error);
 
-            var expectedGitStagingDir = Path.Combine(scratchRoot, "ClaudeCounter", "restore-git-repo");
+            // S17b: RestoreGitSource's own clone now lives under this
+            // destination's subdirectory of the staging root (keyed by its
+            // Id "github"), not directly at the root - see RestoreDialog.
+            // GitSourceFor's own doc comment for why.
+            var expectedGitStagingDir = Path.Combine(scratchRoot, "ClaudeCounter", "restore-git-repo", "github");
             Assert.True(Directory.Exists(Path.Combine(expectedGitStagingDir, ".git")),
                 "the fake clone should have populated the staging directory before `git log` threw");
         }

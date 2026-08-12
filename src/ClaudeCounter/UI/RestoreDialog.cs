@@ -56,8 +56,6 @@ namespace ClaudeCounter.UI;
 /// </summary>
 public sealed class RestoreDialog : Form
 {
-    private enum Source { Github, Drive }
-
     private enum Step { ChooseSnapshot, Preview, Result }
 
     private const int DialogWidth = 700;
@@ -75,16 +73,27 @@ public sealed class RestoreDialog : Form
 
     private readonly Palette _palette;
     private readonly BackupConfig _config;
-    private readonly RestoreGitSource _gitSource;
+    private readonly IProcessRunner _runner;
     private readonly RestoreZipSource _zipSource;
     private readonly string _liveRoot;
-    private readonly string _gitStagingDir;
-    private readonly string _driveTempDir;
+
+    // S17b: these two are ROOTS, not single scratch directories - a git
+    // destination's own clone lives at Path.Combine(_gitStagingRoot,
+    // destination.Id), and a zip destination's rclone download temp lives at
+    // Path.Combine(_driveTempRoot, destination.Id). See GitSourceFor's own
+    // doc comment for why N destinations need this (BackupRunner.
+    // RunBackendFor's identical reasoning, applied here). _stagedRoot is NOT
+    // split per destination - only one destination is ever previewed/applied
+    // at a time in this dialog (SetBusy serializes every long operation), and
+    // Materialize always clears its destinationDir before writing, so there
+    // is no cross-destination collision to isolate against for that one.
+    private readonly string _gitStagingRoot;
+    private readonly string _driveTempRoot;
     private readonly string _stagedRoot;
     private readonly string _safetyBaseDir;
-    private readonly List<(Source Kind, string Name)> _destinations = new();
+    private readonly List<BackupDestination> _destinations = new();
 
-    private Source _selectedSource;
+    private BackupDestination? _selectedDestination;
     private IReadOnlyList<RestoreFileRow> _rows = Array.Empty<RestoreFileRow>();
     private bool _busy;
     private Step _currentStep = Step.ChooseSnapshot;
@@ -155,7 +164,7 @@ public sealed class RestoreDialog : Form
     /// The same reasoning that motivates isolating this path in tests is
     /// also why LoadSnapshots and OnPreviewClicked (fix round 1, review)
     /// never let an exception from listing/materialising/classifying escape
-    /// uncaught: whatever this constructor points _gitStagingDir/_stagedRoot
+    /// uncaught: whatever this constructor points _gitStagingRoot/_stagedRoot
     /// at (real %LOCALAPPDATA% for every real caller) can end up holding a
     /// full, plaintext, multi-version copy of the user's Claude config the
     /// moment `git clone` succeeds - an uncaught exception anywhere after
@@ -172,20 +181,22 @@ public sealed class RestoreDialog : Form
         _liveRoot = config.SourceRoot;
 
         var local = scratchRoot ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        _gitStagingDir = Path.Combine(local, "ClaudeCounter", "restore-git-repo");
-        _driveTempDir = Path.Combine(local, "ClaudeCounter", "restore-drive-tmp");
+        _gitStagingRoot = Path.Combine(local, "ClaudeCounter", "restore-git-repo");
+        _driveTempRoot = Path.Combine(local, "ClaudeCounter", "restore-drive-tmp");
         _stagedRoot = Path.Combine(local, "ClaudeCounter", "restore-staged");
         _safetyBaseDir = Path.Combine(local, "ClaudeCounter", "restore-safety");
 
-        _gitSource = new RestoreGitSource(runner, _gitStagingDir);
+        _runner = runner;
         _zipSource = new RestoreZipSource(runner);
 
-        if (config.Github.Enabled) _destinations.Add((Source.Github, "GitHub"));
-        // Transport-aware, reusing BackupHealth's exact naming - a NAS or
-        // OneDrive user must not be offered "Google Drive" as the restore
-        // source (see this class's own note on RestoreDialog above and
-        // BackupHealth.DriveDisplayName's doc comment).
-        if (config.Drive.Enabled) _destinations.Add((Source.Drive, BackupHealth.DriveDisplayName(config.Drive)));
+        // S17b: reads BackupConfig.Destinations directly (the real
+        // N-destination list) instead of the old Github/Drive shim's fixed
+        // pair. Each BackupDestination already carries its own display Name
+        // (set at creation - see BackupConfig's migration, which reuses
+        // BackupHealth.DriveDisplayName for the "drive" well-known entry, and
+        // S16's named-destination UI for anything added since), so there is
+        // no separate transport-aware naming step needed here any more.
+        _destinations.AddRange(config.Destinations.Where(d => d.Enabled));
 
         Text = "Restore from backup";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -240,25 +251,70 @@ public sealed class RestoreDialog : Form
         // the user pick a snapshot.
         if (_destinations.Count == 0)
         {
-            // Transport-neutral here (unlike the destination list above):
-            // neither destination is enabled at this point, so there is no
-            // configured transport to name - "Drive" mirrors the same
-            // neutral choice SettingsForm's Drive block already made (see
-            // its own "Back up to Drive" checkbox comment) rather than
-            // naming a specific transport that is not actually in effect.
-            SetSourceError("No backup destination is enabled. Enable and configure GitHub or Drive backup on the Backup tab first.");
+            // Destination-neutral here (unlike the destination list above,
+            // which names each destination by its own configured Name): no
+            // destination is enabled at this point, so there is nothing
+            // specific to name - S17b generalizes this from "GitHub or
+            // Drive" (which assumed exactly two) to a plain "a destination".
+            SetSourceError("No backup destination is enabled. Enable and configure a destination on the Backup tab first.");
         }
         else
         {
-            _selectedSource = _destinations[0].Kind;
+            _selectedDestination = _destinations[0];
             if (_sourceCombo is not null)
                 _sourceCombo.SelectedIndex = 0; // fires SelectedIndexChanged -> LoadSnapshots
             else
-                LoadSnapshots(_selectedSource);
+                LoadSnapshots(_selectedDestination);
         }
 
         ShowStep(Step.ChooseSnapshot);
     }
+
+    // --- S17b: per-destination source dispatch ------------------------------
+
+    /// <summary>
+    /// A fresh <see cref="RestoreGitSource"/> pointed at THIS destination's
+    /// own subdirectory of <see cref="_gitStagingRoot"/> - unlike <see
+    /// cref="_zipSource"/> (already stateless: it takes its scratch tempDir
+    /// as a per-call parameter, not a constructor field), RestoreGitSource
+    /// bakes its clone directory into its constructor, so per-destination
+    /// isolation for the GitHub kind means constructing a new instance per
+    /// destination rather than reusing one field across all of them - see
+    /// this class's own field-block comment on <see cref="_gitStagingRoot"/>
+    /// for why that isolation matters with N destinations. Construction
+    /// itself does no I/O (it just stores two references), so building one
+    /// per call (LoadSnapshots, then again in MaterializeSnapshot) is cheap;
+    /// both calls for the SAME destination resolve to the SAME subdirectory,
+    /// so the clone LoadSnapshots' EnsureRepo produces is exactly what
+    /// MaterializeSnapshot's own EnsureRepo call reuses (fetch, not
+    /// re-clone).
+    /// </summary>
+    private RestoreGitSource GitSourceFor(BackupDestination destination) =>
+        new(_runner, Path.Combine(_gitStagingRoot, destination.Id));
+
+    /// <summary>Lists snapshots for <paramref name="destination"/>, dispatching on its Kind without leaking that dispatch to callers.</summary>
+    private RestoreListResult ListSnapshotsFor(BackupDestination destination) =>
+        destination.Kind == DestinationKind.GitHub
+            ? GitSourceFor(destination).ListSnapshots(destination.ToGitTarget())
+            : _zipSource.ListSnapshots(destination.ToDriveTarget());
+
+    /// <summary>
+    /// Materialises <paramref name="snapshotId"/> for <paramref
+    /// name="destination"/> into <paramref name="destinationDir"/>. Wraps
+    /// the arity difference between RestoreGitSource.Materialize(target, id,
+    /// destDir, protectedRoot) and RestoreZipSource.Materialize(target, id,
+    /// tempDir, destDir, protectedRoot) - the caller (OnPreviewClicked)
+    /// supplies only what is common to both (the destination, the snapshot,
+    /// and where to stage it) and never has to know that Drive-kind
+    /// materialisation also needs a download tempDir. That tempDir is this
+    /// destination's own subdirectory of <see cref="_driveTempRoot"/> - same
+    /// per-destination isolation reasoning as <see cref="GitSourceFor"/>,
+    /// applied to the rclone download scratch instead of the git clone.
+    /// </summary>
+    private RestoreMaterializeResult MaterializeSnapshot(BackupDestination destination, string snapshotId, string destinationDir) =>
+        destination.Kind == DestinationKind.GitHub
+            ? GitSourceFor(destination).Materialize(destination.ToGitTarget(), snapshotId, destinationDir, _liveRoot)
+            : _zipSource.Materialize(destination.ToDriveTarget(), snapshotId, Path.Combine(_driveTempRoot, destination.Id), destinationDir, _liveRoot);
 
     // --- Panel 1: choose source + snapshot ---------------------------------
 
@@ -278,8 +334,8 @@ public sealed class RestoreDialog : Form
             _sourceCombo.SelectedIndexChanged += (_, _) =>
             {
                 if (_busy) return;
-                _selectedSource = _destinations[_sourceCombo.SelectedIndex].Kind;
-                LoadSnapshots(_selectedSource);
+                _selectedDestination = _destinations[_sourceCombo.SelectedIndex];
+                LoadSnapshots(_selectedDestination);
             };
             panel.Controls.Add(_sourceCombo);
             y += _sourceCombo.Height + RowGap;
@@ -374,12 +430,13 @@ public sealed class RestoreDialog : Form
     /// never reaches FormClosed, and therefore never runs
     /// CleanupStagingDirectories, even though RestoreGitSource.ListSnapshots'
     /// own EnsureRepo step can already have cloned a full, plaintext copy of
-    /// every backed-up version into _gitStagingDir by the time a LATER call
+    /// every backed-up version into this destination's own subdirectory of
+    /// _gitStagingRoot by the time a LATER call
     /// (e.g. `git log` itself) throws. Catching here and treating it exactly
     /// like a normal RestoreListResult.Failure keeps the dialog fully
     /// constructed either way, so it still closes and cleans up normally.
     /// </summary>
-    private void LoadSnapshots(Source source)
+    private void LoadSnapshots(BackupDestination destination)
     {
         _snapshotList.Items.Clear();
         _sourceErrorLabel.Text = "";
@@ -389,9 +446,7 @@ public sealed class RestoreDialog : Form
         RestoreListResult result;
         try
         {
-            result = source == Source.Github
-                ? _gitSource.ListSnapshots(_config.Github)
-                : _zipSource.ListSnapshots(_config.Drive);
+            result = ListSnapshotsFor(destination);
         }
         catch (Exception ex)
         {
@@ -447,7 +502,7 @@ public sealed class RestoreDialog : Form
     /// particular the safety-copy directory: applying INTO it could
     /// overwrite the very originals rule 2 just saved).
     /// </summary>
-    private string[] ScratchDirs() => new[] { _stagedRoot, _gitStagingDir, _driveTempDir, _safetyBaseDir };
+    private string[] ScratchDirs() => new[] { _stagedRoot, _gitStagingRoot, _driveTempRoot, _safetyBaseDir };
 
     private string? ResolveDestinationRoot() =>
         RestoreDestinationModel.ResolveDestinationRoot(_destinationKind, _liveRoot, _customDestinationRoot);
@@ -940,7 +995,7 @@ public sealed class RestoreDialog : Form
         if (_busy || _snapshotList.SelectedItems.Count == 0)
             return;
         var snapshot = (RestoreSnapshot)_snapshotList.SelectedItems[0].Tag!;
-        var source = _selectedSource;
+        var destination = _selectedDestination!; // set whenever _destinations is non-empty - see the constructor
 
         // S10: resolved exactly once here, and everything for the rest of
         // this preview/apply cycle - classify below, and Apply once the user
@@ -979,9 +1034,7 @@ public sealed class RestoreDialog : Form
             // into _stagedRoot) against ever landing in live config, which
             // is independent of where the user later chooses to classify/
             // apply against. See this class's own doc comment.
-            var materialize = await Task.Run(() => source == Source.Github
-                ? _gitSource.Materialize(_config.Github, snapshot.Id, _stagedRoot, _liveRoot)
-                : _zipSource.Materialize(_config.Drive, snapshot.Id, _driveTempDir, _stagedRoot, _liveRoot));
+            var materialize = await Task.Run(() => MaterializeSnapshot(destination, snapshot.Id, _stagedRoot));
 
             if (IsDisposed) return;
             if (!materialize.Ok)
@@ -1110,21 +1163,26 @@ public sealed class RestoreDialog : Form
 
     /// <summary>
     /// Every restore-owned scratch directory this dialog can have created -
-    /// the materialised snapshot, and RestoreGitSource's own clone (a full,
-    /// plaintext, multi-version copy of everything ever backed up to
-    /// GitHub) - is a second copy of (a subset of) the user's Claude config
-    /// sitting on disk once this dialog is done with it. RestoreCleanup
-    /// never throws and logs loudly on failure instead, so this is safe to
-    /// call unconditionally from FormClosed. The Drive temp dir is included
-    /// too even though RestoreZipSource.Materialize already deletes the
-    /// downloaded zip itself on every call - best effort, in case a call
-    /// failed partway through and left it behind.
+    /// the materialised snapshot, and every destination's own subdirectory
+    /// of <see cref="_gitStagingRoot"/> (each a full, plaintext, multi-
+    /// version copy of everything ever backed up to that GitHub destination)
+    /// - is a second copy of (a subset of) the user's Claude config sitting
+    /// on disk once this dialog is done with it. RestoreCleanup never throws
+    /// and logs loudly on failure instead, so this is safe to call
+    /// unconditionally from FormClosed. Deleting the ROOT recursively (not
+    /// each destination's subdirectory individually) sweeps every
+    /// destination's own scratch in one call - see the field-block comment
+    /// on <see cref="_gitStagingRoot"/>/<see cref="_driveTempRoot"/>.
+    /// <see cref="_driveTempRoot"/> is included too even though
+    /// RestoreZipSource.Materialize already deletes the downloaded zip
+    /// itself on every call - best effort, in case a call failed partway
+    /// through and left it behind.
     /// </summary>
     private void CleanupStagingDirectories()
     {
         RestoreCleanup.DeleteStagingDirectory(_stagedRoot);
-        RestoreCleanup.DeleteStagingDirectory(_gitStagingDir);
-        RestoreCleanup.DeleteStagingDirectory(_driveTempDir);
+        RestoreCleanup.DeleteStagingDirectory(_gitStagingRoot);
+        RestoreCleanup.DeleteStagingDirectory(_driveTempRoot);
     }
 
     // --- Small themed control factories (mirrors BackupAdvancedDialog's own) ---
