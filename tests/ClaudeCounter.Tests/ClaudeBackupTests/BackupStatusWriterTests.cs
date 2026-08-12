@@ -23,6 +23,15 @@ public class BackupStatusWriterTests
         },
     };
 
+    // S17b: BackupRunResult's back-compat 3-arg (exitCode, github, drive)
+    // constructor was deleted alongside BackupRunner's own migration to N
+    // destinations (see BackupRunResult.cs's remarks) - this local helper
+    // keeps every existing test below reading exactly like it did against
+    // that constructor, just spelled as the id-keyed dictionary shape
+    // BackupRunResult now requires everywhere.
+    private static BackupRunResult GithubDriveResult(int exitCode, DestinationAttempt github, DestinationAttempt drive) =>
+        new(exitCode, new Dictionary<string, DestinationAttempt> { ["github"] = github, ["drive"] = drive });
+
     [Fact]
     public void RecordWritesAndPreservesLastSuccessAcrossAFollowingFailure()
     {
@@ -30,13 +39,13 @@ public class BackupStatusWriterTests
         try
         {
             var firstRun = DateTimeOffset.UtcNow;
-            BackupStatusWriter.Record(path, new BackupRunResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
+            BackupStatusWriter.Record(path, GithubDriveResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
 
             var afterFirst = BackupStatus.Load(path);
             Assert.Equal(firstRun, afterFirst.For("github").LastSuccessUtc);
 
             var secondRun = firstRun.AddDays(1);
-            BackupStatusWriter.Record(path, new BackupRunResult(2, DestinationAttempt.Failed("backend failed"), DestinationAttempt.NotAttempted(false)), secondRun);
+            BackupStatusWriter.Record(path, GithubDriveResult(2, DestinationAttempt.Failed("backend failed"), DestinationAttempt.NotAttempted(false)), secondRun);
 
             var afterSecond = BackupStatus.Load(path);
             Assert.Equal(firstRun, afterSecond.For("github").LastSuccessUtc); // preserved
@@ -61,7 +70,7 @@ public class BackupStatusWriterTests
             var badPath = Path.Combine(blockingFile, "backup-status.json");
 
             // Must not throw.
-            BackupStatusWriter.Record(badPath, new BackupRunResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), DateTimeOffset.UtcNow);
+            BackupStatusWriter.Record(badPath, GithubDriveResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), DateTimeOffset.UtcNow);
         }
         finally { File.Delete(blockingFile); }
     }
@@ -126,7 +135,7 @@ public class BackupStatusWriterTests
         {
             var firstRun = DateTimeOffset.UtcNow.AddDays(-1);
             BackupStatusWriter.Record(
-                path, new BackupRunResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
+                path, GithubDriveResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
 
             var afterSuccess = BackupStatus.Load(path);
             Assert.Equal(BackupOutcome.Success, afterSuccess.For("github").LastOutcome);

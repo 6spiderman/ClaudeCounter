@@ -234,8 +234,14 @@ public class BackupStatusTests
         var previous = new BackupStatus();
         var now = DateTimeOffset.UtcNow;
 
+        // S17b: BackupRunResult's back-compat 3-arg constructor was deleted -
+        // spelled directly as the id-keyed dictionary shape it now requires.
         var result = previous.WithRun(
-            new BackupRunResult(1, DestinationAttempt.NotAttempted(false), DestinationAttempt.NotAttempted(false)),
+            new BackupRunResult(1, new Dictionary<string, DestinationAttempt>
+            {
+                ["github"] = DestinationAttempt.NotAttempted(false),
+                ["drive"] = DestinationAttempt.NotAttempted(false),
+            }),
             now);
 
         Assert.Equal(1, result.LastExitCode);

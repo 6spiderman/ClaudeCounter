@@ -235,6 +235,47 @@ public sealed class BackupDestination
 
     /// <summary>A short, URL-safe, generated id for a newly created destination (S17c's "add destination" flow) - distinct from the two well-known "github"/"drive" ids the v1-&gt;v2 migration assigns.</summary>
     public static string NewId() => Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// S17b: adapts this destination into the <see cref="GitTarget"/> shape
+    /// <see cref="ClaudeBackup.GitBackend"/>/<see cref="ClaudeBackup.RestoreGitSource"/>
+    /// still take as their own parameter type (out of this task's scope to
+    /// change) - meaningful only when <see cref="Kind"/> is <see
+    /// cref="DestinationKind.GitHub"/>, but callers do not need to check that
+    /// themselves; a non-GitHub destination just produces a GitTarget whose
+    /// fields nobody downstream reads. BackupRunner and RestoreDialog both use
+    /// this instead of hand-rolling the same field-by-field copy twice.
+    /// </summary>
+    public GitTarget ToGitTarget() => new()
+    {
+        Enabled = Enabled,
+        RemoteUrl = RemoteUrl,
+        Branch = Branch,
+        Include = Include,
+        Exclude = Exclude,
+    };
+
+    /// <summary>
+    /// S17b: adapts this destination into the <see cref="DriveTarget"/> shape
+    /// <see cref="ClaudeBackup.RcloneBackend"/>/<see cref="ClaudeBackup.SyncFolderBackend"/>/
+    /// the restore engine still take - see <see cref="ToGitTarget"/>'s doc
+    /// comment for the same reasoning, applied to the two zip-based kinds
+    /// instead of GitHub. <see cref="DriveTarget.Transport"/> is derived from
+    /// <see cref="Kind"/> exactly like <see cref="BackupConfig"/>'s own
+    /// migration already does for the "drive" shim entry.
+    /// </summary>
+    public DriveTarget ToDriveTarget() => new()
+    {
+        Enabled = Enabled,
+        Transport = Kind == DestinationKind.SyncFolder ? DriveTransport.SyncFolder : DriveTransport.Rclone,
+        FolderPath = FolderPath,
+        SyncProvider = SyncProvider,
+        RcloneRemote = RcloneRemote,
+        Include = Include,
+        Exclude = Exclude,
+        KeepLastCount = KeepLastCount,
+        DeleteOlderThanDays = DeleteOlderThanDays,
+    };
 }
 
 public sealed class ScheduleConfig
@@ -306,23 +347,39 @@ public sealed class BackupConfig
     public List<string> Exclude { get; set; } = new();
 
     /// <summary>
-    /// S17a SHIM - kept only so BackupRunner/SettingsForm/RestoreDialog (out
-    /// of scope for this task; S17b/S17c migrate them to read <see
-    /// cref="Destinations"/> directly) keep compiling AND working with zero
-    /// changes to those three files. <see cref="Destinations"/> - not this -
-    /// is the real, authoritative, on-disk shape from
-    /// BackupConfigVersion 2 onward: <see cref="Save"/> pushes whatever this
-    /// property currently holds into the "github"-id entry of <see
-    /// cref="Destinations"/> before serializing, and <see cref="Load"/> pulls
-    /// it back out of that same entry afterward, so Destinations always wins
-    /// on read and this is always what actually gets persisted on write. Do
-    /// not add new production reads of this property outside the
-    /// not-yet-migrated three files above - read <see cref="Destinations"/>
-    /// instead.
+    /// S17a SHIM, KEPT DELIBERATELY BY S17b (not deleted - see below) so
+    /// SettingsForm keeps compiling AND working with zero changes.
+    /// BackupRunner and RestoreDialog (S17b) now read <see
+    /// cref="Destinations"/> directly and never read this property in
+    /// production. <see cref="Destinations"/> - not this - is the real,
+    /// authoritative, on-disk shape from BackupConfigVersion 2 onward: <see
+    /// cref="Save"/> pushes whatever this property currently holds into the
+    /// "github"-id entry of <see cref="Destinations"/> before serializing,
+    /// and <see cref="Load"/> pulls it back out of that same entry
+    /// afterward, so Destinations always wins on read and this is always
+    /// what actually gets persisted on write.
+    ///
+    /// S17b evaluated deleting this (per the task brief's default
+    /// instruction) and decided against it: SettingsForm.cs still does
+    /// `config.Github.RemoteUrl = x;` - a mutation of a PROPERTY OF the
+    /// object this getter returns, not a reassignment of the property
+    /// itself. That pattern only works if <see cref="Github"/> returns a
+    /// stable, cached reference that a later <see cref="Save"/> reads back
+    /// from - a plain computed getter that builds a fresh <see
+    /// cref="GitTarget"/> from <see cref="Destinations"/> on every call would
+    /// compile fine (GitTarget still has ordinary settable properties) but
+    /// would silently discard every field SettingsForm sets, since each
+    /// mutation would land on a throwaway object nothing ever reads again -
+    /// a data-loss bug with no compiler error to catch it. SettingsForm's own
+    /// UI restructuring (reading/writing <see cref="Destinations"/> instead)
+    /// is S17c's job, per the task brief's explicit "leave it compiling but
+    /// do not restructure its UI" - so this shim stays until then. Do not add
+    /// new production reads of this property outside SettingsForm.cs - read
+    /// <see cref="Destinations"/> instead.
     /// </summary>
     public GitTarget Github { get; set; } = new();
 
-    /// <summary>S17a SHIM for the "drive" destination - see <see cref="Github"/>'s doc comment for the full reasoning; identical shape, just for the well-known "drive" id.</summary>
+    /// <summary>S17a SHIM for the "drive" destination, kept for the same reason as <see cref="Github"/> (SettingsForm still mutates it in place) - see that property's doc comment for the full reasoning; identical shape, just for the well-known "drive" id.</summary>
     public DriveTarget Drive { get; set; } = new();
 
     public ScheduleConfig Schedule { get; set; } = new();
@@ -687,25 +744,32 @@ public sealed class BackupConfig
         DeleteOlderThanDays = drive.DeleteOlderThanDays,
     };
 
-    private static GitTarget ToGitHubShim(BackupDestination d) => new()
+    /// <summary>
+    /// Shim-specific wrapper around <see cref="BackupDestination.ToGitTarget"/>:
+    /// the shim needs its own copies of the mutable Include/Exclude lists (so
+    /// mutating the returned <see cref="Github"/> in place, the way
+    /// SettingsForm does, never reaches back into the live <see
+    /// cref="Destinations"/> entry until the next <see cref="Save"/>) and
+    /// needs Branch defaulted to "main" for a destination whose Branch was
+    /// somehow left blank - neither of which the general-purpose adapter
+    /// (reused as-is by BackupRunner/RestoreDialog, which only ever read a
+    /// freshly-built target once and never mutate it in place) needs to do.
+    /// </summary>
+    private static GitTarget ToGitHubShim(BackupDestination d)
     {
-        Enabled = d.Enabled,
-        RemoteUrl = d.RemoteUrl,
-        Branch = string.IsNullOrEmpty(d.Branch) ? "main" : d.Branch,
-        Include = new List<string>(d.Include),
-        Exclude = new List<string>(d.Exclude),
-    };
+        var target = d.ToGitTarget();
+        target.Branch = string.IsNullOrEmpty(target.Branch) ? "main" : target.Branch;
+        target.Include = new List<string>(target.Include);
+        target.Exclude = new List<string>(target.Exclude);
+        return target;
+    }
 
-    private static DriveTarget ToDriveShim(BackupDestination d) => new()
+    /// <summary>Shim-specific wrapper around <see cref="BackupDestination.ToDriveTarget"/> - see <see cref="ToGitHubShim"/>'s doc comment for why the shim needs its own copies of the mutable lists.</summary>
+    private static DriveTarget ToDriveShim(BackupDestination d)
     {
-        Enabled = d.Enabled,
-        Transport = d.Kind == DestinationKind.SyncFolder ? DriveTransport.SyncFolder : DriveTransport.Rclone,
-        FolderPath = d.FolderPath,
-        SyncProvider = d.SyncProvider,
-        RcloneRemote = d.RcloneRemote,
-        Include = new List<string>(d.Include),
-        Exclude = new List<string>(d.Exclude),
-        KeepLastCount = d.KeepLastCount,
-        DeleteOlderThanDays = d.DeleteOlderThanDays,
-    };
+        var target = d.ToDriveTarget();
+        target.Include = new List<string>(target.Include);
+        target.Exclude = new List<string>(target.Exclude);
+        return target;
+    }
 }

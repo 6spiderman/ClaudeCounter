@@ -5,6 +5,16 @@ using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;
 
+// S17b: migrated from the pre-N-destination shape (c.Github/c.Drive shim
+// properties, BackupRunResult's 3-arg constructor and .Github/.Drive
+// accessors) to BackupConfig.Destinations directly - BackupRunner now reads
+// Destinations exclusively (see BackupRunner.cs's own remarks), and a config
+// built via a plain object initializer (as every test here does - none of
+// these go through BackupConfig.Save/Load) never populates the Github/Drive
+// shim's synced Destinations entries on its own. Gh(c)/Dr(c) below are a
+// thin, mechanical stand-in for the old c.Github/c.Drive property access, so
+// every existing test's BODY (what it configures and asserts) is unchanged -
+// only how it reaches the "github"/"drive" destination changed.
 public class BackupRunnerTests : IDisposable
 {
     private sealed class OkRunner : IProcessRunner
@@ -55,6 +65,27 @@ public class BackupRunnerTests : IDisposable
         }
     }
 
+    // S17b: rclone missing (git present) - used by
+    // ThreeDestinationsMiddleOneFailingStillRunsTheOthers to fail exactly
+    // the ONE Rclone-kind destination in a three-destination run without
+    // touching the GitHub or SyncFolder destinations either side of it (the
+    // sync-folder kind invokes no external process at all, so it is
+    // immune to this runner's Exists("rclone") = false).
+    private sealed class RcloneMissingRunner : IProcessRunner
+    {
+        public List<string> Calls { get; } = new();
+        public bool Exists(string file) => file != "rclone";
+        public ProcessResult Run(string f, IReadOnlyList<string> a, string? wd = null)
+        {
+            Calls.Add($"{f} {string.Join(' ', a)}");
+            if (a.Count > 0 && a[0] == "diff")
+                return new(1, "", "");
+            if (f == "git" && a.Count > 0 && a[0] == "init" && wd is not null)
+                Directory.CreateDirectory(Path.Combine(wd, ".git"));
+            return new(0, "", "");
+        }
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"brsrc-{Guid.NewGuid():N}");
     private readonly string _stg = Path.Combine(Path.GetTempPath(), $"brstg-{Guid.NewGuid():N}");
     private readonly string _tmp = Path.Combine(Path.GetTempPath(), $"brtmp-{Guid.NewGuid():N}");
@@ -71,7 +102,7 @@ public class BackupRunnerTests : IDisposable
             if (Directory.Exists(d)) Directory.Delete(d, true);
     }
 
-    // Both targets get the same "settings.json" selection by default,
+    // Both destinations get the same "settings.json" selection by default,
     // mirroring what the old single shared Include/Exclude used to produce
     // for both destinations - most of the existing tests below only care
     // about one destination at a time and should not have to think about
@@ -79,15 +110,33 @@ public class BackupRunnerTests : IDisposable
     private BackupConfig Config() => new()
     {
         SourceRoot = _root,
-        Github = new() { Enabled = true, RemoteUrl = "url", Branch = "main", Include = new() { "settings.json" }, Exclude = new() },
-        Drive = new() { Enabled = false, Include = new() { "settings.json" }, Exclude = new() },
+        Destinations = new()
+        {
+            new BackupDestination
+            {
+                Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub,
+                Enabled = true, RemoteUrl = "url", Branch = "main",
+                Include = new() { "settings.json" }, Exclude = new(),
+            },
+            new BackupDestination
+            {
+                Id = "drive", Name = "Google Drive", Kind = DestinationKind.Rclone,
+                Enabled = false,
+                Include = new() { "settings.json" }, Exclude = new(),
+            },
+        },
     };
+
+    // Mechanical stand-ins for the old c.Github/c.Drive shim property access
+    // - see this file's own header comment.
+    private static BackupDestination Gh(BackupConfig c) => c.Destinations.First(d => d.Id == "github");
+    private static BackupDestination Dr(BackupConfig c) => c.Destinations.First(d => d.Id == "drive");
 
     [Fact]
     public void NoDestinationsIsConfigError()
     {
         var c = Config();
-        c.Github.Enabled = false;
+        Gh(c).Enabled = false;
         Assert.Equal(1, BackupRunner.Run(c, new OkRunner(), _stg, _tmp));
     }
 
@@ -99,7 +148,7 @@ public class BackupRunnerTests : IDisposable
     public void EnabledGithubWithoutRemoteUrlIsConfigError()
     {
         var c = Config();
-        c.Github.RemoteUrl = "";
+        Gh(c).RemoteUrl = "";
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -114,7 +163,7 @@ public class BackupRunnerTests : IDisposable
     public void EnabledGithubWithBlankBranchIsConfigError()
     {
         var c = Config();
-        c.Github.Branch = "   ";
+        Gh(c).Branch = "   ";
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -125,9 +174,9 @@ public class BackupRunnerTests : IDisposable
     public void EnabledDriveWithoutRcloneRemoteIsConfigError()
     {
         var c = Config();
-        c.Github.Enabled = false;
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "";
+        Gh(c).Enabled = false;
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "";
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -146,10 +195,10 @@ public class BackupRunnerTests : IDisposable
     public void EnabledGithubWithoutRemoteUrlDoesNotStopConfiguredDriveFromRunning()
     {
         var c = Config();
-        c.Github.RemoteUrl = "";
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "settings.json" };
+        Gh(c).RemoteUrl = "";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "settings.json" };
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -166,8 +215,8 @@ public class BackupRunnerTests : IDisposable
     public void EnabledDriveWithoutRcloneRemoteDoesNotStopConfiguredGithubFromRunning()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "";
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -184,10 +233,10 @@ public class BackupRunnerTests : IDisposable
     public void EnabledDriveSyncFolderWithoutFolderPathIsConfigError()
     {
         var c = Config();
-        c.Github.Enabled = false;
-        c.Drive.Enabled = true;
-        c.Drive.Transport = DriveTransport.SyncFolder;
-        c.Drive.FolderPath = "";
+        Gh(c).Enabled = false;
+        Dr(c).Enabled = true;
+        Dr(c).Kind = DestinationKind.SyncFolder;
+        Dr(c).FolderPath = "";
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -201,10 +250,10 @@ public class BackupRunnerTests : IDisposable
     public void EnabledDriveSyncFolderWithRelativeFolderPathIsConfigError()
     {
         var c = Config();
-        c.Github.Enabled = false;
-        c.Drive.Enabled = true;
-        c.Drive.Transport = DriveTransport.SyncFolder;
-        c.Drive.FolderPath = "relative\\path";
+        Gh(c).Enabled = false;
+        Dr(c).Enabled = true;
+        Dr(c).Kind = DestinationKind.SyncFolder;
+        Dr(c).FolderPath = "relative\\path";
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -218,12 +267,12 @@ public class BackupRunnerTests : IDisposable
     public void SyncFolderTransportCopiesArchiveIntoFolderPathWithoutInvokingRclone()
     {
         var c = Config();
-        c.Github.Enabled = false;
-        c.Drive.Enabled = true;
-        c.Drive.Transport = DriveTransport.SyncFolder;
+        Gh(c).Enabled = false;
+        Dr(c).Enabled = true;
+        Dr(c).Kind = DestinationKind.SyncFolder;
         var syncFolder = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}");
-        c.Drive.FolderPath = syncFolder;
-        c.Drive.Include = new() { "settings.json" };
+        Dr(c).FolderPath = syncFolder;
+        Dr(c).Include = new() { "settings.json" };
         var runner = new OkRunner();
 
         try
@@ -247,12 +296,12 @@ public class BackupRunnerTests : IDisposable
     public void EnabledGithubWithoutRemoteUrlDoesNotStopConfiguredSyncFolderDriveFromRunning()
     {
         var c = Config();
-        c.Github.RemoteUrl = "";
-        c.Drive.Enabled = true;
-        c.Drive.Transport = DriveTransport.SyncFolder;
+        Gh(c).RemoteUrl = "";
+        Dr(c).Enabled = true;
+        Dr(c).Kind = DestinationKind.SyncFolder;
         var syncFolder = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}");
-        c.Drive.FolderPath = syncFolder;
-        c.Drive.Include = new() { "settings.json" };
+        Dr(c).FolderPath = syncFolder;
+        Dr(c).Include = new() { "settings.json" };
         var runner = new OkRunner();
 
         try
@@ -279,7 +328,7 @@ public class BackupRunnerTests : IDisposable
     public void NothingSelectedIsConfigError()
     {
         var c = Config();
-        c.Github.Include = new() { "does-not-exist/**" };
+        Gh(c).Include = new() { "does-not-exist/**" };
         Assert.Equal(1, BackupRunner.Run(c, new OkRunner(), _stg, _tmp));
     }
 
@@ -290,10 +339,10 @@ public class BackupRunnerTests : IDisposable
     public void BothDestinationsEnabledButNothingSelectedAnywhereIsConfigError()
     {
         var c = Config();
-        c.Github.Include = new() { "does-not-exist/**" };
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "also-does-not-exist/**" };
+        Gh(c).Include = new() { "does-not-exist/**" };
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "also-does-not-exist/**" };
         var runner = new OkRunner();
 
         Assert.Equal(1, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -308,10 +357,10 @@ public class BackupRunnerTests : IDisposable
     public void GithubEmptySelectionDoesNotFailDriveWhichStillRuns()
     {
         var c = Config();
-        c.Github.Include = new() { "does-not-exist/**" };
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "settings.json" };
+        Gh(c).Include = new() { "does-not-exist/**" };
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "settings.json" };
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -327,9 +376,9 @@ public class BackupRunnerTests : IDisposable
     public void DriveEmptySelectionDoesNotFailGithubWhichStillRuns()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "does-not-exist/**" };
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "does-not-exist/**" };
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -343,8 +392,8 @@ public class BackupRunnerTests : IDisposable
     public void BothDestinationsEnabledHappyPathRunsBoth()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
         var runner = new OkRunner();
 
         Assert.Equal(0, BackupRunner.Run(c, runner, _stg, _tmp));
@@ -358,8 +407,8 @@ public class BackupRunnerTests : IDisposable
     public void OneBackendFailingStillRunsTheOtherAndReturnsTwo()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
         var runner = new GitFailsRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -379,8 +428,8 @@ public class BackupRunnerTests : IDisposable
     public void GitBackendThrowingDoesNotSkipDriveAndStillReturnsTwo()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
         var runner = new GitExistsThrowsRunner();
 
         var code = BackupRunner.Run(c, runner, _stg, _tmp);
@@ -394,12 +443,12 @@ public class BackupRunnerTests : IDisposable
     {
         var c = Config();
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
-        c.Github.Include.Add(".credentials.json");
+        Gh(c).Include.Add(".credentials.json");
         // Selector already drops secrets; the pre-flight scan is the backstop.
         // Force the scenario by asserting no secret is ever staged: run returns 0
         // and the staging dir must not contain the secret.
         Assert.Equal(0, BackupRunner.Run(c, new OkRunner(), _stg, _tmp));
-        Assert.False(File.Exists(Path.Combine(_stg, ".credentials.json")));
+        Assert.False(File.Exists(Path.Combine(_stg, "github", ".credentials.json")));
     }
 
     // Direct proof of the offender-abort WIRING: a selector that hands back
@@ -415,8 +464,8 @@ public class BackupRunnerTests : IDisposable
     public void OffenderFromSelectorAbortsBeforeAnyBackendRuns()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(
@@ -438,10 +487,10 @@ public class BackupRunnerTests : IDisposable
     public void OffenderInDriveOnlySelectionStillAbortsTheWholeRun()
     {
         var c = Config();
-        c.Github.Include = new() { "github-clean-marker" };
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "drive-offender-marker" };
+        Gh(c).Include = new() { "github-clean-marker" };
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "drive-offender-marker" };
         var runner = new OkRunner();
 
         var code = BackupRunner.Run(
@@ -455,22 +504,20 @@ public class BackupRunnerTests : IDisposable
     }
 
     // Fix round 1 (Minor, BackupRunner.cs:214): the two offender-abort
-    // branches build their DestinationAttempt results with a DIFFERENT
-    // ternary expression each (see RunDetailed's own comments on each
-    // branch) - "GitHub offending, is Drive active?" and "Drive offending,
-    // is GitHub active?" are not textually symmetric, and neither one was
-    // exercised via RunDetailed before this round: the two tests above only
-    // assert on the bare exit code from the old Run(...) overload. These
-    // two prove both expressions produce the same observable result -
-    // BOTH active destinations reported as a failed, attempted attempt -
-    // regardless of which destination's selection actually tripped the
-    // offender check.
+    // branches used to build their DestinationAttempt results with a
+    // DIFFERENT ternary expression each (asymmetric source, textually) -
+    // "GitHub offending, is Drive active?" and "Drive offending, is GitHub
+    // active?" were not textually symmetric, and neither one was exercised
+    // via RunDetailed before this round. These two prove the LOOP version
+    // (S17b) reproduces that behaviour (not the asymmetry): BOTH active
+    // destinations are reported as a failed, attempted attempt, regardless
+    // of which destination's selection actually tripped the offender check.
     [Fact]
     public void GithubOffenderAbortMarksBothActiveDestinationsFailedInDetailedResult()
     {
         var c = Config();
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
         var runner = new OkRunner();
 
         var result = BackupRunner.RunDetailed(
@@ -478,10 +525,10 @@ public class BackupRunnerTests : IDisposable
             (_, _, _) => (new[] { ".credentials.json" }, new List<string>()));
 
         Assert.Equal(1, result.ExitCode);
-        Assert.True(result.Github.Attempted);
-        Assert.False(result.Github.Success);
-        Assert.True(result.Drive.Attempted);
-        Assert.False(result.Drive.Success);
+        Assert.True(result.Attempts["github"].Attempted);
+        Assert.False(result.Attempts["github"].Success);
+        Assert.True(result.Attempts["drive"].Attempted);
+        Assert.False(result.Attempts["drive"].Success);
         Assert.Empty(runner.Calls);
     }
 
@@ -489,10 +536,10 @@ public class BackupRunnerTests : IDisposable
     public void DriveOffenderAbortMarksBothActiveDestinationsFailedInDetailedResult()
     {
         var c = Config();
-        c.Github.Include = new() { "github-clean-marker" };
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include = new() { "drive-offender-marker" };
+        Gh(c).Include = new() { "github-clean-marker" };
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include = new() { "drive-offender-marker" };
         var runner = new OkRunner();
 
         var result = BackupRunner.RunDetailed(
@@ -502,10 +549,10 @@ public class BackupRunnerTests : IDisposable
                 : (new[] { "settings.json" }, new List<string>()));
 
         Assert.Equal(1, result.ExitCode);
-        Assert.True(result.Github.Attempted);
-        Assert.False(result.Github.Success);
-        Assert.True(result.Drive.Attempted);
-        Assert.False(result.Drive.Success);
+        Assert.True(result.Attempts["github"].Attempted);
+        Assert.False(result.Attempts["github"].Success);
+        Assert.True(result.Attempts["drive"].Attempted);
+        Assert.False(result.Attempts["drive"].Success);
         Assert.Empty(runner.Calls);
     }
 
@@ -518,7 +565,7 @@ public class BackupRunnerTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
         var c = Config();
-        c.Github.Include.Add(".credentials.json");
+        Gh(c).Include.Add(".credentials.json");
 
         var before = ReadLog().Length;
         BackupRunner.Run(c, new OkRunner(), _stg, _tmp);
@@ -536,16 +583,169 @@ public class BackupRunnerTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_root, ".credentials.json"), "secret");
         var c = Config();
-        c.Github.Enabled = false;
-        c.Drive.Enabled = true;
-        c.Drive.RcloneRemote = "gdrive:X";
-        c.Drive.Include.Add(".credentials.json");
+        Gh(c).Enabled = false;
+        Dr(c).Enabled = true;
+        Dr(c).RcloneRemote = "gdrive:X";
+        Dr(c).Include.Add(".credentials.json");
 
         var before = ReadLog().Length;
         BackupRunner.Run(c, new OkRunner(), _stg, _tmp);
         var written = ReadLog()[before..];
 
         Assert.Contains("withheld from Google Drive by the secret denylist", written);
+    }
+
+    // --- S17b: genuinely new N-destination behaviour ------------------------
+
+    // Three destinations, only the MIDDLE one (by Destinations list order)
+    // failing at the backend: GitHub (first) succeeds, an Rclone destination
+    // (second) fails because rclone is "missing" on PATH, and a SyncFolder
+    // destination (third, no external process at all) succeeds. Proves
+    // destination independence generalizes past exactly two - a failure
+    // sandwiched between two successes must not take either neighbour down,
+    // and the run must still report exit 2 (a backend failed), not 1 or 0.
+    [Fact]
+    public void ThreeDestinationsMiddleOneFailingStillRunsTheOthersAndReturnsTwo()
+    {
+        var c = Config();
+        Gh(c).Include = new() { "settings.json" };
+        // Renaming Id must happen last - Dr(c)/Gh(c) look destinations up by
+        // Id, so a mid-sequence rename would break a LATER Dr(c) call. Grab
+        // the reference once and mutate it directly instead.
+        var drive = Dr(c);
+        drive.Id = "rclone-mid";
+        drive.Name = "Rclone Mid";
+        drive.Enabled = true;
+        drive.RcloneRemote = "gdrive:X";
+        drive.Include = new() { "settings.json" };
+
+        var syncFolder = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}");
+        c.Destinations.Add(new BackupDestination
+        {
+            Id = "sync-last", Name = "Sync Last", Kind = DestinationKind.SyncFolder,
+            Enabled = true, FolderPath = syncFolder,
+            Include = new() { "settings.json" }, Exclude = new(),
+        });
+
+        var runner = new RcloneMissingRunner();
+        try
+        {
+            var result = BackupRunner.RunDetailed(c, runner, _stg, _tmp);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.True(result.Attempts["github"].Success);
+            Assert.False(result.Attempts["rclone-mid"].Success);
+            Assert.Contains("rclone", result.Attempts["rclone-mid"].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.True(result.Attempts["sync-last"].Success);
+            Assert.Contains(runner.Calls, call => call.StartsWith("git push"));
+            Assert.DoesNotContain(runner.Calls, call => call.StartsWith("rclone"));
+            Assert.Single(Directory.GetFiles(syncFolder, "claude-backup-*.zip"));
+        }
+        finally
+        {
+            if (Directory.Exists(syncFolder)) Directory.Delete(syncFolder, true);
+        }
+    }
+
+    // Two GitHub-kind destinations: without per-destination scratch
+    // isolation, GitBackend's `git init`/checkout/MirrorFiles for the second
+    // destination would run against the SAME staging directory the first
+    // destination just populated and pushed from. Asserts each destination's
+    // own subdirectory of the shared stagingDir root (keyed by
+    // BackupDestination.Id) independently became a real git checkout - proof
+    // the two never shared one working tree.
+    [Fact]
+    public void TwoGithubDestinationsUseSeparateStagingSubdirectories()
+    {
+        var c = Config();
+        var github = Gh(c); // see the rename note in ThreeDestinationsMiddleOneFailingStillRunsTheOthersAndReturnsTwo
+        github.Id = "gh-a";
+        github.RemoteUrl = "url-a";
+        c.Destinations.Add(new BackupDestination
+        {
+            Id = "gh-b", Name = "GitHub B", Kind = DestinationKind.GitHub,
+            Enabled = true, RemoteUrl = "url-b", Branch = "main",
+            Include = new() { "settings.json" }, Exclude = new(),
+        });
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        Assert.True(Directory.Exists(Path.Combine(_stg, "gh-a", ".git")), "gh-a's own staging subdirectory should be a git checkout");
+        Assert.True(Directory.Exists(Path.Combine(_stg, "gh-b", ".git")), "gh-b's own staging subdirectory should be a git checkout");
+    }
+
+    // Two Rclone-kind destinations: without per-destination scratch
+    // isolation, both would build their zip under the SAME tempDir, where
+    // BackupArchiveWriter.SweepStaleZips (run at the start of every
+    // RcloneBackend.Run) could race-delete a sibling's just-written archive.
+    // Asserts each destination's "rclone copy" call references ITS OWN
+    // subdirectory of the shared tempDir root, and that the two paths are
+    // distinct.
+    [Fact]
+    public void TwoRcloneDestinationsUseSeparateTempSubdirectories()
+    {
+        var c = Config();
+        Gh(c).Enabled = false;
+        var drive = Dr(c); // see the rename note in ThreeDestinationsMiddleOneFailingStillRunsTheOthersAndReturnsTwo
+        drive.Id = "rclone-a";
+        drive.Enabled = true;
+        drive.RcloneRemote = "gdrive:A";
+        c.Destinations.Add(new BackupDestination
+        {
+            Id = "rclone-b", Name = "Rclone B", Kind = DestinationKind.Rclone,
+            Enabled = true, RcloneRemote = "gdrive:B",
+            Include = new() { "settings.json" }, Exclude = new(),
+        });
+        var runner = new OkRunner();
+
+        var code = BackupRunner.Run(c, runner, _stg, _tmp);
+
+        Assert.Equal(0, code);
+        var copyA = Assert.Single(runner.Calls, call => call.StartsWith("rclone copy") && call.Contains("gdrive:A"));
+        var copyB = Assert.Single(runner.Calls, call => call.StartsWith("rclone copy") && call.Contains("gdrive:B"));
+        Assert.Contains(Path.Combine(_tmp, "rclone-a"), copyA);
+        Assert.Contains(Path.Combine(_tmp, "rclone-b"), copyB);
+    }
+
+    // Offender abort must still be a WHOLE-run abort with three
+    // destinations, even when the offending selection belongs to the LAST
+    // one checked - the two clean destinations selected before it (already
+    // marked Active) must still be reported Failed, and no backend anywhere
+    // may run.
+    [Fact]
+    public void OffenderInThirdDestinationAbortsWholeRun()
+    {
+        var c = Config();
+        Gh(c).Include = new() { "settings.json" };
+        var drive = Dr(c); // see the rename note in ThreeDestinationsMiddleOneFailingStillRunsTheOthersAndReturnsTwo
+        drive.Id = "rclone-mid";
+        drive.Enabled = true;
+        drive.RcloneRemote = "gdrive:X";
+        drive.Include = new() { "settings.json" };
+        c.Destinations.Add(new BackupDestination
+        {
+            Id = "sync-third", Name = "Sync Third", Kind = DestinationKind.SyncFolder,
+            Enabled = true, FolderPath = Path.Combine(Path.GetTempPath(), $"brsync-{Guid.NewGuid():N}"),
+            Include = new() { "third-offender-marker" }, Exclude = new(),
+        });
+        var runner = new OkRunner();
+
+        var result = BackupRunner.RunDetailed(
+            c, runner, _stg, _tmp,
+            (_, include, _) => include.Contains("third-offender-marker")
+                ? (new[] { "session.dat" }, new List<string>())
+                : (new[] { "settings.json" }, new List<string>()));
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(result.Attempts["github"].Attempted);
+        Assert.False(result.Attempts["github"].Success);
+        Assert.True(result.Attempts["rclone-mid"].Attempted);
+        Assert.False(result.Attempts["rclone-mid"].Success);
+        Assert.True(result.Attempts["sync-third"].Attempted);
+        Assert.False(result.Attempts["sync-third"].Success);
+        Assert.Empty(runner.Calls);
     }
 
     private static string ReadLog()

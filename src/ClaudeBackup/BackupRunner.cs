@@ -7,10 +7,10 @@ namespace ClaudeBackup;
 
 /// <summary>
 /// Orchestrates one backup run: validate each enabled destination's own
-/// configuration (remote URL/branch for GitHub, rclone remote for Drive),
-/// select files PER ENABLED-AND-CONFIGURED DESTINATION (GitHub and Drive
-/// each own an independent include/exclude selection - see
-/// GitTarget.Include / DriveTarget.Include), log what the secret denylist
+/// configuration (remote URL/branch for GitHub, folder path for SyncFolder,
+/// rclone remote for Rclone), select files PER ENABLED-AND-CONFIGURED
+/// DESTINATION (every destination owns an independent include/exclude
+/// selection - see BackupDestination.Include), log what the secret denylist
 /// withheld per destination, re-assert the denylist as a fail-closed
 /// backstop against EACH destination's selection independently, then run
 /// each such destination's backend independently so one destination being
@@ -18,19 +18,26 @@ namespace ClaudeBackup;
 /// throwing) does not prevent a sibling destination that IS configured and
 /// has files from running.
 ///
+/// S17b: generalized from exactly two hardcoded destinations (Github, Drive)
+/// to a loop over <see cref="BackupConfig.Destinations"/> - see this class's
+/// private helpers below for how each of the old two-destination behaviours
+/// (independence, the whole-run offender abort, per-kind config validation,
+/// per-destination scratch isolation) carries over to N.
+///
 /// Exit codes (meaningful to Task Scheduler, which records them):
 ///   0 - success: every enabled, configured destination that had anything
 ///       to upload succeeded.
 ///   1 - configuration/selection error: no destination enabled, a denylist
-///       offender detected in either destination's selection (see the
+///       offender detected in any destination's selection (see the
 ///       DELIBERATE comment at that call site - this one IS a whole-run
 ///       abort), or NO enabled destination ended up both configured and
 ///       having something selected to upload. An individual destination
-///       being misconfigured (e.g. GitHub enabled with a blank RemoteUrl)
-///       or selecting nothing is NOT this case by itself - it is logged and
-///       that destination is skipped, but a sibling destination that IS
-///       configured and has files still runs and can still bring the run
-///       to exit 0. See the per-destination handling below.
+///       being misconfigured (e.g. a GitHub destination enabled with a
+///       blank RemoteUrl) or selecting nothing is NOT this case by itself -
+///       it is logged and that destination is skipped, but a sibling
+///       destination that IS configured and has files still runs and can
+///       still bring the run to exit 0. See the per-destination handling
+///       below.
 ///   2 - at least one enabled, configured destination that had something to
 ///       upload actually failed to upload it.
 /// </summary>
@@ -54,7 +61,7 @@ public static class BackupRunner
     /// This is the actual risk surface worth testing: not whether
     /// SecretDenylist.Offenders(files) reports offenders correctly (that is
     /// SecretDenylistTests' job, on an already-public, already-tested
-    /// method), but whether THIS method calls it, before either backend
+    /// method), but whether THIS method calls it, before any backend
     /// runs, for EACH destination's selection independently, and returns
     /// the right exit code when it does. FileSelector itself never hands
     /// back a secret (it filters via the same SecretDenylist before Run's
@@ -67,7 +74,8 @@ public static class BackupRunner
     /// exclude) shape rather than taking the whole BackupConfig, precisely
     /// so it can be called once per destination with that destination's own
     /// Include/Exclude - a delegate keyed on the whole config would tempt a
-    /// caller into forgetting which target's lists it was supposed to read.
+    /// caller into forgetting which destination's lists it was supposed to
+    /// read.
     /// </summary>
     internal static int Run(
         BackupConfig config,
@@ -82,8 +90,8 @@ public static class BackupRunner
     /// returning a <see cref="BackupRunResult"/> - the exit code plus a
     /// per-destination <see cref="DestinationAttempt"/> for
     /// BackupStatusWriter/Program.RunWorker to record (S11a: backup health
-    /// visibility). Every return path below sets both destinations'
-    /// attempts, even the early-abort ones - see each branch's own comment
+    /// visibility). Every return path below sets every destination's
+    /// attempt, even the early-abort ones - see each branch's own comment
     /// for exactly which destinations it marks Attempted and why. A
     /// destination that is not currently enabled, or that this particular
     /// run never got far enough to say anything new about, is reported via
@@ -101,141 +109,83 @@ public static class BackupRunner
         // actually has something new to say about a destination. Enabled is
         // recorded even when nothing else changes, so BackupStatus.WasEnabled
         // stays current for a destination the user has since turned off.
-        var githubAttempt = DestinationAttempt.NotAttempted(config.Github.Enabled);
-        var driveAttempt = DestinationAttempt.NotAttempted(config.Drive.Enabled);
+        var states = config.Destinations.Select(d => new DestinationRunState(d)).ToList();
 
-        if (!config.Github.Enabled && !config.Drive.Enabled)
+        if (!states.Any(s => s.Destination.Enabled))
         {
             Log.Warn("BackupRunner: no backup destinations enabled.");
-            return new BackupRunResult(1, githubAttempt, driveAttempt);
+            return new BackupRunResult(1, ToAttempts(states));
         }
 
-        // Fix round 2: an enabled destination with no remote configured is
-        // THAT DESTINATION'S OWN configuration mistake, not a backend
-        // failure and not grounds to abort a sibling destination that IS
-        // fully configured - GitHub left half set up (e.g. a blank
-        // RemoteUrl) must not silently stop a properly configured Drive
-        // from backing up anything at all, and vice versa. This mirrors the
+        // Fix round 2 (generalized): an enabled destination with an invalid
+        // configuration is THAT DESTINATION'S OWN configuration mistake, not
+        // a backend failure and not grounds to abort a sibling destination
+        // that IS fully configured - one destination left half set up (e.g.
+        // a blank RemoteUrl) must not silently stop a properly configured
+        // sibling from backing up anything at all. This mirrors the
         // per-destination "nothing selected" philosophy further down: a
-        // problem scoped to one destination stays scoped to it. Each guard
-        // below only clears that destination's own "configured" flag (and
-        // logs which destination and why) rather than returning 1
-        // immediately - GitBackend/RcloneBackend would eventually report a
-        // failure for a bad remote spec too (an empty git remote or rclone
-        // remote), but that would surface as exit 2 ("a backend failed")
-        // when the truth is exit 1-shaped ("fix your config"), so this
-        // still runs before either backend ever sees the bad config -
-        // it just no longer takes the other destination down with it.
-        var githubConfigured = true;
-        if (config.Github.Enabled && string.IsNullOrWhiteSpace(config.Github.RemoteUrl))
+        // problem scoped to one destination stays scoped to it. Each
+        // destination below only clears its own Configured flag (and logs
+        // which destination and why) rather than returning 1 immediately -
+        // the corresponding backend would eventually report a failure for a
+        // bad remote spec too, but that would surface as exit 2 ("a backend
+        // failed") when the truth is exit 1-shaped ("fix your config"), so
+        // this still runs before any backend ever sees the bad config - it
+        // just no longer takes a sibling destination down with it.
+        foreach (var s in states)
         {
-            Log.Warn("BackupRunner: GitHub backup is enabled but RemoteUrl is not configured; skipping this destination.");
-            githubConfigured = false;
-            githubAttempt = DestinationAttempt.Failed("GitHub backup is enabled but the remote URL is not configured.");
-        }
-        // Same reasoning as the RemoteUrl guard above: SettingsForm trims the
-        // branch textbox, so clearing it and saving persists "". Without this
-        // check that empty string reaches 'git init -b ""' inside GitBackend,
-        // which fails as a backend error (exit 2) instead of the
-        // configuration error it actually is.
-        if (config.Github.Enabled && githubConfigured && string.IsNullOrWhiteSpace(config.Github.Branch))
-        {
-            Log.Warn("BackupRunner: GitHub backup is enabled but Branch is not configured; skipping this destination.");
-            githubConfigured = false;
-            githubAttempt = DestinationAttempt.Failed("GitHub backup is enabled but the branch is not configured.");
-        }
+            if (!s.Destination.Enabled)
+                continue; // stays Configured=false / Active=false; Attempt stays NotAttempted(false)
 
-        // S14: which "not configured" check applies depends on the
-        // destination's own transport - a blank RcloneRemote is irrelevant
-        // when the user has switched to the sync-folder transport, and vice
-        // versa. Only a non-blank, rooted FolderPath counts as "configured"
-        // for SyncFolder here - the heavier checks (overlap with SourceRoot,
-        // actually creating the directory) happen inside SyncFolderBackend
-        // itself, at the point of write, exactly like RcloneBackend's own
-        // deeper checks (e.g. "rclone not found on PATH") are not duplicated
-        // up here either.
-        var driveConfigured = true;
-        if (config.Drive.Enabled)
-        {
-            if (config.Drive.Transport == DriveTransport.SyncFolder)
-            {
-                if (string.IsNullOrWhiteSpace(config.Drive.FolderPath) || !Path.IsPathRooted(config.Drive.FolderPath))
-                {
-                    Log.Warn("BackupRunner: Google Drive backup is enabled (sync folder transport) but FolderPath is not configured or not a full path; skipping this destination.");
-                    driveConfigured = false;
-                    driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the sync folder path is not configured.");
-                }
-            }
-            else if (string.IsNullOrWhiteSpace(config.Drive.RcloneRemote))
-            {
-                Log.Warn("BackupRunner: Google Drive backup is enabled but RcloneRemote is not configured; skipping this destination.");
-                driveConfigured = false;
-                driveAttempt = DestinationAttempt.Failed("Google Drive backup is enabled but the rclone remote is not configured.");
-            }
+            s.Configured = ValidateConfigured(s.Destination, out var failureMessage);
+            if (!s.Configured)
+                s.Attempt = DestinationAttempt.Failed(failureMessage);
         }
-
-        // "Active" = enabled AND configured. Everything from here on - the
-        // secret-denylist backstop, "nothing selected", and which backend
-        // gets a chance to run - is gated on this, not on Enabled alone, so
-        // a misconfigured destination behaves exactly like a disabled one
-        // for the rest of the run: it simply is not there.
-        var githubActive = config.Github.Enabled && githubConfigured;
-        var driveActive = config.Drive.Enabled && driveConfigured;
 
         // Each active destination is selected against its OWN Include/
         // Exclude and independently re-checked against the secret denylist
-        // below - collapsing this back to a single selection/check (as a
-        // single shared Include/Exclude used to allow) would silently stop
-        // covering whichever destination's selection was not the one
-        // checked.
+        // below - collapsing this back to a single selection/check would
+        // silently stop covering whichever destination's selection was not
+        // the one checked.
         //
-        // DELIBERATE: TrySelect returning false here (an offender found)
-        // aborts the WHOLE run (return 1) immediately, before the other
-        // destination is even selected, let alone either backend runs - it
-        // is NOT scoped to just the offending destination. This is
-        // intentional and must stay this way: FileSelector already strips
-        // anything SecretDenylist flags, so Offenders() firing at all means
-        // that invariant was somehow violated - something is genuinely
-        // broken, not merely misconfigured. The conservative reaction to an
-        // assumption breaking is to upload nothing anywhere, not to proceed
-        // with whichever destination happens to look clean via a selection
-        // pipeline that just proved it cannot be trusted. Do not "fix" this
-        // into per-destination scoping - this is unlike the config guards
-        // above and the "nothing selected" handling below, both of which
-        // ARE deliberately scoped per destination.
-        IReadOnlyList<string> githubFiles = Array.Empty<string>();
-        if (githubActive)
+        // DELIBERATE: an offender found here aborts the WHOLE run (return 1)
+        // immediately, before any further destination is even selected, let
+        // alone any backend runs - it is NOT scoped to just the offending
+        // destination. This is intentional and must stay this way:
+        // FileSelector already strips anything SecretDenylist flags, so
+        // Offenders() firing at all means that invariant was somehow
+        // violated - something is genuinely broken, not merely
+        // misconfigured. The conservative reaction to an assumption breaking
+        // is to upload nothing anywhere, not to proceed with whichever
+        // destination happens to look clean via a selection pipeline that
+        // just proved it cannot be trusted. Do not "fix" this into
+        // per-destination scoping - this is unlike the config guards above
+        // and the "nothing selected" handling below, both of which ARE
+        // deliberately scoped per destination.
+        string? offenderMessage = null;
+        foreach (var s in states.Where(s => s.Active))
         {
-            if (!TrySelect(select, "GitHub", config.SourceRoot, config.Github.Include, config.Github.Exclude, out githubFiles))
+            if (!TrySelect(select, s.Destination.Name, config.SourceRoot, s.Destination.Include, s.Destination.Exclude, out var files))
             {
-                // Whole-run abort (see the DELIBERATE comment above): neither
-                // backend runs, so every ACTIVE destination - not just
-                // GitHub, whose selection actually tripped the offender
-                // check - failed to back up anything this run. Drive's own
-                // selection has not even happened yet at this point, but it
-                // never will either, so it is just as much a failed attempt.
-                const string msg = "Backup aborted: a secret-shaped file was detected in the GitHub selection.";
-                return new BackupRunResult(1,
-                    DestinationAttempt.Failed(msg),
-                    driveActive ? DestinationAttempt.Failed(msg) : driveAttempt);
+                offenderMessage = $"Backup aborted: a secret-shaped file was detected in the {s.Destination.Name} selection.";
+                break; // stop selecting further destinations - the run is aborting regardless
             }
+            s.Files = files;
         }
 
-        IReadOnlyList<string> driveFiles = Array.Empty<string>();
-        if (driveActive)
+        if (offenderMessage is not null)
         {
-            if (!TrySelect(select, "Google Drive", config.SourceRoot, config.Drive.Include, config.Drive.Exclude, out driveFiles))
-            {
-                // Mirror of the GitHub case above: GitHub's own selection
-                // already succeeded by this point (or GitHub was never
-                // active), but the whole run still aborts before either
-                // backend runs, so an active GitHub is just as much a failed
-                // attempt as Drive is.
-                const string msg = "Backup aborted: a secret-shaped file was detected in the Google Drive selection.";
-                return new BackupRunResult(1,
-                    githubActive ? DestinationAttempt.Failed(msg) : githubAttempt,
-                    DestinationAttempt.Failed(msg));
-            }
+            // Whole-run abort: no backend runs, so every ACTIVE destination -
+            // not just the one whose selection actually tripped the offender
+            // check - failed to back up anything this run. Any destination
+            // whose selection had not even run yet (it never will now) is
+            // just as much a failed attempt. Every destination that is not
+            // Active (disabled, or misconfigured above) keeps whatever
+            // attempt it already had - the offender abort does not implicate
+            // a destination that was never going to run anyway.
+            foreach (var s in states.Where(s => s.Active))
+                s.Attempt = DestinationAttempt.Failed(offenderMessage);
+            return new BackupRunResult(1, ToAttempts(states));
         }
 
         // "Nothing selected" is only a whole-run failure when NO active
@@ -244,68 +194,183 @@ public static class BackupRunner
         // be misconfigured above - while another is active and has files is
         // that destination's own problem (already logged), not grounds to
         // fail a run that can otherwise proceed.
-        var githubHasFiles = githubActive && githubFiles.Count > 0;
-        var driveHasFiles = driveActive && driveFiles.Count > 0;
-        if (!githubHasFiles && !driveHasFiles)
+        if (!states.Any(s => s.HasFiles))
         {
             Log.Warn("BackupRunner: nothing selected to back up on any enabled, configured destination.");
-            const string msg = "Nothing selected to back up.";
-            return new BackupRunResult(1,
-                githubActive ? DestinationAttempt.Failed(msg) : githubAttempt,
-                driveActive ? DestinationAttempt.Failed(msg) : driveAttempt);
+            foreach (var s in states.Where(s => s.Active))
+                s.Attempt = DestinationAttempt.Failed("Nothing selected to back up.");
+            return new BackupRunResult(1, ToAttempts(states));
         }
 
         var anyFailed = false;
 
-        if (githubActive)
+        // Every active destination gets a chance to run regardless of
+        // whether a sibling failed, threw, was misconfigured, or had
+        // nothing selected - see this class's own doc comment.
+        foreach (var s in states.Where(s => s.Active))
         {
-            if (githubFiles.Count == 0)
+            if (s.Files.Count == 0)
             {
-                Log.Warn("BackupRunner: nothing selected for GitHub; skipping this destination.");
-                githubAttempt = DestinationAttempt.Failed("Nothing selected to back up for GitHub.");
+                Log.Warn($"BackupRunner: nothing selected for {s.Destination.Name}; skipping this destination.");
+                s.Attempt = DestinationAttempt.Failed($"Nothing selected to back up for {s.Destination.Name}.");
+                continue;
             }
-            else
-            {
-                var ok = RunBackend("GitHub",
-                    () => new GitBackend(runner, stagingDir).Run(config.SourceRoot, githubFiles, config.Github),
-                    out var message);
-                anyFailed |= !ok;
-                githubAttempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
-            }
+
+            var ok = RunBackend(
+                s.Destination.Name,
+                () => RunBackendFor(s.Destination, runner, stagingDir, tempDir, config.SourceRoot, s.Files),
+                out var message);
+            anyFailed |= !ok;
+            s.Attempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
         }
 
-        // Deliberately not an "else if" and not short-circuited by the
-        // GitHub result above: each active backend must get a chance to run
-        // regardless of whether the other one failed, threw, was
-        // misconfigured, or had nothing selected.
-        if (driveActive)
-        {
-            if (driveFiles.Count == 0)
-            {
-                Log.Warn("BackupRunner: nothing selected for Google Drive; skipping this destination.");
-                driveAttempt = DestinationAttempt.Failed("Nothing selected to back up for Google Drive.");
-            }
-            else
-            {
-                // S14: the transport switch on this single Drive destination
-                // (not a third destination - see the design doc's "Key
-                // structural decision") - the two backends share the same
-                // BackendResult shape, so everything above and below this
-                // call (selection, the offender backstop, RunBackend's own
-                // try/catch, DestinationAttempt bookkeeping) is unaware which
-                // one actually ran.
-                var ok = RunBackend("Google Drive",
-                    () => config.Drive.Transport == DriveTransport.SyncFolder
-                        ? new SyncFolderBackend(tempDir).Run(config.SourceRoot, driveFiles, config.Drive)
-                        : new RcloneBackend(runner, tempDir).Run(config.SourceRoot, driveFiles, config.Drive),
-                    out var message);
-                anyFailed |= !ok;
-                driveAttempt = ok ? DestinationAttempt.Ok() : DestinationAttempt.Failed(message);
-            }
-        }
-
-        return new BackupRunResult(anyFailed ? 2 : 0, githubAttempt, driveAttempt);
+        return new BackupRunResult(anyFailed ? 2 : 0, ToAttempts(states));
     }
+
+    /// <summary>
+    /// Per-run, per-destination bookkeeping - replaces the old parallel
+    /// githubAttempt/driveAttempt, xConfigured, xActive, xFiles, xHasFiles
+    /// quintuple of local variables with one object per destination in <see
+    /// cref="BackupConfig.Destinations"/>, so RunDetailed's logic reads as a
+    /// loop instead of two copy-pasted blocks.
+    /// </summary>
+    private sealed class DestinationRunState
+    {
+        public DestinationRunState(BackupDestination destination)
+        {
+            Destination = destination;
+            Attempt = DestinationAttempt.NotAttempted(destination.Enabled);
+        }
+
+        public BackupDestination Destination { get; }
+        public DestinationAttempt Attempt { get; set; }
+        public bool Configured { get; set; }
+
+        /// <summary>"Active" = enabled AND configured. Everything past config validation - the secret-denylist backstop, "nothing selected", and which backend gets a chance to run - is gated on this, not on Enabled alone, so a misconfigured destination behaves exactly like a disabled one for the rest of the run: it simply is not there.</summary>
+        public bool Active => Destination.Enabled && Configured;
+
+        public IReadOnlyList<string> Files { get; set; } = Array.Empty<string>();
+        public bool HasFiles => Active && Files.Count > 0;
+    }
+
+    private static Dictionary<string, DestinationAttempt> ToAttempts(List<DestinationRunState> states) =>
+        states.ToDictionary(s => s.Destination.Id, s => s.Attempt);
+
+    /// <summary>
+    /// Per-kind config validation (generalized from the old separate
+    /// GitHub-shaped and Drive-shaped inline blocks): GitHub needs a
+    /// non-blank RemoteUrl and Branch; SyncFolder needs a non-blank, rooted
+    /// FolderPath (the heavier checks - overlap with SourceRoot, actually
+    /// creating the directory - happen inside SyncFolderBackend itself, at
+    /// the point of write, exactly like RcloneBackend's own deeper checks
+    /// are not duplicated up here either); Rclone needs a non-blank
+    /// RcloneRemote. Failure messages name the destination by its own <see
+    /// cref="BackupDestination.Name"/> rather than a generic per-kind label -
+    /// with N destinations there can be several of the same kind, so "Google
+    /// Drive backup is enabled but..." is no longer specific enough to tell
+    /// the user which one.
+    /// </summary>
+    private static bool ValidateConfigured(BackupDestination destination, out string failureMessage)
+    {
+        switch (destination.Kind)
+        {
+            case DestinationKind.GitHub:
+                if (string.IsNullOrWhiteSpace(destination.RemoteUrl))
+                {
+                    Log.Warn($"BackupRunner: {destination.Name} backup is enabled but RemoteUrl is not configured; skipping this destination.");
+                    failureMessage = $"{destination.Name} backup is enabled but the remote URL is not configured.";
+                    return false;
+                }
+                // SettingsForm trims the branch textbox, so clearing it and
+                // saving persists "". Without this check that empty string
+                // reaches 'git init -b ""' inside GitBackend, which fails as
+                // a backend error (exit 2) instead of the configuration
+                // error it actually is.
+                if (string.IsNullOrWhiteSpace(destination.Branch))
+                {
+                    Log.Warn($"BackupRunner: {destination.Name} backup is enabled but Branch is not configured; skipping this destination.");
+                    failureMessage = $"{destination.Name} backup is enabled but the branch is not configured.";
+                    return false;
+                }
+                break;
+
+            case DestinationKind.SyncFolder:
+                if (string.IsNullOrWhiteSpace(destination.FolderPath) || !Path.IsPathRooted(destination.FolderPath))
+                {
+                    Log.Warn($"BackupRunner: {destination.Name} backup is enabled (sync folder transport) but FolderPath is not configured or not a full path; skipping this destination.");
+                    failureMessage = $"{destination.Name} backup is enabled but the sync folder path is not configured.";
+                    return false;
+                }
+                break;
+
+            case DestinationKind.Rclone:
+            default:
+                if (string.IsNullOrWhiteSpace(destination.RcloneRemote))
+                {
+                    Log.Warn($"BackupRunner: {destination.Name} backup is enabled but RcloneRemote is not configured; skipping this destination.");
+                    failureMessage = $"{destination.Name} backup is enabled but the rclone remote is not configured.";
+                    return false;
+                }
+                break;
+        }
+
+        failureMessage = "";
+        return true;
+    }
+
+    /// <summary>
+    /// Dispatches to the right backend for <paramref name="destination"/>'s
+    /// <see cref="BackupDestination.Kind"/>, adapting it into the GitTarget/
+    /// DriveTarget shape each backend still takes (<see
+    /// cref="BackupDestination.ToGitTarget"/>/<see
+    /// cref="BackupDestination.ToDriveTarget"/> - those two backend/restore
+    /// classes were out of this task's scope to change).
+    ///
+    /// PER-DESTINATION SCRATCH ISOLATION (S17b - a genuinely new problem two
+    /// hardcoded destinations never had): the two scratch roots the caller
+    /// supplies (<paramref name="stagingDir"/> for git, <paramref
+    /// name="tempDir"/> for the two zip kinds) are shared across every
+    /// destination of that shape. Two enabled GitHub destinations pointed at
+    /// the SAME stagingDir would both drive GitBackend's `git init`/`git
+    /// checkout -B`/MirrorFiles against literally the same working tree -
+    /// the second destination to run would checkout ITS OWN branch into a
+    /// tree MirrorFiles had just mirrored to the FIRST destination's
+    /// selection, and (if the two remotes are unrelated repos) `git push`
+    /// could easily push the wrong destination's history onto the wrong
+    /// remote. Two zip-kind destinations sharing tempDir have the milder but
+    /// still real problem that BackupArchiveWriter.SweepStaleZips (which
+    /// runs at the START of every RcloneBackend/SyncFolderBackend.Run to
+    /// clean up a previous crashed run's leftover zip) could race-delete a
+    /// SIBLING destination's own just-written, not-yet-uploaded zip if both
+    /// destinations' Run calls happen to interleave around that sweep.
+    ///
+    /// The fix: give every destination its own subdirectory of the shared
+    /// root, named after its stable <see cref="BackupDestination.Id"/> -
+    /// Path.Combine(stagingDir, destination.Id) for GitHub,
+    /// Path.Combine(tempDir, destination.Id) for the two zip kinds. Id is
+    /// documented as unique per destination and is always either a
+    /// well-known lowercase word ("github", "drive") or a
+    /// Guid.ToString("N") hex string (see BackupDestination.NewId) - never
+    /// containing a path separator or any other character Path.Combine
+    /// would choke on - so no further sanitization is needed. The
+    /// subdirectory is pure scratch: it is recreated on demand by each
+    /// backend, is not itself part of any persisted state (BackupStatus
+    /// keys by Id, never by a filesystem path), and CleanupStagingDirectories
+    /// callers (RestoreDialog's own equivalent) already delete the shared
+    /// root recursively, which sweeps every destination's subdirectory in
+    /// one call.
+    /// </summary>
+    private static BackendResult RunBackendFor(
+        BackupDestination destination, IProcessRunner runner, string stagingDir, string tempDir,
+        string sourceRoot, IReadOnlyList<string> files) => destination.Kind switch
+    {
+        DestinationKind.GitHub => new GitBackend(runner, Path.Combine(stagingDir, destination.Id))
+            .Run(sourceRoot, files, destination.ToGitTarget()),
+        DestinationKind.SyncFolder => new SyncFolderBackend(Path.Combine(tempDir, destination.Id))
+            .Run(sourceRoot, files, destination.ToDriveTarget()),
+        _ => new RcloneBackend(runner, Path.Combine(tempDir, destination.Id))
+            .Run(sourceRoot, files, destination.ToDriveTarget()),
+    };
 
     /// <summary>
     /// Runs the selection delegate for one destination, logs what the secret
@@ -380,11 +445,11 @@ public static class BackupRunner
     /// IProcessRunner.Exists throwing before GitBackend's own try block even
     /// starts - see GitBackend.Run and RcloneBackend.Run, both of which call
     /// Exists outside their try) would propagate straight out of
-    /// BackupRunner.Run, skip whatever the other enabled backend would have
-    /// done, and crash the whole process instead of returning exit code 2.
-    /// A tray-supplied IProcessRunner (landing in a later task) is exactly
-    /// the kind of implementation this needs to be defensive against, since
-    /// it is not one BackupRunner controls or can assume is well-behaved.
+    /// BackupRunner.Run, skip whatever the other enabled destinations would
+    /// have done, and crash the whole process instead of returning exit code
+    /// 2. A tray-supplied IProcessRunner is exactly the kind of
+    /// implementation this needs to be defensive against, since it is not
+    /// one BackupRunner controls or can assume is well-behaved.
     ///
     /// <paramref name="message"/> carries the same already-scrubbed text that
     /// gets logged on failure ("" on success) - S11a: RunDetailed uses it to
