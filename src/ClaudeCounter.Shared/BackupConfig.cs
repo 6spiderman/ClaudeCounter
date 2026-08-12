@@ -14,27 +14,25 @@ public sealed class GitTarget
 }
 
 /// <summary>
-/// Which mechanism <see cref="DriveTarget"/> uploads through (S14 design
-/// doc: "sync-folder backup transport"). A switch on the SAME destination,
-/// not a third destination - see the design doc's "Key structural decision"
-/// for why: BackupRunResult/BackupStatus/BackupStatusWriter/BackupHealth/
-/// BackupRunner/RestoreDialog all encode exactly two destinations as
-/// positional fields, and a third would fan out across every one of them.
-/// <see cref="Rclone"/> = 0 is the default specifically so a backup.json
-/// written before this field existed loads with Transport already correct -
-/// a property absent from old JSON deserializing to its type default is
-/// exactly the intended back-compat behaviour, which is also why this change
-/// does not bump <see cref="BackupConfig.CurrentBackupConfigVersion"/>.
+/// Which mechanism a zip-based destination (<see cref="DriveTarget"/>, and -
+/// via <see cref="BackupDestination.ToDriveTarget"/> - a <see
+/// cref="DestinationKind.SyncFolder"/>/<see cref="DestinationKind.Rclone"/>
+/// <see cref="BackupDestination"/>) uploads through (S14 design doc:
+/// "sync-folder backup transport"). <see cref="Rclone"/> = 0 is the default
+/// specifically so a backup.json written before this field existed loads
+/// with Transport already correct - a property absent from old JSON
+/// deserializing to its type default is exactly the intended back-compat
+/// behaviour, which is also why this change does not bump <see
+/// cref="BackupConfig.CurrentBackupConfigVersion"/>.
 ///
-/// S17a note: BackupRunResult/BackupStatus/BackupRunner/RestoreDialog are no
-/// longer ALL fixed at exactly two - BackupConfig itself grew an arbitrary
-/// <see cref="BackupConfig.Destinations"/> list, and BackupStatus/
-/// BackupHealth/BackupStatusWriter now key off that list's ids instead of
-/// two hardcoded names. BackupRunner and RestoreDialog have not been
-/// migrated yet (S17b) - see <see cref="BackupConfig.Github"/>/<see
-/// cref="BackupConfig.Drive"/> for the shim that keeps them compiling and
-/// working unchanged in the meantime. This enum's own back-compat reasoning
-/// above is unaffected either way.
+/// S17a/S17b/S17c: superseded as the on-disk model by <see
+/// cref="DestinationKind"/> on <see cref="BackupDestination"/>, which
+/// distinguishes GitHub as a real third kind rather than folding it into
+/// this same switch - this enum survives only as the legacy <see
+/// cref="DriveTarget"/> shape's own field (still used as an adapter type by
+/// the backends/restore engine - see <see
+/// cref="BackupDestination.ToDriveTarget"/>) and as raw-JSON migration input
+/// for a pre-v2 backup.json (see <c>BackupConfig.MigrateFromLegacyJson</c>).
 /// </summary>
 public enum DriveTransport
 {
@@ -346,42 +344,6 @@ public sealed class BackupConfig
     public List<string> Include { get; set; } = new();
     public List<string> Exclude { get; set; } = new();
 
-    /// <summary>
-    /// S17a SHIM, KEPT DELIBERATELY BY S17b (not deleted - see below) so
-    /// SettingsForm keeps compiling AND working with zero changes.
-    /// BackupRunner and RestoreDialog (S17b) now read <see
-    /// cref="Destinations"/> directly and never read this property in
-    /// production. <see cref="Destinations"/> - not this - is the real,
-    /// authoritative, on-disk shape from BackupConfigVersion 2 onward: <see
-    /// cref="Save"/> pushes whatever this property currently holds into the
-    /// "github"-id entry of <see cref="Destinations"/> before serializing,
-    /// and <see cref="Load"/> pulls it back out of that same entry
-    /// afterward, so Destinations always wins on read and this is always
-    /// what actually gets persisted on write.
-    ///
-    /// S17b evaluated deleting this (per the task brief's default
-    /// instruction) and decided against it: SettingsForm.cs still does
-    /// `config.Github.RemoteUrl = x;` - a mutation of a PROPERTY OF the
-    /// object this getter returns, not a reassignment of the property
-    /// itself. That pattern only works if <see cref="Github"/> returns a
-    /// stable, cached reference that a later <see cref="Save"/> reads back
-    /// from - a plain computed getter that builds a fresh <see
-    /// cref="GitTarget"/> from <see cref="Destinations"/> on every call would
-    /// compile fine (GitTarget still has ordinary settable properties) but
-    /// would silently discard every field SettingsForm sets, since each
-    /// mutation would land on a throwaway object nothing ever reads again -
-    /// a data-loss bug with no compiler error to catch it. SettingsForm's own
-    /// UI restructuring (reading/writing <see cref="Destinations"/> instead)
-    /// is S17c's job, per the task brief's explicit "leave it compiling but
-    /// do not restructure its UI" - so this shim stays until then. Do not add
-    /// new production reads of this property outside SettingsForm.cs - read
-    /// <see cref="Destinations"/> instead.
-    /// </summary>
-    public GitTarget Github { get; set; } = new();
-
-    /// <summary>S17a SHIM for the "drive" destination, kept for the same reason as <see cref="Github"/> (SettingsForm still mutates it in place) - see that property's doc comment for the full reasoning; identical shape, just for the well-known "drive" id.</summary>
-    public DriveTarget Drive { get; set; } = new();
-
     public ScheduleConfig Schedule { get; set; } = new();
 
     /// <summary>
@@ -441,11 +403,14 @@ public sealed class BackupConfig
         // directory's contents.
         var exclude = new List<string> { "projects/**", "statsig/**", "**/cache/**" };
 
-        // Both destinations get the SAME defaults today - a brand new user
-        // has never configured anything to diverge, and giving GitHub and
-        // Drive independent lists of the same content is what makes editing
-        // just one of them later (via the Backup tab's destination selector)
-        // a real, isolated change instead of secretly touching both.
+        // S17c: Destinations is the ONLY on-disk shape now (the Github/Drive
+        // shim is gone - see this class's own doc comment history) - a fresh
+        // config is built directly against the well-known "github"/"drive"
+        // ids. Both destinations get the SAME defaults today - a brand new
+        // user has never configured anything to diverge, and giving each its
+        // own independent copy of the same lists is what makes editing just
+        // one of them later (via the destinations dialog) a real, isolated
+        // change instead of secretly touching both.
         var result = new BackupConfig
         {
             // A freshly created config is already at the current shape, so a
@@ -454,14 +419,20 @@ public sealed class BackupConfig
             // stamping NotificationStateVersion before a fresh AppSettings'
             // first save, for the identical reason).
             BackupConfigVersion = CurrentBackupConfigVersion,
-            Github = new GitTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
-            Drive = new DriveTarget { Include = new List<string>(include), Exclude = new List<string>(exclude) },
+            Destinations = new List<BackupDestination>
+            {
+                new()
+                {
+                    Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub,
+                    Include = new List<string>(include), Exclude = new List<string>(exclude),
+                },
+                new()
+                {
+                    Id = "drive", Name = BackupHealth.DriveDisplayName(new DriveTarget()), Kind = DestinationKind.Rclone,
+                    Include = new List<string>(include), Exclude = new List<string>(exclude),
+                },
+            },
         };
-        // Destinations is the real on-disk shape - see Github/Drive's own
-        // doc comments - so a fresh config needs it populated too, not just
-        // the two shim fields, otherwise Default().Save() would round-trip
-        // through an empty destination list.
-        result.SyncDestinationsFromLegacyShims();
         result.Normalize();
         return result;
     }
@@ -472,13 +443,9 @@ public sealed class BackupConfig
             return Default();
         try
         {
-            var config = JsonSerializer.Deserialize<BackupConfig>(File.ReadAllText(path)) ?? Default();
-            config.Migrate(path);
-            // Destinations - not Github/Drive - is authoritative on read (see
-            // Github's own doc comment): whatever the "github"/"drive"
-            // entries say wins, even if a hand-edited file's top-level
-            // "Github"/"Drive" JSON had since drifted from them.
-            config.SyncLegacyShimsFromDestinations();
+            var json = File.ReadAllText(path);
+            var config = JsonSerializer.Deserialize<BackupConfig>(json) ?? Default();
+            config.Migrate(path, json);
             config.Normalize();
             return config;
         }
@@ -513,27 +480,6 @@ public sealed class BackupConfig
         Schedule ??= new();
         Schedule.BackupStaleAfterDays = Math.Clamp(Schedule.BackupStaleAfterDays, 0, 365);
 
-        // S14: defensive null-guard for a JSON payload with an explicit null
-        // FolderPath (rather than the field simply being absent) - same
-        // pattern as every other string/list field this method and
-        // MigrateLegacySelectionStep already guard. An out-of-range Transport
-        // (e.g. a hand-edited backup.json with "Transport": 99) is not a
-        // value this enum ever produces itself, so it is treated the same
-        // way an out-of-range BackupStaleAfterDays is above: reset to the
-        // default (Rclone) rather than let an undefined enum value reach
-        // BackupRunner's transport switch.
-        Drive ??= new();
-        Drive.FolderPath ??= "";
-        if (!Enum.IsDefined(typeof(DriveTransport), Drive.Transport))
-            Drive.Transport = DriveTransport.Rclone;
-
-        // S16: same "an undefined enum value must never reach anything
-        // downstream" guard as Transport just above - a hand-edited or
-        // future-version backup.json with e.g. "SyncProvider": 99 is reset
-        // to Other rather than left as a value this enum never produces.
-        if (!Enum.IsDefined(typeof(SyncProvider), Drive.SyncProvider))
-            Drive.SyncProvider = SyncProvider.Other;
-
         // S17a: the same defensive shape, extended to Destinations - a
         // hand-edited or future-version backup.json can carry a null list
         // entry, a null nested list, or an out-of-range Kind, and none of
@@ -559,174 +505,126 @@ public sealed class BackupConfig
     }
 
     /// <summary>
-    /// Runs whichever migration steps a stale file needs, in order (a
-    /// version-0 file must pass through both to reach the current shape),
-    /// and persists once at the end if anything actually changed - mirrors
-    /// the existing single-save-per-Load pattern rather than writing the
-    /// file out twice for a doubly-stale config.
+    /// Runs whichever migration steps a stale file needs, and persists once
+    /// at the end if anything actually changed - mirrors the existing
+    /// single-save-per-Load pattern rather than writing the file out twice
+    /// for a doubly-stale config.
+    ///
+    /// S17c: the old <c>Github</c>/<c>Drive</c> shim properties are gone
+    /// (SettingsForm now reads/writes <see cref="Destinations"/> directly -
+    /// see this class's own history), so migration can no longer lean on
+    /// ordinary property deserialization to recover a legacy file's
+    /// top-level "Github"/"Drive" JSON objects - <paramref name="json"/> is
+    /// re-parsed here instead, mirroring exactly how <see
+    /// cref="ClaudeBackup.BackupStatus.Load"/> already recovers ITS OWN
+    /// legacy top-level "Github"/"Drive" keys via a raw <see
+    /// cref="JsonDocument"/> pass (see that method's own remarks - this is
+    /// the identical problem, solved the identical way, one class over).
     /// </summary>
-    private void Migrate(string path)
+    private void Migrate(string path, string json)
     {
-        // A JSON payload with an explicit null for any of these (rather than
-        // the field simply being absent) would otherwise NRE below - see
-        // AppSettings.NotificationState's "??= new()" for the same
-        // defensive pattern after a real bug from exactly this shape.
+        Destinations ??= new();
         Include ??= new();
         Exclude ??= new();
-        Github ??= new();
-        Drive ??= new();
-        Destinations ??= new();
 
         if (BackupConfigVersion >= CurrentBackupConfigVersion)
             return;
 
-        MigrateLegacySelectionStep();
-        MigrateToDestinationListStep();
+        MigrateFromLegacyJson(json);
 
         BackupConfigVersion = CurrentBackupConfigVersion;
         Save(path);
     }
 
     /// <summary>
-    /// One-time migration from the pre-per-destination shape: a backup.json
-    /// at BackupConfigVersion 0 with a non-empty legacy Include/Exclude had
-    /// that ONE list shared by both destinations. Copying it onto BOTH
-    /// Github and Drive here preserves exactly what an existing user's
-    /// backup used to select - nothing they configured changes meaning, on
-    /// purpose; this is not the place to "improve" on it.
+    /// Recovers a pre-v2 file's legacy "Github"/"Drive" top-level JSON
+    /// objects (deserializing each into the same <see cref="GitTarget"/>/
+    /// <see cref="DriveTarget"/> shapes the adapters elsewhere in this file
+    /// already use - not new types, since those two classes already have
+    /// exactly the right fields) and folds them into <see
+    /// cref="Destinations"/> under the WELL-KNOWN ids "github"/"drive". This
+    /// is what makes the backup-status.json migration deterministic (see
+    /// BackupStatus.Load's own migration) - a status entry and its owning
+    /// destination agree on the id without any matching-by-name heuristic.
     ///
-    /// Gated on the version being EXACTLY 0 (not just stale), and on the
-    /// legacy lists actually being non-empty: a file at version 1 (or later)
-    /// has already been through this step in an earlier Load() and must not
-    /// repeat it even though it is still stale relative to
-    /// CurrentBackupConfigVersion (S17a added a second step below); a file
-    /// at version 0 with empty legacy lists (a user who cleared both boxes
-    /// before this feature existed) has nothing to copy, and
-    /// Github.Include/Drive.Include already deserialize to empty lists on
-    /// their own (the type's field initializer), which is the exact same end
-    /// state copying empty lists onto them would produce - so skipping the
-    /// copy in that case changes nothing observable.
+    /// Also folds in the even-older v0 shape (a single top-level
+    /// Include/Exclude shared by both destinations, gated on
+    /// BackupConfigVersion being EXACTLY 0 and the legacy lists actually
+    /// being non-empty - see the pre-S17c version of this method for the
+    /// same gating, now expressed against the raw JSON instead of a
+    /// deserialized property) before building the two destinations, so a v0
+    /// file passes through both steps in one call, exactly as it always has.
+    ///
+    /// Guarded on Destinations being empty so this never clobbers real
+    /// N-destination data - in practice this only ever runs for a file at
+    /// BackupConfigVersion 0 or 1, neither of which had a "Destinations"
+    /// JSON array to begin with, so the guard is defensive rather than
+    /// load-bearing.
     /// </summary>
-    private void MigrateLegacySelectionStep()
-    {
-        Github.Include ??= new();
-        Github.Exclude ??= new();
-        Drive.Include ??= new();
-        Drive.Exclude ??= new();
-        Drive.FolderPath ??= ""; // S14: same defensive guard as Include/Exclude above, for an explicit JSON null
-
-        if (BackupConfigVersion != 0)
-            return;
-
-        if (Include.Count > 0 || Exclude.Count > 0)
-        {
-            Github.Include = new List<string>(Include);
-            Github.Exclude = new List<string>(Exclude);
-            Drive.Include = new List<string>(Include);
-            Drive.Exclude = new List<string>(Exclude);
-            Include.Clear();
-            Exclude.Clear();
-        }
-    }
-
-    /// <summary>
-    /// S17a's own migration step: folds the two positional destinations
-    /// (Github, Drive - by this point already carrying whatever
-    /// MigrateLegacySelectionStep produced, if anything) into <see
-    /// cref="Destinations"/>, under the WELL-KNOWN ids "github" and "drive".
-    /// This is what makes the backup-status.json migration deterministic
-    /// (see BackupStatus.Load's own migration) - a status entry and its
-    /// owning destination agree on the id without any matching-by-name
-    /// heuristic. Guarded on Destinations being empty so this never clobbers
-    /// real N-destination data with a rebuild from the (possibly stale)
-    /// Github/Drive shim - in practice this only ever runs for a file at
-    /// BackupConfigVersion 0 or 1, neither of which had a "Destinations" JSON
-    /// array to begin with, so the guard is defensive rather than load-bearing.
-    /// </summary>
-    private void MigrateToDestinationListStep()
+    private void MigrateFromLegacyJson(string json)
     {
         if (Destinations.Count > 0)
             return;
 
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        var github = ReadLegacyObject<GitTarget>(root, "Github");
+        var drive = ReadLegacyObject<DriveTarget>(root, "Drive");
+
+        if (BackupConfigVersion == 0)
+        {
+            var legacyInclude = ReadStringArray(root, "Include");
+            var legacyExclude = ReadStringArray(root, "Exclude");
+            if (legacyInclude.Count > 0 || legacyExclude.Count > 0)
+            {
+                github.Include = new List<string>(legacyInclude);
+                github.Exclude = new List<string>(legacyExclude);
+                drive.Include = new List<string>(legacyInclude);
+                drive.Exclude = new List<string>(legacyExclude);
+                Include.Clear();
+                Exclude.Clear();
+            }
+        }
+
         Destinations = new List<BackupDestination>
         {
-            FromGitHubShim("github", Github),
-            FromDriveShim("drive", Drive),
+            DestinationFromLegacyGitHub("github", github),
+            DestinationFromLegacyDrive("drive", drive),
         };
     }
 
-    public void Save(string path)
-    {
-        // Github/Drive are a SHIM (see their own doc comments) - Destinations
-        // is what actually gets serialized as the durable shape, so whatever
-        // a not-yet-migrated caller (BackupRunner/SettingsForm/RestoreDialog)
-        // just mutated on the shim must be folded back in before writing,
-        // or those edits would silently vanish the next time this file is
-        // loaded.
-        SyncDestinationsFromLegacyShims();
+    /// <summary>Deserializes <paramref name="propertyName"/>'s raw JSON object into a fresh <typeparamref name="T"/>, or a fresh default when the property is absent or explicitly null.</summary>
+    private static T ReadLegacyObject<T>(JsonElement root, string propertyName) where T : new() =>
+        root.TryGetProperty(propertyName, out var element) && element.ValueKind != JsonValueKind.Null
+            ? JsonSerializer.Deserialize<T>(element.GetRawText()) ?? new T()
+            : new T();
 
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(this, Options));
-        File.Move(tmp, path, overwrite: true);
+    /// <summary>Reads a top-level JSON string array property, tolerating an absent property, a non-array value, or non-string elements (skipped) - never throws.</summary>
+    private static List<string> ReadStringArray(JsonElement root, string propertyName)
+    {
+        var result = new List<string>();
+        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.Array)
+            return result;
+        foreach (var item in element.EnumerateArray())
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { } s)
+                result.Add(s);
+        return result;
     }
 
-    /// <summary>
-    /// Pushes the current Github/Drive shim values (see <see
-    /// cref="Github"/>'s doc comment) into Destinations' "github"/"drive"
-    /// entries, creating either entry if it is not present yet. Any OTHER
-    /// destination already in the list (S17c's future "add destination" UI,
-    /// or a test constructing N destinations directly) is left completely
-    /// untouched - this only ever writes the two well-known ids.
-    /// </summary>
-    private void SyncDestinationsFromLegacyShims()
-    {
-        UpsertDestination(FromGitHubShim("github", Github));
-        UpsertDestination(FromDriveShim("drive", Drive));
-    }
-
-    private void UpsertDestination(BackupDestination replacement)
-    {
-        var index = Destinations.FindIndex(d => d.Id == replacement.Id);
-        if (index >= 0)
-            Destinations[index] = replacement;
-        else
-            Destinations.Add(replacement);
-    }
-
-    /// <summary>
-    /// Pulls the well-known "github"/"drive" entries (if present) back out
-    /// of Destinations into the Github/Drive shim - the read-side half of
-    /// the sync <see cref="Save"/> performs on write; see <see
-    /// cref="Github"/>'s doc comment for why this shim exists at all. A
-    /// destination list with no "github" (or "drive") id - not possible yet
-    /// from anything in this codebase, since nothing before S17c can remove
-    /// a destination, but not assumed here either - leaves the corresponding
-    /// shim at its type default (Enabled: false), which is the correct "not
-    /// configured" reading for BackupRunner/SettingsForm/RestoreDialog.
-    /// </summary>
-    private void SyncLegacyShimsFromDestinations()
-    {
-        var github = Destinations.FirstOrDefault(d => d.Id == "github");
-        Github = github is null ? new GitTarget() : ToGitHubShim(github);
-
-        var drive = Destinations.FirstOrDefault(d => d.Id == "drive");
-        Drive = drive is null ? new DriveTarget() : ToDriveShim(drive);
-    }
-
-    private static BackupDestination FromGitHubShim(string id, GitTarget git) => new()
+    private static BackupDestination DestinationFromLegacyGitHub(string id, GitTarget git) => new()
     {
         Id = id,
         Name = "GitHub",
         Kind = DestinationKind.GitHub,
         Enabled = git.Enabled,
         RemoteUrl = git.RemoteUrl,
-        Branch = git.Branch,
+        Branch = string.IsNullOrEmpty(git.Branch) ? "main" : git.Branch,
         Include = new List<string>(git.Include),
         Exclude = new List<string>(git.Exclude),
     };
 
-    private static BackupDestination FromDriveShim(string id, DriveTarget drive) => new()
+    private static BackupDestination DestinationFromLegacyDrive(string id, DriveTarget drive) => new()
     {
         Id = id,
         // Reuses BackupHealth's own transport-aware naming (S14/S16) rather
@@ -735,7 +633,7 @@ public sealed class BackupConfig
         Name = BackupHealth.DriveDisplayName(drive),
         Kind = drive.Transport == DriveTransport.SyncFolder ? DestinationKind.SyncFolder : DestinationKind.Rclone,
         Enabled = drive.Enabled,
-        FolderPath = drive.FolderPath,
+        FolderPath = drive.FolderPath ?? "",
         SyncProvider = drive.SyncProvider,
         RcloneRemote = drive.RcloneRemote,
         Include = new List<string>(drive.Include),
@@ -745,31 +643,19 @@ public sealed class BackupConfig
     };
 
     /// <summary>
-    /// Shim-specific wrapper around <see cref="BackupDestination.ToGitTarget"/>:
-    /// the shim needs its own copies of the mutable Include/Exclude lists (so
-    /// mutating the returned <see cref="Github"/> in place, the way
-    /// SettingsForm does, never reaches back into the live <see
-    /// cref="Destinations"/> entry until the next <see cref="Save"/>) and
-    /// needs Branch defaulted to "main" for a destination whose Branch was
-    /// somehow left blank - neither of which the general-purpose adapter
-    /// (reused as-is by BackupRunner/RestoreDialog, which only ever read a
-    /// freshly-built target once and never mutate it in place) needs to do.
+    /// S17c: writes only <see cref="Destinations"/> (and every other real
+    /// property) - the old "Github"/"Drive" shim is gone, so a v2 config no
+    /// longer carries the duplicate legacy top-level JSON keys the S17a/S17b
+    /// design notes flagged as inert-but-present duplication. A pre-v2 file
+    /// still round-trips correctly: <see cref="Load"/>'s migration reads the
+    /// legacy keys once, off the raw JSON text, before this method is ever
+    /// reached for that file (see <see cref="MigrateFromLegacyJson"/>).
     /// </summary>
-    private static GitTarget ToGitHubShim(BackupDestination d)
+    public void Save(string path)
     {
-        var target = d.ToGitTarget();
-        target.Branch = string.IsNullOrEmpty(target.Branch) ? "main" : target.Branch;
-        target.Include = new List<string>(target.Include);
-        target.Exclude = new List<string>(target.Exclude);
-        return target;
-    }
-
-    /// <summary>Shim-specific wrapper around <see cref="BackupDestination.ToDriveTarget"/> - see <see cref="ToGitHubShim"/>'s doc comment for why the shim needs its own copies of the mutable lists.</summary>
-    private static DriveTarget ToDriveShim(BackupDestination d)
-    {
-        var target = d.ToDriveTarget();
-        target.Include = new List<string>(target.Include);
-        target.Exclude = new List<string>(target.Exclude);
-        return target;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(this, Options));
+        File.Move(tmp, path, overwrite: true);
     }
 }

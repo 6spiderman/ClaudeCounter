@@ -50,8 +50,11 @@ public class ProgramRunWorkerTests : IDisposable
     private BackupConfig Config() => new()
     {
         SourceRoot = _root,
-        Github = new() { Enabled = true, RemoteUrl = "url", Branch = "main", Include = new() { "settings.json" }, Exclude = new() },
-        Drive = new() { Enabled = false, Include = new() { "settings.json" }, Exclude = new() },
+        Destinations = new()
+        {
+            new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true, RemoteUrl = "url", Branch = "main", Include = new() { "settings.json" }, Exclude = new() },
+            new BackupDestination { Id = "drive", Name = "Google Drive (rclone)", Kind = DestinationKind.Rclone, Enabled = false, Include = new() { "settings.json" }, Exclude = new() },
+        },
     };
 
     [Fact]
@@ -73,7 +76,7 @@ public class ProgramRunWorkerTests : IDisposable
     public void ConfigErrorPathStillWritesStatus()
     {
         var c = Config();
-        c.Github.Enabled = false; // nothing enabled at all
+        c.Destinations.Single(d => d.Id == "github").Enabled = false; // nothing enabled at all
         c.Save(_configPath);
 
         var code = Program.RunWorker(_configPath, _statusPath, new OkRunner(), _stg, _tmp);

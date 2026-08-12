@@ -4,16 +4,26 @@ using Xunit;
 
 namespace ClaudeCounter.Tests.Backup;
 
+/// <summary>
+/// S17c: rewritten off the now-deleted <c>BackupConfig.Github</c>/<c>Drive</c>
+/// shim - every assertion below is unchanged in what it proves, only how it
+/// reaches the "github"/"drive" destination changed (via <see cref="Gh"/>/
+/// <see cref="Dr"/>, mirroring the identical helper pair BackupRunnerTests
+/// already introduced for the same rewrite one task earlier).
+/// </summary>
 public class BackupConfigTests
 {
+    private static BackupDestination Gh(BackupConfig c) => c.Destinations.First(d => d.Id == "github");
+    private static BackupDestination Dr(BackupConfig c) => c.Destinations.First(d => d.Id == "drive");
+
     [Fact]
     public void DefaultExcludesProjectsHistory()
     {
         var c = BackupConfig.Default();
-        Assert.Contains("projects/**", c.Github.Exclude);
-        Assert.Contains("settings.json", c.Github.Include);
-        Assert.Contains("projects/**", c.Drive.Exclude);
-        Assert.Contains("settings.json", c.Drive.Include);
+        Assert.Contains("projects/**", Gh(c).Exclude);
+        Assert.Contains("settings.json", Gh(c).Include);
+        Assert.Contains("projects/**", Dr(c).Exclude);
+        Assert.Contains("settings.json", Dr(c).Include);
     }
 
     // Fix round 1 / I6, I7: "plugins/**/*.json" pulled in the entire plugin
@@ -36,12 +46,12 @@ public class BackupConfigTests
     public void DefaultDoesNotDeepIncludePluginTreeAndPrunesCacheDirectories()
     {
         var c = BackupConfig.Default();
-        foreach (var target in new[] { (IReadOnlyList<string>)c.Github.Include, c.Drive.Include })
+        foreach (var target in new[] { (IReadOnlyList<string>)Gh(c).Include, Dr(c).Include })
         {
             Assert.Contains("plugins/*.json", target);
             Assert.DoesNotContain("plugins/**/*.json", target);
         }
-        foreach (var target in new[] { (IReadOnlyList<string>)c.Github.Exclude, c.Drive.Exclude })
+        foreach (var target in new[] { (IReadOnlyList<string>)Gh(c).Exclude, Dr(c).Exclude })
         {
             Assert.Contains("**/cache/**", target);
             Assert.DoesNotContain("**/*cache*", target);
@@ -61,9 +71,9 @@ public class BackupConfigTests
     }
 
     // S5: Default() no longer populates the legacy top-level Include/Exclude
-    // at all - GitTarget/DriveTarget own the real selection from the start
-    // for a brand new config, so there is nothing left for the legacy
-    // fields to carry.
+    // at all - each destination owns the real selection from the start for
+    // a brand new config, so there is nothing left for the legacy fields to
+    // carry.
     [Fact]
     public void DefaultLeavesLegacyIncludeExcludeEmpty()
     {
@@ -79,28 +89,28 @@ public class BackupConfigTests
         try
         {
             var c = BackupConfig.Default();
-            c.Github.Enabled = true;
-            c.Github.RemoteUrl = "git@github.com:me/claude-backup.git";
-            c.Github.Include = new() { "settings.json" };
-            c.Drive.Include = new() { "CLAUDE.md" };
+            Gh(c).Enabled = true;
+            Gh(c).RemoteUrl = "git@github.com:me/claude-backup.git";
+            Gh(c).Include = new() { "settings.json" };
+            Dr(c).Include = new() { "CLAUDE.md" };
             c.Save(path);
             var back = BackupConfig.Load(path);
-            Assert.True(back.Github.Enabled);
-            Assert.Equal("git@github.com:me/claude-backup.git", back.Github.RemoteUrl);
-            Assert.Equal("main", back.Github.Branch);
+            Assert.True(Gh(back).Enabled);
+            Assert.Equal("git@github.com:me/claude-backup.git", Gh(back).RemoteUrl);
+            Assert.Equal("main", Gh(back).Branch);
             // Independent selections round-trip independently - proves the
-            // two targets are not accidentally aliased to the same list.
-            Assert.Equal(new[] { "settings.json" }, back.Github.Include);
-            Assert.Equal(new[] { "CLAUDE.md" }, back.Drive.Include);
+            // two destinations are not accidentally aliased to the same list.
+            Assert.Equal(new[] { "settings.json" }, Gh(back).Include);
+            Assert.Equal(new[] { "CLAUDE.md" }, Dr(back).Include);
         }
         finally { File.Delete(path); }
     }
 
-    // S7/S8: the schedule-robustness and Drive-retention fields added to
-    // ScheduleConfig/DriveTarget must round-trip like every other setting -
-    // including KeepLastCount/DeleteOlderThanDays staying null when never
-    // set, so an existing user who has not opened the Advanced dialog is not
-    // silently opted into a retention rule.
+    // S7/S8: the schedule-robustness fields on ScheduleConfig, and the
+    // retention fields on a destination, must round-trip like every other
+    // setting - including KeepLastCount/DeleteOlderThanDays staying null
+    // when never set, so an existing user who has not configured retention
+    // is not silently opted into a retention rule.
     [Fact]
     public void ScheduleAndDriveRetentionSettingsRoundTripThroughFile()
     {
@@ -115,8 +125,8 @@ public class BackupConfigTests
             c.Schedule.RestartOnFailure = false;
             c.Schedule.RestartIntervalMinutes = 45;
             c.Schedule.RestartCount = 7;
-            c.Drive.KeepLastCount = 14;
-            c.Drive.DeleteOlderThanDays = 60;
+            Dr(c).KeepLastCount = 14;
+            Dr(c).DeleteOlderThanDays = 60;
             c.Save(path);
 
             var back = BackupConfig.Load(path);
@@ -127,8 +137,8 @@ public class BackupConfigTests
             Assert.False(back.Schedule.RestartOnFailure);
             Assert.Equal(45, back.Schedule.RestartIntervalMinutes);
             Assert.Equal(7, back.Schedule.RestartCount);
-            Assert.Equal(14, back.Drive.KeepLastCount);
-            Assert.Equal(60, back.Drive.DeleteOlderThanDays);
+            Assert.Equal(14, Dr(back).KeepLastCount);
+            Assert.Equal(60, Dr(back).DeleteOlderThanDays);
         }
         finally { File.Delete(path); }
     }
@@ -153,8 +163,8 @@ public class BackupConfigTests
                 }
                 """);
             var loaded = BackupConfig.Load(path);
-            Assert.Null(loaded.Drive.KeepLastCount);
-            Assert.Null(loaded.Drive.DeleteOlderThanDays);
+            Assert.Null(Dr(loaded).KeepLastCount);
+            Assert.Null(Dr(loaded).DeleteOlderThanDays);
             // And the schedule-robustness defaults come back as the design
             // spec's defaults, not some JSON-absent zero/false value.
             Assert.True(loaded.Schedule.StartWhenAvailable);
@@ -173,8 +183,8 @@ public class BackupConfigTests
     {
         var c = BackupConfig.Load(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json"));
         Assert.NotNull(c);
-        Assert.Contains("settings.json", c.Github.Include);
-        Assert.Contains("settings.json", c.Drive.Include);
+        Assert.Contains("settings.json", Gh(c).Include);
+        Assert.Contains("settings.json", Dr(c).Include);
     }
 
     // S11a: BackupStaleAfterDays defaults to 3 (design spec) and round-trips
@@ -296,8 +306,8 @@ public class BackupConfigTests
     public void DefaultDriveTransportIsRcloneWithBlankFolderPath()
     {
         var c = BackupConfig.Default();
-        Assert.Equal(DriveTransport.Rclone, c.Drive.Transport);
-        Assert.Equal("", c.Drive.FolderPath);
+        Assert.Equal(DestinationKind.Rclone, Dr(c).Kind);
+        Assert.Equal("", Dr(c).FolderPath);
     }
 
     [Fact]
@@ -307,13 +317,13 @@ public class BackupConfigTests
         try
         {
             var c = BackupConfig.Default();
-            c.Drive.Transport = DriveTransport.SyncFolder;
-            c.Drive.FolderPath = @"D:\SyncFolder\ClaudeBackups";
+            Dr(c).Kind = DestinationKind.SyncFolder;
+            Dr(c).FolderPath = @"D:\SyncFolder\ClaudeBackups";
             c.Save(path);
 
             var back = BackupConfig.Load(path);
-            Assert.Equal(DriveTransport.SyncFolder, back.Drive.Transport);
-            Assert.Equal(@"D:\SyncFolder\ClaudeBackups", back.Drive.FolderPath);
+            Assert.Equal(DestinationKind.SyncFolder, Dr(back).Kind);
+            Assert.Equal(@"D:\SyncFolder\ClaudeBackups", Dr(back).FolderPath);
         }
         finally { File.Delete(path); }
     }
@@ -337,9 +347,9 @@ public class BackupConfigTests
                 """);
 
             var loaded = BackupConfig.Load(path);
-            Assert.Equal(DriveTransport.Rclone, loaded.Drive.Transport);
-            Assert.Equal("", loaded.Drive.FolderPath);
-            Assert.Equal("gdrive:X", loaded.Drive.RcloneRemote);
+            Assert.Equal(DestinationKind.Rclone, Dr(loaded).Kind);
+            Assert.Equal("", Dr(loaded).FolderPath);
+            Assert.Equal("gdrive:X", Dr(loaded).RcloneRemote);
         }
         finally { File.Delete(path); }
     }
@@ -363,7 +373,7 @@ public class BackupConfigTests
                 """);
 
             var loaded = BackupConfig.Load(path);
-            Assert.Equal("", loaded.Drive.FolderPath);
+            Assert.Equal("", Dr(loaded).FolderPath);
         }
         finally { File.Delete(path); }
     }
@@ -375,7 +385,7 @@ public class BackupConfigTests
     public void DefaultSyncProviderIsOther()
     {
         var c = BackupConfig.Default();
-        Assert.Equal(SyncProvider.Other, c.Drive.SyncProvider);
+        Assert.Equal(SyncProvider.Other, Dr(c).SyncProvider);
     }
 
     [Fact]
@@ -385,14 +395,14 @@ public class BackupConfigTests
         try
         {
             var c = BackupConfig.Default();
-            c.Drive.Transport = DriveTransport.SyncFolder;
-            c.Drive.SyncProvider = SyncProvider.Nas;
-            c.Drive.FolderPath = @"\\192.168.1.210\media\ClaudeBackups";
+            Dr(c).Kind = DestinationKind.SyncFolder;
+            Dr(c).SyncProvider = SyncProvider.Nas;
+            Dr(c).FolderPath = @"\\192.168.1.210\media\ClaudeBackups";
             c.Save(path);
 
             var back = BackupConfig.Load(path);
-            Assert.Equal(SyncProvider.Nas, back.Drive.SyncProvider);
-            Assert.Equal(@"\\192.168.1.210\media\ClaudeBackups", back.Drive.FolderPath);
+            Assert.Equal(SyncProvider.Nas, Dr(back).SyncProvider);
+            Assert.Equal(@"\\192.168.1.210\media\ClaudeBackups", Dr(back).FolderPath);
         }
         finally { File.Delete(path); }
     }
@@ -402,7 +412,7 @@ public class BackupConfigTests
     // and FolderPath but no SyncProvider property at all - must load with
     // SyncProvider defaulting to Other, not throw and not silently guess a
     // provider (that guessing is SyncProviderInference's job, and it is
-    // display-only - see SettingsForm.InitialDestinationIndex).
+    // display-only).
     [Fact]
     public void MissingSyncProviderFieldDefaultsToOther()
     {
@@ -419,15 +429,15 @@ public class BackupConfigTests
                 """);
 
             var loaded = BackupConfig.Load(path);
-            Assert.Equal(SyncProvider.Other, loaded.Drive.SyncProvider);
-            Assert.Equal(DriveTransport.SyncFolder, loaded.Drive.Transport);
-            Assert.Equal(@"\\192.168.1.210\media", loaded.Drive.FolderPath);
+            Assert.Equal(SyncProvider.Other, Dr(loaded).SyncProvider);
+            Assert.Equal(DestinationKind.SyncFolder, Dr(loaded).Kind);
+            Assert.Equal(@"\\192.168.1.210\media", Dr(loaded).FolderPath);
         }
         finally { File.Delete(path); }
     }
 
     // An out-of-range SyncProvider value (a hand-edited or future-version
-    // file) must be reset to Other by Normalize, mirroring Transport's own
+    // file) must be reset to Other by Normalize, mirroring Kind's own
     // out-of-range guard just below.
     [Fact]
     public void OutOfRangeSyncProviderValueIsNormalizedToOtherOnLoad()
@@ -445,14 +455,14 @@ public class BackupConfigTests
                 """);
 
             var loaded = BackupConfig.Load(path);
-            Assert.Equal(SyncProvider.Other, loaded.Drive.SyncProvider);
+            Assert.Equal(SyncProvider.Other, Dr(loaded).SyncProvider);
         }
         finally { File.Delete(path); }
     }
 
     // An out-of-range Transport value (a hand-edited or future-version file)
-    // must be reset to Rclone by Normalize rather than reaching
-    // BackupRunner's transport switch as an undefined enum value.
+    // must be reset to Rclone by Normalize rather than reaching a
+    // destination's Kind as an undefined enum value.
     [Fact]
     public void OutOfRangeTransportValueIsNormalizedToRcloneOnLoad()
     {
@@ -469,7 +479,7 @@ public class BackupConfigTests
                 """);
 
             var loaded = BackupConfig.Load(path);
-            Assert.Equal(DriveTransport.Rclone, loaded.Drive.Transport);
+            Assert.Equal(DestinationKind.Rclone, Dr(loaded).Kind);
         }
         finally { File.Delete(path); }
     }
@@ -481,10 +491,15 @@ public class BackupConfigTests
 /// Include/Exclude non-empty) must migrate that ONE selection onto BOTH
 /// destinations exactly once, and a file already at the current shape must
 /// be left alone.
+///
+/// S17c: rewritten off the now-deleted <c>BackupConfig.Github</c>/<c>Drive</c>
+/// shim - see <see cref="BackupConfigTests"/>' own remarks.
 /// </summary>
 public class BackupConfigMigrationTests
 {
     private static string TempPath() => Path.Combine(Path.GetTempPath(), $"bkcfg-migrate-{Guid.NewGuid():N}.json");
+    private static BackupDestination Gh(BackupConfig c) => c.Destinations.First(d => d.Id == "github");
+    private static BackupDestination Dr(BackupConfig c) => c.Destinations.First(d => d.Id == "drive");
 
     // Hand-written, not built via BackupConfig.Default() + Save(): this must
     // reproduce exactly the JSON shape a pre-S5 backup.json actually had on
@@ -511,10 +526,10 @@ public class BackupConfigMigrationTests
 
             var loaded = BackupConfig.Load(path);
 
-            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, loaded.Github.Include);
-            Assert.Equal(new[] { "projects/**" }, loaded.Github.Exclude);
-            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, loaded.Drive.Include);
-            Assert.Equal(new[] { "projects/**" }, loaded.Drive.Exclude);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, Gh(loaded).Include);
+            Assert.Equal(new[] { "projects/**" }, Gh(loaded).Exclude);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, Dr(loaded).Include);
+            Assert.Equal(new[] { "projects/**" }, Dr(loaded).Exclude);
             Assert.Empty(loaded.Include);
             Assert.Empty(loaded.Exclude);
             Assert.Equal(BackupConfig.CurrentBackupConfigVersion, loaded.BackupConfigVersion);
@@ -523,7 +538,7 @@ public class BackupConfigMigrationTests
             // reflect the migrated shape, not just the in-memory object.
             var onDisk = BackupConfig.Load(path);
             Assert.Equal(BackupConfig.CurrentBackupConfigVersion, onDisk.BackupConfigVersion);
-            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, onDisk.Github.Include);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, Gh(onDisk).Include);
         }
         finally { File.Delete(path); }
     }
@@ -541,9 +556,9 @@ public class BackupConfigMigrationTests
             Assert.Equal(BackupConfig.CurrentBackupConfigVersion, first.BackupConfigVersion);
 
             // Customize GitHub's selection only, independently of Drive, and
-            // save - simulating a user editing the Backup tab after
+            // save - simulating a user editing a destination after
             // upgrading.
-            first.Github.Include = new() { "settings.json", "CLAUDE.md", "agents/**" };
+            Gh(first).Include = new() { "settings.json", "CLAUDE.md", "agents/**" };
             first.Save(path);
 
             // A second Load() must not re-run the legacy-copy branch (the
@@ -552,8 +567,8 @@ public class BackupConfigMigrationTests
             // legacy lists are empty, but critically it also must not
             // silently overwrite the customization with anything stale.
             var second = BackupConfig.Load(path);
-            Assert.Equal(new[] { "settings.json", "CLAUDE.md", "agents/**" }, second.Github.Include);
-            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, second.Drive.Include);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md", "agents/**" }, Gh(second).Include);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, Dr(second).Include);
             Assert.Equal(BackupConfig.CurrentBackupConfigVersion, second.BackupConfigVersion);
         }
         finally { File.Delete(path); }
@@ -588,8 +603,8 @@ public class BackupConfigMigrationTests
 
             var loaded = BackupConfig.Load(path);
 
-            Assert.Equal(new[] { "github-only.txt" }, loaded.Github.Include);
-            Assert.Equal(new[] { "drive-only.txt" }, loaded.Drive.Include);
+            Assert.Equal(new[] { "github-only.txt" }, Gh(loaded).Include);
+            Assert.Equal(new[] { "drive-only.txt" }, Dr(loaded).Include);
             Assert.Equal(BackupConfig.CurrentBackupConfigVersion, loaded.BackupConfigVersion);
         }
         finally { File.Delete(path); }
@@ -620,8 +635,8 @@ public class BackupConfigMigrationTests
 
             var loaded = BackupConfig.Load(path);
 
-            Assert.Empty(loaded.Github.Include);
-            Assert.Empty(loaded.Drive.Include);
+            Assert.Empty(Gh(loaded).Include);
+            Assert.Empty(Dr(loaded).Include);
         }
         finally { File.Delete(path); }
     }
@@ -672,10 +687,6 @@ public class BackupConfigMigrationTests
             Assert.Equal(SyncProvider.OneDrive, drive.SyncProvider);
             Assert.Equal(new[] { "CLAUDE.md" }, drive.Include);
             Assert.Equal(5, drive.KeepLastCount);
-
-            // The shim still reads back exactly what the list now holds.
-            Assert.Equal("git@github.com:me/repo.git", loaded.Github.RemoteUrl);
-            Assert.Equal(DriveTransport.SyncFolder, loaded.Drive.Transport);
         }
         finally { File.Delete(path); }
     }
@@ -778,6 +789,23 @@ public class BackupConfigMigrationTests
             File.WriteAllText(path, "{ not valid json ][");
             var corrupt = BackupConfig.Load(path);
             Assert.Equal(2, corrupt.Destinations.Count);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // S17c: a v2 file no longer carries the legacy top-level "Github"/
+    // "Drive" JSON keys at all once resaved - the shim that used to keep
+    // writing them out (as inert duplication of Destinations) is gone.
+    [Fact]
+    public void SavedV2FileNoLongerContainsLegacyTopLevelGithubOrDriveKeys()
+    {
+        var path = TempPath();
+        try
+        {
+            BackupConfig.Default().Save(path);
+            var json = File.ReadAllText(path);
+            Assert.DoesNotContain("\"Github\"", json);
+            Assert.DoesNotContain("\"Drive\"", json);
         }
         finally { File.Delete(path); }
     }

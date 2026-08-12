@@ -8,12 +8,10 @@ public class BackupStatusWriterTests
 {
     private static string TempPath() => Path.Combine(Path.GetTempPath(), $"bkstatus-{Guid.NewGuid():N}.json");
 
-    // S17a: RecordUnhandledException now reads BackupConfig.Destinations (the
-    // real N-destination list) rather than the Github/Drive shim - see
-    // BackupConfig.Github's own doc comment for why the shim only syncs into
-    // Destinations on Save()/Load(), not on plain object-initializer
-    // construction. Building the config via Destinations directly here is
-    // the realistic S17a shape.
+    // S17a: RecordUnhandledException reads BackupConfig.Destinations (the
+    // real N-destination list) - the Github/Drive shim it used to read via
+    // was deleted entirely in S17c. Building the config via Destinations
+    // directly here is the realistic shape.
     private static BackupConfig ConfigWithGithubDriveEnabled(bool githubEnabled, bool driveEnabled) => new()
     {
         Destinations = new()

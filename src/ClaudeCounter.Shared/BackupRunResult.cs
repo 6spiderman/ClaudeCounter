@@ -48,8 +48,10 @@ public sealed record DestinationAttempt(bool Enabled, bool Attempted, bool Succe
 /// and the Github/Drive convenience read accessors that used to live here -
 /// BackupRunner.RunDetailed now builds <see cref="Attempts"/> directly over
 /// N destinations, and BackupRunnerTests (the only other caller of the
-/// 3-arg shape) was migrated alongside it. Unlike BackupConfig.Github/Drive,
-/// nothing outside those two files ever read this type's shim, so there was
-/// no reason to keep it.
+/// 3-arg shape) was migrated alongside it. At the time, BackupConfig kept
+/// its own analogous Github/Drive shim a while longer (SettingsForm still
+/// mutated it in place); S17c later deleted that one too, once SettingsForm
+/// was restructured to read/write BackupConfig.Destinations directly - see
+/// BackupConfig's own history for that shim's full story.
 /// </summary>
 public sealed record BackupRunResult(int ExitCode, IReadOnlyDictionary<string, DestinationAttempt> Attempts);

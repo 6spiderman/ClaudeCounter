@@ -8,10 +8,9 @@ public class BackupHealthTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
 
-    // S17a: BackupHealth.Evaluate now iterates BackupConfig.Destinations
-    // directly (not the Github/Drive shim, which only syncs into
-    // Destinations on Save()/Load() - see BackupConfig.Github's own doc
-    // comment) - so tests build destinations directly too.
+    // S17a: BackupHealth.Evaluate iterates BackupConfig.Destinations
+    // directly (the Github/Drive shim it used to read via was deleted
+    // entirely in S17c) - so tests build destinations directly too.
     private static BackupConfig Config(bool githubEnabled = false, bool driveEnabled = false, DriveTransport driveTransport = DriveTransport.Rclone) => new()
     {
         Destinations = new()
