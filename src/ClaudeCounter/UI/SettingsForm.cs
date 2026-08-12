@@ -1,4 +1,3 @@
-using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ClaudeBackup;
@@ -28,70 +27,6 @@ public sealed class SettingsForm : Form
         ("hourly", "Hourly"),
     ];
 
-    /// <summary>
-    /// One entry per item in the Backup tab's "Back up to" selector (S16
-    /// design: named backup destinations, replacing the old two nested
-    /// dropdowns - see BuildBackupPage's own doc comment). GitHub is its own
-    /// row; the other five all describe the SAME underlying Drive slot
-    /// (DriveTarget has one Transport/FolderPath/RcloneRemote/SyncProvider,
-    /// not five) - picking one of them just picks what that slot's Transport
-    /// and, for the sync-folder transport, SyncProvider should be. Kept as a
-    /// single source of truth (index i's label IS item i in the ComboBox)
-    /// rather than parallel arrays matched only by SelectedIndex, mirroring
-    /// BackupFrequencies just above.
-    /// </summary>
-    private readonly record struct BackupDestinationOption(string Label, bool IsGithub, DriveTransport Transport, SyncProvider Provider);
-
-    private static readonly BackupDestinationOption[] BackupDestinationOptions =
-    [
-        new("GitHub", true, DriveTransport.Rclone, SyncProvider.Other),
-        new("Google Drive (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.GoogleDrive),
-        new("OneDrive (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.OneDrive),
-        new("Dropbox (sync folder)", false, DriveTransport.SyncFolder, SyncProvider.Dropbox),
-        new("NAS / network share", false, DriveTransport.SyncFolder, SyncProvider.Nas),
-        new("rclone remote (advanced)", false, DriveTransport.Rclone, SyncProvider.Other),
-    ];
-
-    /// <summary>
-    /// Picks which item of <see cref="BackupDestinationOptions"/> the "Back
-    /// up to" selector should open on for <paramref name="config"/>. Public
-    /// and static (no Form) for the same reason as <see
-    /// cref="HasEmbeddedCredential"/> further down: this project's tests
-    /// never construct a Form except via the dedicated STA smoke-test
-    /// helper. Mirrors the old selector's own tie-break - GitHub wins when
-    /// it is enabled, or when neither destination is enabled - and then, for
-    /// Drive, reads its Transport (and, for the sync-folder transport, its
-    /// SyncProvider - inferring one from FolderPath via <see
-    /// cref="SyncProviderInference"/> when SyncProvider is still Other, e.g.
-    /// a backup.json written by the pre-S16 build) to land on the matching
-    /// item.
-    /// </summary>
-    public static int InitialDestinationIndex(BackupConfig config)
-    {
-        if (config.Github.Enabled || !config.Drive.Enabled)
-            return 0;
-
-        if (config.Drive.Transport != DriveTransport.SyncFolder)
-            return 5; // rclone remote (advanced)
-
-        var provider = config.Drive.SyncProvider == SyncProvider.Other
-            ? SyncProviderInference.InferFromPath(config.Drive.FolderPath)
-            : config.Drive.SyncProvider;
-
-        return provider switch
-        {
-            SyncProvider.OneDrive => 2,
-            SyncProvider.Dropbox => 3,
-            SyncProvider.Nas => 4,
-            // GoogleDrive, or Other (an unrecognised path) - Google Drive
-            // was the original combined "Sync folder" transport's first/
-            // default entry, so it is the least surprising fallback rather
-            // than inventing a sixth "Custom folder" item the design brief
-            // never asked for.
-            _ => 1,
-        };
-    }
-
     // Shared explicitly rather than relying on ambient Font inheritance: pages
     // are measured (PreferredHeight / GetPreferredSize) before they are ever
     // attached to the form's control tree, and an unattached control's ambient
@@ -112,7 +47,6 @@ public sealed class SettingsForm : Form
     private const int FieldX = 230;
     private const int RowGap = 8;
     private const int LabelYOffset = 4;
-    private const int InfoButtonSize = 16;
 
     // No longer `readonly`: these are now assigned from the per-tab Build*Page
     // helper methods rather than directly in the constructor body, and C# only
@@ -142,52 +76,13 @@ public sealed class SettingsForm : Form
     // instead. Do not add a reference to ClaudeBackup.csproj here; it drags the
     // worker's RID-specific publish graph into the tray's single-file publish
     // and breaks it.
-    // S5, fix round 1: GitHub's and Drive's connection fields plus their own
-    // Include/Exclude now live in two separate blocks (see BuildGithubBlock /
-    // BuildDriveBlock) that are both always constructed, with only one ever
-    // Visible - _backupDestination (S16: one flat "Back up to" list of named
-    // destinations) controls which. Every field below is therefore a
-    // genuinely separate Control per destination (not a single shared
-    // control whose content gets swapped), so OnSaveBackupSchedule can read
-    // both destinations' values directly at any time regardless of which
-    // block currently happens to be on screen.
-    private CheckBox? _backupGithubEnabled;
-    private TextBox? _backupGithubUrl;
-    private TextBox? _backupGithubBranch;
-    private TextBox? _backupGithubInclude;
-    private TextBox? _backupGithubExclude;
-    private CheckBox? _backupDriveEnabled;
-    private TextBox? _backupDriveFolderPath;
-    private TextBox? _backupDriveRemote;
-    private TextBox? _backupDriveInclude;
-    private TextBox? _backupDriveExclude;
-    private ComboBox? _backupDestination;
-    private Panel? _backupGithubBlock;
-    private Panel? _backupDriveBlock;
-
-    // S16: replaces the old nested "Transport" dropdown - the top-level
-    // _backupDestination selector now encodes the Drive slot's transport AND
-    // (for the sync-folder transport) which named provider it is directly,
-    // so there is no separate control to read either back from. But
-    // _backupDestination's own SelectedIndex is not enough on its own to
-    // recover "what should be saved for Drive" at save time, because GitHub
-    // is one of the SAME selector's items now - picking GitHub must not
-    // forget whatever the Drive slot was last set to. These two fields are
-    // that memory: seeded from the loaded config, and updated only when the
-    // user picks one of the selector's non-GitHub items (see
-    // OnBackupDestinationChanged) - never touched while GitHub is selected,
-    // so switching to GitHub and back leaves them exactly as they were.
-    private DriveTransport _backupDriveTransportSelection;
-    private SyncProvider _backupDriveSyncProviderSelection;
-    // S14b: the sync-folder-path row and the rclone-remote row occupy the
-    // SAME y-range within the Drive block and are never both visible at
-    // once - same "two blocks, one Visible" swap _backupGithubBlock/
-    // _backupDriveBlock already use one level up, just nested one level
-    // deeper (within Drive's own block) so adding the sync-folder transport
-    // costs no extra dialog height beyond whichever row is taller. See
-    // BuildDriveBlock.
-    private Panel? _backupDriveFolderRow;
-    private Panel? _backupDriveRcloneRow;
+    // S17c: the Backup tab no longer builds per-destination connection
+    // fields at all (GitHub/Drive blocks, transport rows, ...) - that whole
+    // area moved into BackupDestinationEditDialog, opened from
+    // BackupDestinationsDialog ("Manage destinations..." below). The tab
+    // keeps only a compact read-only summary (see _destinationsSummary) and
+    // the shared schedule controls.
+    private ListView? _destinationsSummary;
     private ComboBox? _backupFrequency;
     private TextBox? _backupTime;
 
@@ -210,16 +105,6 @@ public sealed class SettingsForm : Form
     // Advanced dialog's OK, read back in OnSaveBackupSchedule" shape as every
     // other schedule field above.
     private int _scheduleBackupStaleAfterDays = 3;
-    private int? _driveKeepLastCount;
-    private int? _driveDeleteOlderThanDays;
-
-    // Backs every per-field (i) popup on the Backup tab. A single shared
-    // instance (not one per button) because ToolTip.Show already positions
-    // and dismisses independently per call; only created when the Backup tab
-    // is (BackupTaskManager.WorkerAvailable()), and disposed in Dispose below
-    // since it is a Component, not a Control, and would otherwise outlive the
-    // form's own Controls.Clear()-driven cleanup.
-    private ToolTip? _helpTip;
 
     // Test-isolation seam (S17-fix): every BackupConfig.Load/Save call in
     // this class goes through this field instead of calling
@@ -234,9 +119,31 @@ public sealed class SettingsForm : Form
     // passes a GUID-suffixed temp path here instead.
     private readonly string _backupConfigPath;
 
-    public SettingsForm(AppSettings current, string? backupConfigPath = null)
+    // S17c: same seam as _backupConfigPath, for backup-status.json - added
+    // now because the Backup tab's read-only destination summary (and
+    // BackupDestinationsDialog's Remove flow, which calls
+    // BackupStatus.RemoveDestination) both need to read/write it, and
+    // neither may ever touch the real %LOCALAPPDATA% path from a test - see
+    // SettingsFormSmokeTests.SuiteNeverTouchesTheRealBackupConfigOrStatusFiles,
+    // the guard test this seam keeps passing.
+    private readonly string _backupStatusPath;
+
+    /// <summary>
+    /// Fires whenever BackupDestinationsDialog reports that it actually
+    /// persisted a change (add/edit/remove) - see that dialog's own
+    /// <c>Changed</c> property. TrayApplicationContext subscribes to this so
+    /// it can re-evaluate backup health PROMPTLY instead of waiting up to
+    /// PollIntervalMinutes for the next scheduled poll - without this, a
+    /// removed (or newly-failing) destination's tray badge would linger
+    /// until the next poll fired, which is exactly the "the badge lingers
+    /// and the user thinks it failed" outcome the task brief calls out.
+    /// </summary>
+    public event Action? BackupDestinationsChanged;
+
+    public SettingsForm(AppSettings current, string? backupConfigPath = null, string? backupStatusPath = null)
     {
         _backupConfigPath = backupConfigPath ?? BackupConfig.DefaultPath();
+        _backupStatusPath = backupStatusPath ?? BackupStatus.DefaultPath();
         var palette = Theme.Current();
 
         Text = "ClaudeCounter Settings";
@@ -499,29 +406,19 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// Destination selector, Frequency/Time, action buttons - all shared,
-    /// visible regardless of which destination is selected. The GitHub and
-    /// Drive connection fields (enable checkbox, remote URL/branch or rclone
-    /// remote) plus that destination's own Include/Exclude live in two
-    /// separate blocks (see BuildGithubBlock / BuildDriveBlock) that are
-    /// both built and added to the page up front, but only one is ever
-    /// Visible at a time - see OnBackupDestinationChanged. Fix round 1: this
-    /// used to show BOTH destinations' connection fields simultaneously with
-    /// only the Include/Exclude boxes switching, which made the Backup tab
-    /// tall enough (705px) to run off the bottom of a 1366x768 display at
-    /// 100% DPI. Showing only one destination's fields at a time both fixes
-    /// the height and makes "which destination am I editing" unambiguous
-    /// without any extra dynamic labeling - the visible block IS the answer.
-    ///
-    /// S16: the selector itself (_backupDestination) went from two nested
-    /// dropdowns ("Editing settings for": GitHub/Drive, then, only once
-    /// "Drive" was picked, a second "Transport" dropdown) to one flat,
-    /// named-destination list - see BackupDestinationOptions. The word
-    /// "OneDrive" (or "NAS") now appears directly in the list the user
-    /// actually picks from, which is the whole point of this change: a user
-    /// asked for OneDrive/NAS backup could not find either word anywhere in
-    /// Settings before this, because both were hidden a level down inside a
-    /// generic "Drive" destination's own transport choice.
+    /// S17c: the destination summary, Frequency/Time, and action buttons -
+    /// everything the Backup tab keeps once "Manage destinations..." took
+    /// over every per-destination connection field (GitHub/Drive blocks,
+    /// transport rows, the old "Back up to" selector and its hard "GitHub
+    /// plus one cloud/NAS destination" limit - see BackupDestinationsDialog
+    /// and BackupDestinationEditDialog). Fix round 1 originally measured
+    /// this tab at 705px with both destinations' connection fields always
+    /// visible; S16 brought that down to 684px by showing only one block at
+    /// a time behind a selector; moving every per-destination field into its
+    /// own dialog altogether removes that whole area from this tab's height
+    /// budget instead of merely economizing on it - see
+    /// SettingsFormHeightStaysWithinTheDisplayBudget for the re-measured
+    /// number.
     ///
     /// Only called when BackupTaskManager.WorkerAvailable() - current values
     /// are loaded from _backupConfigPath (BackupConfig.DefaultPath() for
@@ -533,7 +430,6 @@ public sealed class SettingsForm : Form
         var page = new Panel { Dock = DockStyle.Fill, BackColor = palette.Back, Visible = false };
         var y = PageTopY;
         var fullWidth = DialogWidth - PagePadX * 2;
-        var rightEdgeX = PagePadX + fullWidth - InfoButtonSize;
 
         // S7/S8: seed the Advanced dialog's backing fields from the loaded
         // config up front - BuildBackupPage runs once per SettingsForm, so
@@ -548,19 +444,6 @@ public sealed class SettingsForm : Form
         _scheduleRestartIntervalMinutes = config.Schedule.RestartIntervalMinutes;
         _scheduleRestartCount = config.Schedule.RestartCount;
         _scheduleBackupStaleAfterDays = config.Schedule.BackupStaleAfterDays;
-        _driveKeepLastCount = config.Drive.KeepLastCount;
-        _driveDeleteOlderThanDays = config.Drive.DeleteOlderThanDays;
-
-        // Shared by every (i) button below - manual Show() calls, not
-        // hover-triggered, so the button controls when it appears; it never
-        // steals focus (a ToolTip window is never activatable) and is themed
-        // to match the dialog rather than falling back to OS tooltip colors.
-        _helpTip = new ToolTip
-        {
-            BackColor = palette.BarBack,
-            ForeColor = palette.Fore,
-            ShowAlways = true,
-        };
 
         var helpButton = NewFlatButton("Help", palette);
         helpButton.Location = new Point(PagePadX + fullWidth - helpButton.Width, y);
@@ -571,73 +454,56 @@ public sealed class SettingsForm : Form
         };
         page.Controls.Add(helpButton);
 
-        // S7/S8: schedule-robustness and Drive-retention settings do not fit
-        // as plain rows within the Backup tab's display budget (see the
-        // design spec's layout constraint) - a single button placed inline
-        // beside the existing Help button (same NewFlatButton type, so it
-        // adds no extra row height - unlike placing it beside the shorter
-        // destination combo box, which was measured to push the tab's
-        // height to 686px, a single pixel under the 687px budget) opens
-        // BackupAdvancedDialog instead of adding any new row.
+        // S7/S8: schedule-robustness and backup-health-staleness settings do
+        // not fit as plain rows within the Backup tab's display budget (see
+        // the design spec's layout constraint) - a single button placed
+        // inline beside the existing Help button (same NewFlatButton type,
+        // so it adds no extra row height) opens BackupAdvancedDialog instead
+        // of adding any new row.
         var advancedButton = NewFlatButton("Advanced...", palette);
         advancedButton.Location = new Point(helpButton.Left - 8 - advancedButton.Width, y);
         advancedButton.Click += (_, _) => OnOpenAdvancedDialog(palette);
         page.Controls.Add(advancedButton);
         y += helpButton.Height + RowGap;
 
-        var selectorLabel = NewSectionLabel("Back up to", palette, y);
-        page.Controls.Add(selectorLabel);
-        y += selectorLabel.PreferredHeight + 2;
+        var summaryLabel = NewSectionLabel("Backup destinations", palette, y);
+        page.Controls.Add(summaryLabel);
+        y += summaryLabel.PreferredHeight + 2;
 
-        // S16: one named-destination list replaces the old two nested
-        // dropdowns (an "Editing settings for" GitHub/Drive picker, with a
-        // second "Transport" dropdown only shown once "Drive" was picked) -
-        // see BackupDestinationOptions and InitialDestinationIndex. Falls
-        // back to GitHub (index 0) when neither destination is enabled,
-        // exactly the same tie-break the old selector used.
-        var initialIndex = InitialDestinationIndex(config);
+        // S17c: compact, read-only - name, kind, enabled, last-run health -
+        // fixed height regardless of how many destinations are configured
+        // (scrolls internally, like RestoreDialog's own snapshot list),
+        // never AutoScroll on the page itself. Populated by
+        // RefreshDestinationsSummary, which BuildBackupPage calls once here
+        // and OnManageDestinationsClicked calls again after the dialog
+        // closes, so a destination added/edited/removed there is reflected
+        // immediately without reopening Settings.
+        _destinationsSummary = new ListView
+        {
+            View = View.Details,
+            FullRowSelect = true,
+            HideSelection = false,
+            Location = new Point(PagePadX, y),
+            Size = new Size(fullWidth, 90),
+            Font = BaseFont,
+            BackColor = palette.Back,
+            ForeColor = palette.Fore,
+            BorderStyle = BorderStyle.FixedSingle,
+        };
+        _destinationsSummary.Columns.Add("Name", 150);
+        _destinationsSummary.Columns.Add("Kind", 140);
+        _destinationsSummary.Columns.Add("Enabled", 60);
+        _destinationsSummary.Columns.Add("Last run", fullWidth - 150 - 140 - 60);
+        page.Controls.Add(_destinationsSummary);
+        y += _destinationsSummary.Height + 2;
 
-        _backupDestination = NewCombo(palette, 250);
-        _backupDestination.Location = new Point(PagePadX, y);
-        foreach (var option in BackupDestinationOptions)
-            _backupDestination.Items.Add(option.Label);
-        _backupDestination.SelectedIndex = initialIndex;
-        page.Controls.Add(_backupDestination);
-        y += _backupDestination.Height;
+        var manageButton = NewFlatButton("Manage destinations...", palette);
+        manageButton.Location = new Point(PagePadX, y);
+        manageButton.Click += (_, _) => OnManageDestinationsClicked(palette);
+        page.Controls.Add(manageButton);
+        y += manageButton.Height + RowGap;
 
-        // Say the one-at-a-time rule plainly, right where the choice is made -
-        // GitHub plus exactly one cloud/NAS destination can be active; this
-        // is not a bug, but it must never be discovered by surprise. Kept to
-        // one short line (see the design note on this dialog's tight height
-        // budget) - the full rationale lives in the Help guide.
-        var oneAtATimeNote = NewSubtleLabel(
-            "GitHub + one cloud/NAS destination at a time; picking another replaces it.",
-            palette, fullWidth);
-        oneAtATimeNote.Location = new Point(PagePadX, y);
-        page.Controls.Add(oneAtATimeNote);
-        y += oneAtATimeNote.PreferredHeight;
-
-        var initialOption = BackupDestinationOptions[initialIndex];
-        _backupDriveTransportSelection = config.Drive.Transport;
-        _backupDriveSyncProviderSelection = config.Drive.SyncProvider;
-
-        var (githubBlock, githubBlockHeight) = BuildGithubBlock(config.Github, config.SourceRoot, palette, fullWidth, rightEdgeX);
-        var (driveBlock, driveBlockHeight) = BuildDriveBlock(config.Drive, config.SourceRoot, palette, fullWidth, rightEdgeX);
-        githubBlock.Location = new Point(0, y);
-        driveBlock.Location = new Point(0, y);
-        githubBlock.Visible = initialOption.IsGithub;
-        driveBlock.Visible = !initialOption.IsGithub;
-        // Both blocks are added regardless of the selector's starting value -
-        // only Visible toggles thereafter - so every control inside both
-        // (including the ones not currently shown) is fully constructed and
-        // reachable by OnSaveBackupSchedule the whole time the dialog is
-        // open, not just while its block happens to be on screen.
-        page.Controls.Add(driveBlock);
-        page.Controls.Add(githubBlock);
-        _backupGithubBlock = githubBlock;
-        _backupDriveBlock = driveBlock;
-        _backupDestination.SelectedIndexChanged += (_, _) => OnBackupDestinationChanged(palette);
-        y += Math.Max(githubBlockHeight, driveBlockHeight) + RowGap;
+        RefreshDestinationsSummary();
 
         page.Controls.Add(NewFieldLabel("Frequency", palette, y));
         _backupFrequency = NewCombo(palette, 130);
@@ -685,352 +551,72 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// GitHub's connection fields (enable, remote URL, privacy caption,
-    /// branch) plus GitHub's own Include/Exclude. A plain Panel (not
-    /// Dock = Fill) sized to exactly its own content, positioned by the
-    /// caller (BuildBackupPage) at the shared Y where the destination
-    /// blocks begin - its children use the same PagePadX/FieldX offsets
-    /// every other page uses, since the panel's own Location.X is 0 and
-    /// therefore does not shift their absolute position.
+    /// S17c: opens BackupDestinationsDialog against the SAVED backup.json/
+    /// backup-status.json (same "operate on disk, not on this form's
+    /// possibly-unsaved state" rule OnOpenRestoreDialog and
+    /// RunBackupNowAsync already follow) - every Add/Edit/Remove inside that
+    /// dialog persists immediately on its own, independent of this dialog's
+    /// own OK/Cancel, mirroring "Save and register schedule"'s existing
+    /// independence from the outer dialog. After it closes, the read-only
+    /// summary is refreshed regardless of whether anything changed (cheap),
+    /// and - only when the dialog reports <c>Changed</c> - <see
+    /// cref="BackupDestinationsChanged"/> fires so a subscriber (the tray)
+    /// can re-evaluate backup health promptly instead of waiting for its
+    /// next scheduled poll.
     /// </summary>
-    private (Panel Block, int Height) BuildGithubBlock(GitTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
+    private void OnManageDestinationsClicked(Palette palette)
     {
-        var block = new Panel { BackColor = palette.Back };
-        var y = 0;
-
-        _backupGithubEnabled = NewCheckBox("Back up to a GitHub repo", target.Enabled, palette);
-        _backupGithubEnabled.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupGithubEnabled);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.GithubEnabled);
-        y += _backupGithubEnabled.Height + RowGap;
-
-        var urlLabel = NewSectionLabel("Remote URL", palette, y);
-        block.Controls.Add(urlLabel);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.RemoteUrl);
-        y += urlLabel.PreferredHeight + 2;
-
-        _backupGithubUrl = NewTextBox(target.RemoteUrl, palette, fullWidth);
-        _backupGithubUrl.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupGithubUrl);
-        y += _backupGithubUrl.Height + RowGap;
-
-        // I2: the security model's non-negotiable guardrail - ClaudeCounter
-        // has no way to call the GitHub API and check a repo's visibility, so
-        // it cannot enforce privacy. The one thing it can do is make sure the
-        // user is not left assuming it was checked for them.
-        var privacyCaption = NewSubtleLabel(
-            "This repo must be private. ClaudeCounter cannot verify that automatically.",
-            palette, fullWidth);
-        privacyCaption.Location = new Point(PagePadX, y);
-        block.Controls.Add(privacyCaption);
-        y += privacyCaption.PreferredHeight + RowGap;
-
-        block.Controls.Add(NewFieldLabel("Branch", palette, y));
-        _backupGithubBranch = NewTextBox(target.Branch, palette, 130);
-        _backupGithubBranch.Location = new Point(FieldX, y);
-        block.Controls.Add(_backupGithubBranch);
-        AddInfoButton(block, palette, FieldX + 130 + 8, y + 3, BackupHelpText.Branch);
-        y += _backupGithubBranch.Height + RowGap;
-
-        var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
-        block.Controls.Add(includeLabel);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
-        var chooseGithubButton = AddChooseFilesButton(
-            block, palette, "GitHub", sourceRoot, () => _backupGithubInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
-        y += Math.Max(includeLabel.PreferredHeight, chooseGithubButton.Height) + 2;
-        _backupGithubInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
-        _backupGithubInclude.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupGithubInclude);
-        y += _backupGithubInclude.Height + RowGap;
-
-        var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
-        block.Controls.Add(excludeLabel);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Exclude);
-        y += excludeLabel.PreferredHeight + 2;
-        _backupGithubExclude = NewTextBox(string.Join(Environment.NewLine, target.Exclude), palette, fullWidth, multiline: true, height: 55);
-        _backupGithubExclude.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupGithubExclude);
-        y += _backupGithubExclude.Height + RowGap;
-
-        block.Size = new Size(fullWidth + PagePadX * 2, y);
-        return (block, y);
+        using var dialog = new BackupDestinationsDialog(palette, _backupConfigPath, _backupStatusPath);
+        dialog.ShowDialog(this);
+        RefreshDestinationsSummary();
+        if (dialog.Changed)
+            BackupDestinationsChanged?.Invoke();
     }
 
     /// <summary>
-    /// Drive's connection fields (enable checkbox, then EITHER the
-    /// sync-folder path row OR the rclone-remote row depending on the
-    /// top-level "Back up to" selection) plus Drive's own Include/Exclude.
-    /// See BuildGithubBlock's doc comment for the general layout reasoning.
-    ///
-    /// S14b: the transport row-swap (BuildSyncFolderRow / BuildRcloneRow) is
-    /// a nested instance of the exact same "both built, only one Visible"
-    /// pattern BuildBackupPage already uses for
-    /// _backupGithubBlock/_backupDriveBlock - both row panels are always
-    /// fully constructed (so OnSaveBackupSchedule can read either one's
-    /// controls regardless of which is on screen), and the space reserved
-    /// below them is Math.Max(folderRowHeight, rcloneRowHeight), so swapping
-    /// costs no more dialog height than whichever row happens to be taller.
-    ///
-    /// S16: what used to toggle that swap - this block's own "Transport"
-    /// ComboBox - is gone. The row-swap is now driven by
-    /// OnBackupDestinationChanged, reacting to the top-level "Back up to"
-    /// selector in BuildBackupPage instead - one flat selector instead of
-    /// two nested ones, but the same swap mechanics underneath.
+    /// Repopulates <see cref="_destinationsSummary"/> from whatever is
+    /// currently saved on disk - called once by BuildBackupPage and again by
+    /// OnManageDestinationsClicked after the destinations dialog closes, so
+    /// an add/edit/remove there is reflected here immediately without
+    /// reopening Settings.
     /// </summary>
-    private (Panel Block, int Height) BuildDriveBlock(DriveTarget target, string sourceRoot, Palette palette, int fullWidth, int rightEdgeX)
+    private void RefreshDestinationsSummary()
     {
-        var block = new Panel { BackColor = palette.Back };
-        var y = 0;
+        var config = BackupConfig.Load(_backupConfigPath);
+        var status = BackupStatus.Load(_backupStatusPath);
 
-        // S16: "Back up to this destination", not "Back up to Drive" - the
-        // "Back up to" selector above now names the destination directly
-        // (Google Drive / OneDrive / Dropbox / NAS / rclone remote), so a
-        // second, generic "Drive" label here would just be redundant noise
-        // next to it rather than adding information.
-        _backupDriveEnabled = NewCheckBox("Back up to this destination", target.Enabled, palette);
-        _backupDriveEnabled.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupDriveEnabled);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.DriveEnabled);
-        y += _backupDriveEnabled.Height + RowGap;
-
-        // S16: no more "Transport" combo here - the top-level "Back up to"
-        // selector (BuildBackupPage) now IS the transport choice, so this
-        // block only needs to show whichever row that selection implies.
-        // Initial visibility still comes from the loaded target.Transport
-        // (matches _backupDriveTransportSelection's own initial value, set
-        // by BuildBackupPage from the same config); OnBackupDestinationChanged
-        // takes over from there whenever the user changes the selector.
-        var (folderRow, folderRowHeight) = BuildSyncFolderRow(target, palette, fullWidth, rightEdgeX);
-        var (rcloneRow, rcloneRowHeight) = BuildRcloneRow(target, palette);
-        var showSyncFolder = target.Transport == DriveTransport.SyncFolder;
-        folderRow.Location = new Point(0, y);
-        rcloneRow.Location = new Point(0, y);
-        folderRow.Visible = showSyncFolder;
-        rcloneRow.Visible = !showSyncFolder;
-        // Both rows are added regardless of the starting transport - only
-        // Visible toggles thereafter - mirroring BuildBackupPage's own
-        // comment on githubBlock/driveBlock.
-        block.Controls.Add(rcloneRow);
-        block.Controls.Add(folderRow);
-        _backupDriveFolderRow = folderRow;
-        _backupDriveRcloneRow = rcloneRow;
-        y += Math.Max(folderRowHeight, rcloneRowHeight) + RowGap;
-
-        var includeLabel = NewSectionLabel("Include (one pattern per line)", palette, y);
-        block.Controls.Add(includeLabel);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Include);
-        // "Drive", not the currently-picked destination's own name - this is
-        // only a picker dialog title, captured once in a closure at
-        // construction time, so it cannot track a later change to the "Back
-        // up to" selector above either.
-        var chooseDriveButton = AddChooseFilesButton(
-            block, palette, "Drive", sourceRoot, () => _backupDriveInclude!, rightEdgeX - InfoButtonSize - 8, y - 3);
-        y += Math.Max(includeLabel.PreferredHeight, chooseDriveButton.Height) + 2;
-        _backupDriveInclude = NewTextBox(string.Join(Environment.NewLine, target.Include), palette, fullWidth, multiline: true, height: 55);
-        _backupDriveInclude.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupDriveInclude);
-        y += _backupDriveInclude.Height + RowGap;
-
-        var excludeLabel = NewSectionLabel("Exclude (one pattern per line)", palette, y);
-        block.Controls.Add(excludeLabel);
-        AddInfoButton(block, palette, rightEdgeX, y, BackupHelpText.Exclude);
-        y += excludeLabel.PreferredHeight + 2;
-        _backupDriveExclude = NewTextBox(string.Join(Environment.NewLine, target.Exclude), palette, fullWidth, multiline: true, height: 55);
-        _backupDriveExclude.Location = new Point(PagePadX, y);
-        block.Controls.Add(_backupDriveExclude);
-        y += _backupDriveExclude.Height + RowGap;
-
-        block.Size = new Size(fullWidth + PagePadX * 2, y);
-        return (block, y);
-    }
-
-    /// <summary>
-    /// The sync-folder transport's own row: a "Sync folder path" label with
-    /// Browse... and Detect... inline on the SAME row (mirrors
-    /// AddChooseFilesButton's "button inline on the label row, not a row of
-    /// its own" trick - see that method's doc comment on why the Backup
-    /// tab's height budget makes this matter), then the path textbox on the
-    /// row below. A plain Panel positioned by the caller (BuildDriveBlock)
-    /// at 0,0 - like every other block/row Panel in this file, its
-    /// children's absolute X coordinates (PagePadX, FieldX, ...) are
-    /// unaffected by the panel's own Location.
-    /// </summary>
-    private (Panel Row, int Height) BuildSyncFolderRow(DriveTarget target, Palette palette, int fullWidth, int rightEdgeX)
-    {
-        var row = new Panel { BackColor = palette.Back };
-        var y = 0;
-
-        var label = NewSectionLabel("Sync folder path", palette, y);
-        row.Controls.Add(label);
-        AddInfoButton(row, palette, rightEdgeX, y, BackupHelpText.SyncFolder);
-
-        var detectButton = NewFlatButton("Detect...", palette);
-        var browseButton = NewFlatButton("Browse...", palette);
-        detectButton.Location = new Point(rightEdgeX - InfoButtonSize - 8 - detectButton.Width, y - 3);
-        browseButton.Location = new Point(detectButton.Left - 8 - browseButton.Width, y - 3);
-        detectButton.Click += (_, _) => OnDetectSyncFolder(palette);
-        browseButton.Click += (_, _) => OnBrowseSyncFolder();
-        row.Controls.Add(detectButton);
-        row.Controls.Add(browseButton);
-        y += Math.Max(label.PreferredHeight, Math.Max(detectButton.Height, browseButton.Height)) + 2;
-
-        _backupDriveFolderPath = NewTextBox(target.FolderPath, palette, fullWidth);
-        _backupDriveFolderPath.Location = new Point(PagePadX, y);
-        row.Controls.Add(_backupDriveFolderPath);
-        y += _backupDriveFolderPath.Height + RowGap;
-
-        row.Size = new Size(fullWidth + PagePadX * 2, y);
-        return (row, y);
-    }
-
-    /// <summary>
-    /// The rclone transport's own row: exactly the pre-S14b "Rclone remote"
-    /// label + textbox + info button, just extracted into its own Panel so
-    /// it can swap visibility against BuildSyncFolderRow's panel instead of
-    /// always being on screen.
-    /// </summary>
-    private (Panel Row, int Height) BuildRcloneRow(DriveTarget target, Palette palette)
-    {
-        var row = new Panel { BackColor = palette.Back };
-        var y = 0;
-
-        row.Controls.Add(NewFieldLabel("Rclone remote", palette, y));
-        _backupDriveRemote = NewTextBox(target.RcloneRemote, palette, 130);
-        _backupDriveRemote.Location = new Point(FieldX, y);
-        row.Controls.Add(_backupDriveRemote);
-        AddInfoButton(row, palette, FieldX + 130 + 8, y + 3, BackupHelpText.RcloneRemote);
-        y += _backupDriveRemote.Height + RowGap;
-
-        row.Size = new Size(FieldX + 130 + 8 + InfoButtonSize, y);
-        return (row, y);
-    }
-
-    /// <summary>
-    /// Opens a standard FolderBrowserDialog seeded from the textbox's
-    /// current (possibly unsaved) text when that text is itself an existing
-    /// directory, matching AddChooseFilesButton's "seed from what is on
-    /// screen, not from disk" rule. On Cancel the textbox is untouched.
-    /// </summary>
-    private void OnBrowseSyncFolder()
-    {
-        using var dialog = new FolderBrowserDialog
+        _destinationsSummary!.Items.Clear();
+        foreach (var destination in config.Destinations)
         {
-            Description = "Choose a folder your sync client (Google Drive, OneDrive, Dropbox) or NAS already watches.",
-            UseDescriptionForTitle = true,
-        };
-        if (Directory.Exists(_backupDriveFolderPath!.Text.Trim()))
-            dialog.SelectedPath = _backupDriveFolderPath.Text.Trim();
-
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            _backupDriveFolderPath.Text = dialog.SelectedPath;
-    }
-
-    /// <summary>
-    /// S14b: the biggest usability win of the sync-folder transport - runs
-    /// SyncFolderScanner.Detect() (never throws - see its own doc comment)
-    /// and lets the user pick from whatever it found via
-    /// SyncFolderDetectDialog, rather than making them go find the path
-    /// themselves. On Cancel, or when the dialog is dismissed without a
-    /// selection, the textbox is left untouched.
-    ///
-    /// S16: scoped to whichever destination is currently selected (via
-    /// SyncFolderScanner.FilterByProvider) rather than offering every
-    /// candidate found on the machine - picking "OneDrive" and then clicking
-    /// Detect... again (e.g. after signing into a sync client that was not
-    /// set up yet when Settings was first opened) should only ever offer
-    /// OneDrive candidates, not a Dropbox or NAS one the user did not ask
-    /// for here. Retained as a standalone button alongside the automatic
-    /// detect-on-select (see OnBackupDestinationChanged/AutoDetectForProvider)
-    /// rather than folded away entirely, specifically for this re-detect
-    /// case - the automatic version only runs once, at the moment the
-    /// selector changes.
-    /// </summary>
-    private void OnDetectSyncFolder(Palette palette)
-    {
-        var provider = BackupDestinationOptions[_backupDestination!.SelectedIndex].Provider;
-        var candidates = SyncFolderScanner.FilterByProvider(SyncFolderScanner.Detect(), provider);
-        using var dialog = new SyncFolderDetectDialog(palette, candidates);
-        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedPath is { } path)
-            _backupDriveFolderPath!.Text = path;
-    }
-
-    /// <summary>
-    /// S16: fires whenever the user changes the "Back up to" selector (never
-    /// during construction - BuildBackupPage sets SelectedIndex before
-    /// wiring this handler, exactly like the old two-dropdown version did,
-    /// so opening Settings on an already-configured destination never
-    /// re-triggers detection or clears anything). Swaps which block/row is
-    /// visible, and - only when the newly-picked option is a sync-folder
-    /// destination - updates the two "what should be saved for Drive"
-    /// memory fields and runs auto-detection for it. Picking GitHub leaves
-    /// _backupDriveTransportSelection/_backupDriveSyncProviderSelection (and
-    /// the folder-path/rclone-remote textboxes) exactly as they were, so
-    /// switching to GitHub and back changes nothing about the Drive slot.
-    /// </summary>
-    private void OnBackupDestinationChanged(Palette palette)
-    {
-        var option = BackupDestinationOptions[_backupDestination!.SelectedIndex];
-        _backupGithubBlock!.Visible = option.IsGithub;
-        _backupDriveBlock!.Visible = !option.IsGithub;
-        if (option.IsGithub)
-            return;
-
-        _backupDriveTransportSelection = option.Transport;
-        var showSyncFolder = option.Transport == DriveTransport.SyncFolder;
-        _backupDriveFolderRow!.Visible = showSyncFolder;
-        _backupDriveRcloneRow!.Visible = !showSyncFolder;
-
-        if (!showSyncFolder)
-            return; // rclone remote (advanced): no auto-detection for this one.
-
-        _backupDriveSyncProviderSelection = option.Provider;
-        AutoDetectForProvider(option.Provider, palette);
-    }
-
-    /// <summary>
-    /// S16: the whole point of naming the destinations - selecting OneDrive/
-    /// Google Drive/Dropbox/NAS should do the path-finding work for the user
-    /// instead of making them go find it themselves (mirrors Detect...'s own
-    /// reasoning above, just triggered by the selection itself). Exactly one
-    /// match is applied directly; zero matches clears the box rather than
-    /// leaving a PREVIOUS destination's now-mismatched path sitting there -
-    /// never invents a path either; more than one match opens the same
-    /// SyncFolderDetectDialog Detect... uses, scoped to this provider, so
-    /// the user picks rather than this silently guessing - on Cancel the box
-    /// is left exactly as it was, the same as every other
-    /// Cancel-leaves-it-alone control in this dialog.
-    /// </summary>
-    private void AutoDetectForProvider(SyncProvider provider, Palette palette)
-    {
-        var candidates = SyncFolderScanner.FilterByProvider(SyncFolderScanner.Detect(), provider);
-        switch (candidates.Count)
-        {
-            case 0:
-                _backupDriveFolderPath!.Text = "";
-                break;
-            case 1:
-                _backupDriveFolderPath!.Text = candidates[0].Path;
-                break;
-            default:
-                using (var dialog = new SyncFolderDetectDialog(palette, candidates))
-                {
-                    if (dialog.ShowDialog(this) == DialogResult.OK && dialog.SelectedPath is { } path)
-                        _backupDriveFolderPath!.Text = path;
-                }
-                break;
+            _destinationsSummary.Items.Add(new ListViewItem(new[]
+            {
+                destination.Name,
+                BackupDestinationNaming.KindDisplayName(destination.Kind, destination.SyncProvider),
+                destination.Enabled ? "Yes" : "No",
+                LastRunSummary(status.For(destination.Id)),
+            }));
         }
+    }
+
+    private static string LastRunSummary(DestinationStatus status)
+    {
+        if (status.LastAttemptUtc is null)
+            return "Never run";
+        if (status.LastOutcome == BackupOutcome.Failed)
+            return "Failed";
+        return status.LastSuccessUtc is { } last
+            ? $"OK - {ClaudeCounter.Core.TimeText.Ago(last, DateTimeOffset.UtcNow)}"
+            : "Never run";
     }
 
     /// <summary>
     /// S7/S8: opens BackupAdvancedDialog seeded from the current in-memory
-    /// values of the schedule-robustness and Drive-retention fields (which
-    /// themselves start out seeded from disk in BuildBackupPage), and on
-    /// DialogResult.OK writes the dialog's result back onto those same
-    /// fields. On Cancel (or closing via Esc/the X button), nothing changes -
-    /// mirrors AddChooseFilesButton's Cancel-leaves-the-box-untouched
-    /// behaviour for the same reason. Nothing is persisted here; like every
-    /// other Backup tab field, that only happens when "Save and register
-    /// schedule" is clicked (see OnSaveBackupSchedule).
+    /// values of the schedule-robustness fields (which themselves start out
+    /// seeded from disk in BuildBackupPage), and on DialogResult.OK writes
+    /// the dialog's result back onto those same fields. On Cancel (or
+    /// closing via Esc/the X button), nothing changes. Nothing is persisted
+    /// here; like every other Backup tab field, that only happens when "Save
+    /// and register schedule" is clicked (see OnSaveBackupSchedule).
     /// </summary>
     private void OnOpenAdvancedDialog(Palette palette)
     {
@@ -1045,13 +631,8 @@ public sealed class SettingsForm : Form
             RestartCount = _scheduleRestartCount,
             BackupStaleAfterDays = _scheduleBackupStaleAfterDays,
         };
-        var drive = new DriveTarget
-        {
-            KeepLastCount = _driveKeepLastCount,
-            DeleteOlderThanDays = _driveDeleteOlderThanDays,
-        };
 
-        using var dialog = new BackupAdvancedDialog(palette, schedule, drive);
+        using var dialog = new BackupAdvancedDialog(palette, schedule);
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
 
@@ -1063,8 +644,6 @@ public sealed class SettingsForm : Form
         _scheduleRestartIntervalMinutes = dialog.RestartIntervalMinutes;
         _scheduleRestartCount = dialog.RestartCount;
         _scheduleBackupStaleAfterDays = dialog.BackupStaleAfterDays;
-        _driveKeepLastCount = dialog.KeepLastCount;
-        _driveDeleteOlderThanDays = dialog.DeleteOlderThanDays;
     }
 
     /// <summary>
@@ -1074,78 +653,26 @@ public sealed class SettingsForm : Form
     /// same way for the same reason: "Back up now" launches ClaudeBackup.exe,
     /// which itself only ever reads backup.json from disk, so restore
     /// operating on the same saved snapshot of config keeps both actions
-    /// consistent with each other. Refuses to even open the dialog when
-    /// neither destination is enabled, rather than leaving RestoreDialog to
-    /// show an empty "no destination" state - a quick, purely informational
+    /// consistent with each other. Refuses to even open the dialog when no
+    /// destination is enabled, rather than leaving RestoreDialog to show an
+    /// empty "no destination" state - a quick, purely informational
     /// MessageBox reads better than an empty dialog for the common case
     /// (nothing configured yet) this guards against.
     /// </summary>
     private void OnOpenRestoreDialog(Palette palette)
     {
         var config = BackupConfig.Load(_backupConfigPath);
-        if (!config.Github.Enabled && !config.Drive.Enabled)
+        if (!config.Destinations.Any(d => d.Enabled))
         {
-            // Transport-neutral - mirrors RestoreDialog's identical "neither
-            // destination enabled" message (see its own comment there).
             MessageBox.Show(this,
-                "No backup destination is enabled. Enable and configure GitHub or Drive backup first.",
+                "No backup destination is enabled. Add and enable one first, via " +
+                "\"Manage destinations...\" on the Backup tab.",
                 "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         using var dialog = new RestoreDialog(palette, config, new ProcessRunner());
         dialog.ShowDialog(this);
-    }
-
-    /// <summary>
-    /// Adds a small themed info button at (x, y) that shows <paramref
-    /// name="text"/> in the shared _helpTip on click. Only called from
-    /// BuildBackupPage (directly) and BuildGithubBlock/BuildDriveBlock
-    /// (for a block Panel), both of which run after BuildBackupPage has
-    /// created _helpTip.
-    /// </summary>
-    private void AddInfoButton(Panel page, Palette palette, int x, int y, string text)
-    {
-        var button = new InfoButton(palette) { Location = new Point(x, y) };
-        button.Click += (_, _) => _helpTip!.Show(text, button, button.Width + 4, 0, 15000);
-        page.Controls.Add(button);
-    }
-
-    /// <summary>
-    /// S6: adds a "Choose files..." button, right-aligned to end at
-    /// <paramref name="rightX"/>, that opens BackupPickerDialog scoped to
-    /// ONE destination's own Include list - GitHub and Drive each get their
-    /// own call, with their own <paramref name="destinationName"/> (shown in
-    /// the picker's title, per the design spec) and their own Include
-    /// textbox. Seeded from the textbox's CURRENT (possibly unsaved) text,
-    /// not from disk, so a picker opened after editing the box by hand
-    /// starts from what is actually on screen - the same "read the live
-    /// control" rule OnSaveBackupSchedule already follows. On OK, the box is
-    /// overwritten with the dialog's generated pattern list (which itself
-    /// preserves anything the tree could not represent - see
-    /// BackupTreeModel); on Cancel, the box is untouched.
-    ///
-    /// Placed inline on the existing Include label's row (see
-    /// BuildGithubBlock/BuildDriveBlock) rather than on a new row of its
-    /// own - the Backup tab's page height budget is tight enough that this
-    /// note matters (see BuildBackupPage's own doc comment history).
-    /// </summary>
-    private Button AddChooseFilesButton(
-        Panel block, Palette palette, string destinationName, string sourceRoot,
-        Func<TextBox> includeBoxAccessor, int rightX, int y)
-    {
-        var button = NewFlatButton("Choose files...", palette);
-        button.Location = new Point(rightX - button.Width, y);
-        button.Click += (_, _) =>
-        {
-            var includeBox = includeBoxAccessor();
-            var current = SplitLines(includeBox.Text);
-            using var dialog = new BackupPickerDialog(palette, destinationName, sourceRoot, current);
-            if (dialog.ShowDialog(this) == DialogResult.OK)
-                includeBox.Text = string.Join(Environment.NewLine, dialog.Include);
-        };
-        block.Controls.Add(button);
-        return button;
     }
 
     private static Label NewFieldLabel(string text, Palette palette, int y) => new()
@@ -1281,6 +808,16 @@ public sealed class SettingsForm : Form
             exitCode == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
+    /// <summary>
+    /// S17c: "Save and register schedule" now only owns the schedule itself
+    /// (Frequency/Time/Advanced) - every per-destination field (enable,
+    /// connection details, Include/Exclude, retention) is saved immediately
+    /// by BackupDestinationsDialog/BackupDestinationEditDialog the moment
+    /// each is added/edited, independent of this button. This button still
+    /// reads the freshly-saved config back from disk (not a possibly-stale
+    /// in-memory copy) purely to decide whether ANY destination is enabled,
+    /// for the register-vs-unregister decision below.
+    /// </summary>
     private void OnSaveBackupSchedule(object? sender, EventArgs e)
     {
         var time = _backupTime!.Text.Trim();
@@ -1291,77 +828,8 @@ public sealed class SettingsForm : Form
             return;
         }
 
-        var remoteUrl = _backupGithubUrl!.Text.Trim();
-        if (HasEmbeddedCredential(remoteUrl))
-        {
-            MessageBox.Show(this,
-                "Remote URL must not embed a credential (e.g. https://user:token@host/...). " +
-                "backup.json is never allowed to contain a secret - set up Git Credential " +
-                "Manager (or an SSH key) for this remote instead.",
-                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        var rcloneRemote = _backupDriveRemote!.Text.Trim();
-        if (HasLeadingDash(rcloneRemote))
-        {
-            MessageBox.Show(this,
-                "Rclone remote must not start with '-' - rclone would parse it as an option " +
-                "rather than a remote name.",
-                "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        // S5, fix round 1: GitHub's and Drive's fields are now two genuinely
-        // separate blocks of controls (both always constructed, only one
-        // ever Visible - see BuildBackupPage/BuildGithubBlock/
-        // BuildDriveBlock), so both can be read directly here regardless of
-        // which one the user currently has on screen. No flush-from-whichever-
-        // is-visible step is needed any more.
         var config = BackupConfig.Load(_backupConfigPath);
 
-        // S14b: validate the sync-folder path the same way SyncFolderBackend
-        // itself would at write time - SyncFolderPathValidator.Validate is
-        // the exact same rule set (ClaudeCounter.csproj has no
-        // ProjectReference to ClaudeBackup.csproj, so it cannot call
-        // SyncFolderBackend.ValidateFolderPath directly; both now forward to
-        // this one shared implementation - see that class's doc comment).
-        // Gated on "Drive enabled and sync-folder transport selected" rather
-        // than run unconditionally: a blank rclone remote is likewise never
-        // blocked here (BackupRunner catches that at run time instead), and
-        // the validator's own blank-path message ("...is enabled but no
-        // folder is configured") is only accurate under that same condition.
-        //
-        // S16: driveTransport/driveProvider now come from
-        // _backupDriveTransportSelection/_backupDriveSyncProviderSelection -
-        // the "Back up to" selector's own SelectedIndex is not enough on its
-        // own here, because it may currently be showing GitHub, and these
-        // two fields are exactly what remembers the Drive slot's last
-        // selection through that (see their own doc comment).
-        var driveTransport = _backupDriveTransportSelection;
-        var driveFolderPath = _backupDriveFolderPath!.Text.Trim();
-        if (_backupDriveEnabled!.Checked && driveTransport == DriveTransport.SyncFolder)
-        {
-            var folderError = SyncFolderPathValidator.Validate(driveFolderPath, config.SourceRoot);
-            if (folderError is not null)
-            {
-                MessageBox.Show(this, folderError, "ClaudeCounter", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-        }
-
-        config.Github.Enabled = _backupGithubEnabled!.Checked;
-        config.Github.RemoteUrl = remoteUrl;
-        config.Github.Branch = _backupGithubBranch!.Text.Trim();
-        config.Github.Include = SplitLines(_backupGithubInclude!.Text);
-        config.Github.Exclude = SplitLines(_backupGithubExclude!.Text);
-        config.Drive.Enabled = _backupDriveEnabled.Checked;
-        config.Drive.Transport = driveTransport;
-        config.Drive.SyncProvider = _backupDriveSyncProviderSelection;
-        config.Drive.FolderPath = driveFolderPath;
-        config.Drive.RcloneRemote = rcloneRemote;
-        config.Drive.Include = SplitLines(_backupDriveInclude!.Text);
-        config.Drive.Exclude = SplitLines(_backupDriveExclude!.Text);
         config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
         config.Schedule.Time = time;
         config.Schedule.StartWhenAvailable = _scheduleStartWhenAvailable;
@@ -1372,14 +840,12 @@ public sealed class SettingsForm : Form
         config.Schedule.RestartIntervalMinutes = _scheduleRestartIntervalMinutes;
         config.Schedule.RestartCount = _scheduleRestartCount;
         config.Schedule.BackupStaleAfterDays = _scheduleBackupStaleAfterDays;
-        config.Drive.KeepLastCount = _driveKeepLastCount;
-        config.Drive.DeleteOlderThanDays = _driveDeleteOlderThanDays;
 
         config.Save(_backupConfigPath);
 
-        // Unticking both destinations and saving must not silently recreate a
-        // task that would run a backup nobody asked for anymore.
-        var destinationEnabled = config.Github.Enabled || config.Drive.Enabled;
+        // Removing/disabling every destination and saving must not silently
+        // recreate a task that would run a backup nobody asked for anymore.
+        var destinationEnabled = config.Destinations.Any(d => d.Enabled);
         bool ok;
         string message;
         if (destinationEnabled)
@@ -1406,9 +872,6 @@ public sealed class SettingsForm : Form
         MessageBox.Show(this, message, "ClaudeCounter", MessageBoxButtons.OK,
             ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
-
-    private static List<string> SplitLines(string text) =>
-        text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     // I3: matches a URL scheme followed by a userinfo component
     // (scheme://user[:pass]@...) - the shape a credential-bearing HTTPS
@@ -1446,15 +909,6 @@ public sealed class SettingsForm : Form
         TopMost = true;
         Activate();
         TopMost = false;
-    }
-
-    // _helpTip is a Component, not a Control - it is never in the Controls
-    // tree, so nothing else disposes it. Mirrors AlertPopupForm's own
-    // Dispose override for its dismiss timer.
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing) _helpTip?.Dispose();
-        base.Dispose(disposing);
     }
 
     private void OnOk(object? sender, EventArgs e)
@@ -1565,89 +1019,4 @@ public sealed class SettingsForm : Form
         }
     }
 
-    /// <summary>
-    /// A small themed "(i)" affordance for a single Backup field's help text.
-    /// Drawn entirely with GDI+ primitives (an ellipse plus the letter "i" in
-    /// the same font already used everywhere else in this dialog) rather than
-    /// relying on the Unicode U+24D8 CIRCLED LATIN SMALL LETTER I glyph.
-    /// Chosen during implementation, not mandated by any design document: the
-    /// glyph's font coverage could not be screenshot-verified at 100/125/150%
-    /// DPI without launching the GUI, which this task's own instructions
-    /// ruled out, and a hand-drawn circle sidesteps that risk entirely rather
-    /// than gambling on it. See
-    /// docs/superpowers/specs/2026-08-10-settings-redesign.md's constraints
-    /// section for where this fallback is recorded. Click (or Enter/Space
-    /// when focused) shows the themed, non-activating ToolTip owned by the
-    /// containing SettingsForm.
-    /// </summary>
-    private sealed class InfoButton : Control
-    {
-        // Deliberately smaller and bolder than BaseFont, not just BaseFont
-        // reused: at BaseFont's 9pt the "i" glyph plus its side bearings
-        // does not comfortably fit inside a 16px circle at 100% DPI, let
-        // alone 150%.
-        private static readonly Font InfoFont = new("Segoe UI", 7.5f, FontStyle.Bold);
-
-        private readonly Palette _palette;
-
-        public InfoButton(Palette palette)
-        {
-            _palette = palette;
-            Size = new Size(InfoButtonSize, InfoButtonSize);
-            Font = InfoFont;
-            Cursor = Cursors.Hand;
-            TabStop = true;
-            // SupportsTransparentBackColor must be enabled BEFORE assigning a
-            // transparent BackColor, and a plain Control does not opt in by
-            // default: Control.set_BackColor throws "Control does not support
-            // transparent background colors" otherwise, which crashed the app
-            // the moment the Backup tab was built. ThemedCheckBox gets away
-            // with the same assignment only because ButtonBase opts in for it.
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
-                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable |
-                     ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent;
-        }
-
-        protected override bool IsInputKey(Keys keyData) =>
-            keyData is Keys.Enter or Keys.Space || base.IsInputKey(keyData);
-
-        protected override void OnKeyDown(KeyEventArgs e)
-        {
-            base.OnKeyDown(e);
-            if (e.KeyCode is Keys.Enter or Keys.Space)
-            {
-                e.Handled = true;
-                OnClick(EventArgs.Empty);
-            }
-        }
-
-        protected override void OnGotFocus(EventArgs e)
-        {
-            base.OnGotFocus(e);
-            Invalidate();
-        }
-
-        protected override void OnLostFocus(EventArgs e)
-        {
-            base.OnLostFocus(e);
-            Invalidate();
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            e.Graphics.Clear(Parent?.BackColor ?? _palette.Back);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-
-            var circle = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var pen = new Pen(_palette.SubtleFore))
-                e.Graphics.DrawEllipse(pen, circle);
-
-            TextRenderer.DrawText(e.Graphics, "i", Font, ClientRectangle, _palette.SubtleFore,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
-
-            if (Focused)
-                ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle);
-        }
-    }
 }

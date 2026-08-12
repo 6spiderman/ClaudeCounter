@@ -532,6 +532,18 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
         _settingsForm = new SettingsForm(_settings);
+        // S17c: BackupDestinationsDialog (opened from the Backup tab's
+        // "Manage destinations..." button) saves each add/edit/remove
+        // immediately, independent of this dialog's own OK/Cancel - so a
+        // removed (or newly broken) destination must be reflected in the
+        // tray's badge/tooltip/popup PROMPTLY, not only the next time
+        // Settings happens to close with OK (which is also when this used
+        // to run) or up to PollIntervalMinutes later at the next scheduled
+        // poll. TriggerNow() wakes the poll loop immediately; PollOnceAsync
+        // always calls Updated (see its own remarks) regardless of
+        // sign-in/network state, so OnPollUpdated's EvaluateBackupHealth
+        // re-evaluation runs even when nothing about usage changed.
+        _settingsForm.BackupDestinationsChanged += () => _polling.TriggerNow();
         if (_settingsForm.ShowDialog() == DialogResult.OK)
         {
             _settingsForm.ApplyTo(_settings);

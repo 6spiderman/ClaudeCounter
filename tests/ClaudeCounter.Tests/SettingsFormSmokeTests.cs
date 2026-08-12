@@ -36,6 +36,12 @@ public class SettingsFormSmokeTests
     private static string UniqueBackupConfigPath() =>
         Path.Combine(Path.GetTempPath(), $"settingsform-smoke-backup-{Guid.NewGuid():N}.json");
 
+    // S17c: same seam, same reasoning, for backup-status.json -
+    // RefreshDestinationsSummary (BuildBackupPage) now also calls
+    // BackupStatus.Load on construction.
+    private static string UniqueBackupStatusPath() =>
+        Path.Combine(Path.GetTempPath(), $"settingsform-smoke-status-{Guid.NewGuid():N}.json");
+
     private static Exception? ConstructOnStaThread(Func<Form> build)
     {
         Exception? captured = null;
@@ -64,7 +70,7 @@ public class SettingsFormSmokeTests
     [Fact]
     public void SettingsFormConstructsWithoutThrowing()
     {
-        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath()));
+        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath(), UniqueBackupStatusPath()));
         Assert.Null(error);
     }
 
@@ -90,7 +96,7 @@ public class SettingsFormSmokeTests
         };
         settings.Normalize();
 
-        var error = ConstructOnStaThread(() => new SettingsForm(settings, UniqueBackupConfigPath()));
+        var error = ConstructOnStaThread(() => new SettingsForm(settings, UniqueBackupConfigPath(), UniqueBackupStatusPath()));
         Assert.Null(error);
     }
 
@@ -165,15 +171,17 @@ public class SettingsFormSmokeTests
     // S7/S8: the Advanced dialog is only reachable by clicking "Advanced..."
     // on the Backup tab, so - like BackupHelpDialog and BackupPickerDialog
     // above - it would otherwise never be constructed by any test at all.
-    // Exercised with both a fresh (all-defaults) ScheduleConfig/DriveTarget
-    // and one with every optional/non-default value set, since the retry-
-    // interval and retention NumericUpDown controls are seeded from those
-    // values at construction time.
+    // Exercised with both a fresh (all-defaults) ScheduleConfig and one with
+    // every optional/non-default value set, since the retry-interval
+    // NumericUpDown controls are seeded from those values at construction
+    // time. S17c: retention moved off this dialog's own constructor (onto
+    // BackupDestinationEditDialog instead - see that dialog's own smoke
+    // tests below), so it no longer takes a DriveTarget argument.
     [Fact]
     public void BackupAdvancedDialogConstructsWithDefaultsWithoutThrowing()
     {
         var error = ConstructOnStaThread(() =>
-            new BackupAdvancedDialog(Theme.Current(), new ScheduleConfig(), new DriveTarget()));
+            new BackupAdvancedDialog(Theme.Current(), new ScheduleConfig()));
         Assert.Null(error);
     }
 
@@ -191,9 +199,8 @@ public class SettingsFormSmokeTests
             RestartCount = 5,
             BackupStaleAfterDays = 7,
         };
-        var drive = new DriveTarget { KeepLastCount = 14, DeleteOlderThanDays = 60 };
 
-        var error = ConstructOnStaThread(() => new BackupAdvancedDialog(Theme.Current(), schedule, drive));
+        var error = ConstructOnStaThread(() => new BackupAdvancedDialog(Theme.Current(), schedule));
         Assert.Null(error);
     }
 
@@ -216,7 +223,7 @@ public class SettingsFormSmokeTests
         {
             try
             {
-                using var dialog = new BackupAdvancedDialog(Theme.Current(), schedule, new DriveTarget());
+                using var dialog = new BackupAdvancedDialog(Theme.Current(), schedule);
                 _ = dialog.Handle;
                 observed = dialog.BackupStaleAfterDays;
             }
@@ -475,6 +482,16 @@ public class SettingsFormSmokeTests
     // handful of pixels of spacing directly around it (not touched
     // anywhere else in this file) brought it down to 684px - 3px of margin,
     // thinner than this suite's history but genuinely under budget.
+    //
+    // S17c: every per-destination connection field (the GitHub/Drive blocks,
+    // the transport rows, the "Back up to" selector and its one-line
+    // one-at-a-time note) moved OUT of this tab entirely, into
+    // BackupDestinationsDialog/BackupDestinationEditDialog (see
+    // SettingsForm.BuildBackupPage) - replaced by a compact, fixed-height
+    // read-only summary ListView plus a single "Manage destinations..."
+    // button. Re-measured (via this same technique) at 439px - a 245px drop
+    // from 684px, 248px of margin against the 687px budget, the largest this
+    // suite has ever recorded.
     [Fact]
     public void SettingsFormHeightStaysWithinTheDisplayBudget()
     {
@@ -500,7 +517,7 @@ public class SettingsFormSmokeTests
         {
             try
             {
-                using var form = new SettingsForm(new AppSettings(), UniqueBackupConfigPath());
+                using var form = new SettingsForm(new AppSettings(), UniqueBackupConfigPath(), UniqueBackupStatusPath());
                 _ = form.Handle; // force handle creation, same as ConstructOnStaThread
                 measuredHeight = form.ClientSize.Height;
             }
@@ -575,7 +592,7 @@ public class SettingsFormSmokeTests
         // Exercises the exact construction path every other test in this
         // class already exercises (BuildBackupPage's BackupConfig.Load call),
         // through the same injected seam.
-        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath()));
+        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath(), UniqueBackupStatusPath()));
         Assert.Null(error);
 
         if (configExisted)
@@ -596,6 +613,154 @@ public class SettingsFormSmokeTests
         else
         {
             Assert.False(File.Exists(statusPath), "backup-status.json was created by this run and must not have been.");
+        }
+    }
+
+    // --- S17c: the destinations dialog family --------------------------
+
+    // The kind picker (BackupDestinationsDialog's "Add..." first step) is
+    // only reachable that way, so - like BackupHelpDialog above - it would
+    // otherwise never be constructed by any test at all.
+    [Fact]
+    public void BackupDestinationKindDialogConstructsWithoutThrowing()
+    {
+        var error = ConstructOnStaThread(() => new BackupDestinationKindDialog(Theme.Current()));
+        Assert.Null(error);
+    }
+
+    private static string UniqueSourceRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"destination-edit-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    // BackupDestinationEditDialog builds a genuinely different set of
+    // controls per Kind (see BuildGitHubFields/BuildSyncFolderFields/
+    // BuildRcloneFields) - each is exercised once, for both the Add (isNew:
+    // true, blank seed) and Edit (isNew: false, populated seed) paths, since
+    // isNew gates the sync-folder auto-detect-on-add behaviour.
+    [Fact]
+    public void BackupDestinationEditDialogConstructsForANewGitHubDestinationWithoutThrowing()
+    {
+        var root = UniqueSourceRoot();
+        try
+        {
+            var seed = new BackupDestination { Id = BackupDestination.NewId(), Name = "GitHub", Kind = DestinationKind.GitHub };
+            var error = ConstructOnStaThread(() =>
+                new BackupDestinationEditDialog(Theme.Current(), DestinationKind.GitHub, SyncProvider.Other, root, seed, isNew: true));
+            Assert.Null(error);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void BackupDestinationEditDialogConstructsForAnExistingGitHubDestinationWithoutThrowing()
+    {
+        var root = UniqueSourceRoot();
+        try
+        {
+            var seed = new BackupDestination
+            {
+                Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true,
+                RemoteUrl = "git@example.com:org/repo.git", Branch = "main",
+                Include = new() { "settings.json" }, Exclude = new() { "projects/**" },
+            };
+            var error = ConstructOnStaThread(() =>
+                new BackupDestinationEditDialog(Theme.Current(), DestinationKind.GitHub, SyncProvider.Other, root, seed, isNew: false));
+            Assert.Null(error);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void BackupDestinationEditDialogConstructsForANewSyncFolderDestinationWithoutThrowing()
+    {
+        var root = UniqueSourceRoot();
+        try
+        {
+            var seed = new BackupDestination { Id = BackupDestination.NewId(), Name = "NAS / network share", Kind = DestinationKind.SyncFolder, SyncProvider = SyncProvider.Nas };
+            // isNew: true exercises the one-candidate auto-fill path
+            // (SyncFolderScanner.Detect against the real machine, never
+            // throws) as well as construction itself.
+            var error = ConstructOnStaThread(() =>
+                new BackupDestinationEditDialog(Theme.Current(), DestinationKind.SyncFolder, SyncProvider.Nas, root, seed, isNew: true));
+            Assert.Null(error);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void BackupDestinationEditDialogConstructsForAnExistingSyncFolderDestinationWithRetentionWithoutThrowing()
+    {
+        var root = UniqueSourceRoot();
+        try
+        {
+            var seed = new BackupDestination
+            {
+                Id = "drive", Name = "Home NAS", Kind = DestinationKind.SyncFolder, SyncProvider = SyncProvider.Nas,
+                Enabled = true, FolderPath = @"\\nas\backups", KeepLastCount = 10, DeleteOlderThanDays = 30,
+            };
+            var error = ConstructOnStaThread(() =>
+                new BackupDestinationEditDialog(Theme.Current(), DestinationKind.SyncFolder, SyncProvider.Nas, root, seed, isNew: false));
+            Assert.Null(error);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void BackupDestinationEditDialogConstructsForARcloneDestinationWithoutThrowing()
+    {
+        var root = UniqueSourceRoot();
+        try
+        {
+            var seed = new BackupDestination { Id = "rclone-1", Name = "rclone remote", Kind = DestinationKind.Rclone, RcloneRemote = "gdrive:ClaudeBackups" };
+            var error = ConstructOnStaThread(() =>
+                new BackupDestinationEditDialog(Theme.Current(), DestinationKind.Rclone, SyncProvider.Other, root, seed, isNew: false));
+            Assert.Null(error);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    // BackupDestinationsDialog is only reachable via "Manage destinations..."
+    // on the Backup tab. Exercised with zero destinations (the empty-list
+    // state) and with several, including two of the same Kind - the exact
+    // scenario the task brief's "distinguishable default names" requirement
+    // is about.
+    [Fact]
+    public void BackupDestinationsDialogConstructsWithNoDestinationsWithoutThrowing()
+    {
+        var configPath = UniqueBackupConfigPath();
+        var statusPath = UniqueBackupStatusPath();
+        var error = ConstructOnStaThread(() => new BackupDestinationsDialog(Theme.Current(), configPath, statusPath));
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void BackupDestinationsDialogConstructsWithSeveralDestinationsIncludingTwoOfTheSameKindWithoutThrowing()
+    {
+        var configPath = UniqueBackupConfigPath();
+        var statusPath = UniqueBackupStatusPath();
+        var config = new BackupConfig
+        {
+            Destinations = new()
+            {
+                new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true, RemoteUrl = "git@example.com:org/repo.git" },
+                new BackupDestination { Id = "nas-1", Name = "Home NAS", Kind = DestinationKind.SyncFolder, SyncProvider = SyncProvider.Nas, Enabled = true, FolderPath = @"\\nas1\backups" },
+                new BackupDestination { Id = "nas-2", Name = "Office NAS", Kind = DestinationKind.SyncFolder, SyncProvider = SyncProvider.Nas, Enabled = false, FolderPath = @"\\nas2\backups" },
+            },
+        };
+        config.Save(configPath);
+
+        try
+        {
+            var error = ConstructOnStaThread(() => new BackupDestinationsDialog(Theme.Current(), configPath, statusPath));
+            Assert.Null(error);
+        }
+        finally
+        {
+            if (File.Exists(configPath)) File.Delete(configPath);
+            if (File.Exists(statusPath)) File.Delete(statusPath);
         }
     }
 }
