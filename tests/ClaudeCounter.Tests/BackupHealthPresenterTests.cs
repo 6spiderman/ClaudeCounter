@@ -151,6 +151,49 @@ public class BackupHealthPresenterTests
         Assert.Contains("never succeeded", body);
     }
 
+    // S17b: with N destinations, PopupContent's "; "-joined body must not
+    // grow one clause per broken destination without limit - the popup is a
+    // small, fixed-width, unbounded-height card near the tray, not a
+    // scrollable list. Five broken destinations should name only the first
+    // three (MaxPopupDestinations) and summarize the rest with a count,
+    // rather than either truncating mid-sentence or listing all five.
+    [Fact]
+    public void PopupContentCapsTheJoinedDestinationListAndSummarizesTheRest()
+    {
+        var result = new BackupHealthResult(
+            BackupHealthState.Failed,
+            new[]
+            {
+                Failed("Dest A"), Failed("Dest B"), Failed("Dest C"), Failed("Dest D"), Failed("Dest E"),
+            });
+
+        var (_, body) = BackupHealthPresenter.PopupContent(result, Now);
+
+        Assert.Contains("Dest A", body);
+        Assert.Contains("Dest B", body);
+        Assert.Contains("Dest C", body);
+        Assert.DoesNotContain("Dest D", body);
+        Assert.DoesNotContain("Dest E", body);
+        Assert.Contains("2 more", body);
+    }
+
+    // The common case (few broken destinations) must still list everything
+    // in full - the cap must not fire below its own threshold.
+    [Fact]
+    public void PopupContentListsEveryDestinationInFullWhenAtOrBelowTheCap()
+    {
+        var result = new BackupHealthResult(
+            BackupHealthState.Failed,
+            new[] { Failed("Dest A"), Failed("Dest B"), Failed("Dest C") });
+
+        var (_, body) = BackupHealthPresenter.PopupContent(result, Now);
+
+        Assert.Contains("Dest A", body);
+        Assert.Contains("Dest B", body);
+        Assert.Contains("Dest C", body);
+        Assert.DoesNotContain("more", body);
+    }
+
     // --- ShouldNotify ----------------------------------------------------------
 
     // Repeated polls in the same state must not re-fire.

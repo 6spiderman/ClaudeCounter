@@ -33,6 +33,14 @@ public static class BackupHealthPresenter
     /// the caller appends this line LAST, after the guaranteed Session/Week
     /// lines, so if the budget clamp has to cut anything, it cuts this line
     /// rather than a usage number.
+    ///
+    /// S17b: this stays a single state-label line - never a per-destination
+    /// join - specifically so it stays O(1) in destination count and can
+    /// never itself threaten the 127-char budget no matter how many
+    /// destinations are configured; see TooltipLineStaysShort in
+    /// BackupHealthPresenterTests for the pin. Contrast <see
+    /// cref="PopupContent"/>, which DOES join per-destination detail and
+    /// does need an explicit cap for N destinations.
     /// </summary>
     public static string? TooltipLine(BackupHealthResult? result) =>
         result is null || !result.State.WarrantsAttention() ? null : $"Backup: {StateLabel(result.State)}";
@@ -60,6 +68,23 @@ public static class BackupHealthPresenter
     }
 
     /// <summary>
+    /// Upper bound on how many unhealthy destinations <see
+    /// cref="PopupContent"/> names in its body (S17b). Two hardcoded
+    /// destinations could never produce more than two clauses in the "; "
+    /// join below, so this never mattered before; with N destinations the
+    /// popup - a small, fixed-width, chrome-less card meant to be read at a
+    /// glance near the tray, not a scrollable list (see AlertPopupForm's
+    /// body Label: AutoSize with MaximumSize height 0, i.e. unbounded - it
+    /// grows to fit whatever text it is given) - would otherwise grow one
+    /// line per broken destination with no cap at all. Capped at 3: enough
+    /// to name the common case (one or two failures) in full, with the
+    /// flyout (<see cref="FlyoutLines"/>, always complete, no cap) as the
+    /// place to see every unhealthy destination when there are more than
+    /// this.
+    /// </summary>
+    private const int MaxPopupDestinations = 3;
+
+    /// <summary>
     /// Title/body for the one-per-transition popup (see <see
     /// cref="ShouldNotify"/> - the caller only invokes this on an actual
     /// transition, never on every poll).
@@ -75,9 +100,22 @@ public static class BackupHealthPresenter
         };
 
         var broken = result.Destinations.Where(d => d.State != DestinationHealthState.Healthy).ToList();
-        var body = broken.Count == 0
-            ? $"Backup is {StateLabel(result.State)}."
-            : string.Join("; ", broken.Select(d => $"{d.Name}: {DestinationDetail(d, now)}")) + ".";
+        string body;
+        if (broken.Count == 0)
+        {
+            body = $"Backup is {StateLabel(result.State)}.";
+        }
+        else
+        {
+            // S17b: cap the join at MaxPopupDestinations - see that
+            // constant's own doc comment - and summarize whatever is left
+            // rather than silently dropping it, so a user with many
+            // destinations still knows there is more to see (in the flyout)
+            // instead of assuming the popup already named everything wrong.
+            var shown = string.Join("; ", broken.Take(MaxPopupDestinations).Select(d => $"{d.Name}: {DestinationDetail(d, now)}"));
+            var remaining = broken.Count - MaxPopupDestinations;
+            body = remaining > 0 ? $"{shown}; and {remaining} more - see the tray for details." : $"{shown}.";
+        }
         return (title, body);
     }
 
