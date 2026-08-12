@@ -6,22 +6,29 @@ namespace ClaudeCounter.UI;
 /// The Backup tab's "Advanced..." dialog: schedule-robustness settings
 /// (StartWhenAvailable, network/battery behaviour, retry on failure - see
 /// BackupTaskManager.BuildTaskXml, which is what actually encodes these into
-/// the registered task) and Google Drive retention (KeepLastCount /
-/// DeleteOlderThanDays on DriveTarget - see DriveRetention and
-/// RcloneBackend). Both sets of settings do not fit as plain rows on the
-/// Backup tab itself - see docs/superpowers/specs/2026-08-10-schedule-
-/// robustness-and-retention.md's layout constraint and
+/// the registered task) and the backup-health staleness threshold. These
+/// settings do not fit as plain rows on the Backup tab itself - see
+/// docs/superpowers/specs/2026-08-10-schedule-robustness-and-retention.md's
+/// layout constraint and
 /// SettingsFormSmokeTests.SettingsFormHeightStaysWithinTheDisplayBudget -
 /// so they live behind this separate dialog instead, opened from a single
-/// "Advanced..." button placed inline on the Backup tab's destination-
-/// selector row (see SettingsForm.BuildBackupPage).
+/// "Advanced..." button on the Backup tab (see SettingsForm.BuildBackupPage).
+///
+/// S17c: retention (KeepLastCount/DeleteOlderThanDays) moved OUT of this
+/// dialog and onto <see cref="BackupDestinationEditDialog"/> - it used to
+/// live here back when there was exactly one Drive destination to configure
+/// it for; now that a config can hold any number of sync-folder/rclone
+/// destinations, each with its own retention, a single shared "Drive
+/// retention" section here would no longer mean anything unambiguous. See
+/// BackupDestinationEditDialog's own retention section for where it lives
+/// now.
 ///
 /// A thin, largely non-branching shell around plain CheckBox/NumericUpDown
 /// state, like BackupHelpDialog and BackupPickerDialog - the caller
 /// (SettingsForm) reads the result properties after ShowDialog() returns
-/// DialogResult.OK and writes them onto ScheduleConfig / DriveTarget itself;
-/// this dialog owns no config type and does not save anything on its own.
-/// Never construct this (or any Form) from a test except via
+/// DialogResult.OK and writes them onto ScheduleConfig itself; this dialog
+/// owns no config type and does not save anything on its own. Never
+/// construct this (or any Form) from a test except via
 /// SettingsFormSmokeTests' dedicated STA helper.
 /// </summary>
 public sealed class BackupAdvancedDialog : Form
@@ -40,10 +47,6 @@ public sealed class BackupAdvancedDialog : Form
     private readonly NumericUpDown _restartIntervalMinutes;
     private readonly NumericUpDown _restartCount;
     private readonly NumericUpDown _backupStaleAfterDays;
-    private readonly ThemedCheckBox _keepLastEnabled;
-    private readonly NumericUpDown _keepLastCount;
-    private readonly ThemedCheckBox _deleteOlderEnabled;
-    private readonly NumericUpDown _deleteOlderDays;
 
     public bool StartWhenAvailable => _startWhenAvailable.Checked;
     public bool RunOnlyIfNetworkAvailable => _runOnlyIfNetworkAvailable.Checked;
@@ -56,13 +59,7 @@ public sealed class BackupAdvancedDialog : Form
     /// <summary>S11b: 0 means never warn about staleness - see ScheduleConfig.BackupStaleAfterDays's own doc comment.</summary>
     public int BackupStaleAfterDays => (int)_backupStaleAfterDays.Value;
 
-    /// <summary>Null when the "Keep only the most recent" checkbox is unticked - the rule is off.</summary>
-    public int? KeepLastCount => _keepLastEnabled.Checked ? (int)_keepLastCount.Value : null;
-
-    /// <summary>Null when the "Delete backups older than" checkbox is unticked - the rule is off.</summary>
-    public int? DeleteOlderThanDays => _deleteOlderEnabled.Checked ? (int)_deleteOlderDays.Value : null;
-
-    public BackupAdvancedDialog(Palette palette, ScheduleConfig schedule, DriveTarget drive)
+    public BackupAdvancedDialog(Palette palette, ScheduleConfig schedule)
     {
         Text = "Advanced Backup Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -75,7 +72,6 @@ public sealed class BackupAdvancedDialog : Form
         ForeColor = palette.Fore;
         KeyPreview = true;
 
-        var fullWidth = DialogWidth - Pad * 2;
         var y = Pad;
 
         var scheduleHeader = NewSectionLabel("Schedule robustness", palette, y, bold: true);
@@ -165,59 +161,6 @@ public sealed class BackupAdvancedDialog : Form
         Controls.Add(_backupStaleAfterDays);
         y += _backupStaleAfterDays.Height + RowGap;
 
-        y += 6;
-        // "Drive retention" (not "Google Drive retention") - the retention
-        // settings below apply to KeepLastCount/DeleteOlderThanDays on
-        // DriveTarget regardless of which transport is selected (see
-        // RcloneBackend and SyncFolderBackend, which both apply the same
-        // DriveRetention logic), so this header is transport-neutral by
-        // construction, not just by choice.
-        var driveHeader = NewSectionLabel("Drive retention", palette, y, bold: true);
-        Controls.Add(driveHeader);
-        y += driveHeader.PreferredHeight + 2;
-
-        var driveNote = NewSubtleLabel(
-            "When both are ticked, a backup is pruned if EITHER rule would remove it. " +
-            "The single most recent backup is never deleted, whatever these settings say.",
-            palette, fullWidth);
-        driveNote.Location = new Point(Pad, y);
-        Controls.Add(driveNote);
-        y += driveNote.PreferredHeight + RowGap;
-
-        _keepLastEnabled = NewCheckBox("Keep only the most recent", drive.KeepLastCount.HasValue, palette);
-        _keepLastEnabled.Location = new Point(Pad, y);
-        Controls.Add(_keepLastEnabled);
-
-        _keepLastCount = NewNumeric(palette, 1, 3650, drive.KeepLastCount ?? 30);
-        _keepLastCount.Location = new Point(_keepLastEnabled.Right + 6, y - 2);
-        Controls.Add(_keepLastCount);
-
-        var keepLastLabel = NewSectionLabel("backup(s)", palette, y);
-        keepLastLabel.Location = new Point(_keepLastCount.Right + 6, y + 4);
-        Controls.Add(keepLastLabel);
-
-        y += _keepLastEnabled.Height + RowGap;
-
-        _keepLastEnabled.CheckedChanged += (_, _) => _keepLastCount.Enabled = _keepLastEnabled.Checked;
-        _keepLastCount.Enabled = _keepLastEnabled.Checked;
-
-        _deleteOlderEnabled = NewCheckBox("Delete backups older than", drive.DeleteOlderThanDays.HasValue, palette);
-        _deleteOlderEnabled.Location = new Point(Pad, y);
-        Controls.Add(_deleteOlderEnabled);
-
-        _deleteOlderDays = NewNumeric(palette, 1, 3650, drive.DeleteOlderThanDays ?? 90);
-        _deleteOlderDays.Location = new Point(_deleteOlderEnabled.Right + 6, y - 2);
-        Controls.Add(_deleteOlderDays);
-
-        var deleteOlderLabel = NewSectionLabel("day(s)", palette, y);
-        deleteOlderLabel.Location = new Point(_deleteOlderDays.Right + 6, y + 4);
-        Controls.Add(deleteOlderLabel);
-
-        y += _deleteOlderEnabled.Height + RowGap;
-
-        _deleteOlderEnabled.CheckedChanged += (_, _) => _deleteOlderDays.Enabled = _deleteOlderEnabled.Checked;
-        _deleteOlderDays.Enabled = _deleteOlderEnabled.Checked;
-
         var bottomBar = new Panel { Dock = DockStyle.Bottom, Height = BottomBarHeight, BackColor = palette.BarBack };
         bottomBar.Controls.Add(new Panel
         {
@@ -258,16 +201,6 @@ public sealed class BackupAdvancedDialog : Form
         ForeColor = palette.Fore,
         BackColor = Color.Transparent,
         Location = new Point(Pad, y),
-    };
-
-    private static Label NewSubtleLabel(string text, Palette palette, int maxWidth) => new()
-    {
-        Text = text,
-        AutoSize = true,
-        Font = new Font("Segoe UI", 9f),
-        MaximumSize = new Size(maxWidth, 0),
-        ForeColor = palette.SubtleFore,
-        BackColor = Color.Transparent,
     };
 
     private static ThemedCheckBox NewCheckBox(string text, bool @checked, Palette palette) => new(palette)
