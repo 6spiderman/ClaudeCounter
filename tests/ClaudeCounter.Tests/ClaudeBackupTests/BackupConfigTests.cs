@@ -625,4 +625,160 @@ public class BackupConfigMigrationTests
         }
         finally { File.Delete(path); }
     }
+
+    // S17a: a v1 file (per-destination Include/Exclude already exist, but no
+    // "Destinations" array at all - this is what every real machine has on
+    // disk right now, e.g. after S16) must migrate Github/Drive into
+    // Destinations under the well-known "github"/"drive" ids, preserving
+    // every field - connection info, selection, Kind derived from Transport.
+    [Fact]
+    public void V1TwoDestinationConfigMigratesIntoDestinationListWithWellKnownIds()
+    {
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "SourceRoot": "C:\\Users\\test\\.claude",
+                  "Include": [],
+                  "Exclude": [],
+                  "Github": { "Enabled": true, "RemoteUrl": "git@github.com:me/repo.git", "Branch": "main",
+                              "Include": ["settings.json"], "Exclude": ["projects/**"] },
+                  "Drive": { "Enabled": true, "RcloneRemote": "gdrive:X", "Transport": 1,
+                             "FolderPath": "D:\\SyncFolder", "SyncProvider": 2,
+                             "Include": ["CLAUDE.md"], "Exclude": [], "KeepLastCount": 5 },
+                  "Schedule": { "Frequency": "daily", "Time": "09:00" },
+                  "BackupConfigVersion": 1
+                }
+                """);
+
+            var loaded = BackupConfig.Load(path);
+
+            Assert.Equal(BackupConfig.CurrentBackupConfigVersion, loaded.BackupConfigVersion);
+            Assert.Equal(2, loaded.Destinations.Count);
+
+            var github = loaded.Destinations.Single(d => d.Id == "github");
+            Assert.Equal(DestinationKind.GitHub, github.Kind);
+            Assert.True(github.Enabled);
+            Assert.Equal("git@github.com:me/repo.git", github.RemoteUrl);
+            Assert.Equal("main", github.Branch);
+            Assert.Equal(new[] { "settings.json" }, github.Include);
+            Assert.Equal(new[] { "projects/**" }, github.Exclude);
+
+            var drive = loaded.Destinations.Single(d => d.Id == "drive");
+            Assert.Equal(DestinationKind.SyncFolder, drive.Kind); // Transport: 1 -> SyncFolder
+            Assert.True(drive.Enabled);
+            Assert.Equal(@"D:\SyncFolder", drive.FolderPath);
+            Assert.Equal(SyncProvider.OneDrive, drive.SyncProvider);
+            Assert.Equal(new[] { "CLAUDE.md" }, drive.Include);
+            Assert.Equal(5, drive.KeepLastCount);
+
+            // The shim still reads back exactly what the list now holds.
+            Assert.Equal("git@github.com:me/repo.git", loaded.Github.RemoteUrl);
+            Assert.Equal(DriveTransport.SyncFolder, loaded.Drive.Transport);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A file at BackupConfigVersion 0 with a non-empty legacy selection must
+    // pass through BOTH steps in one Load(): the v0->v1 copy onto
+    // Github/Drive, then the v1->v2 fold into Destinations - ending at the
+    // Destinations list carrying what used to be the shared legacy selection.
+    [Fact]
+    public void V0ConfigMigratesThroughBothStepsIntoDestinationList()
+    {
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, LegacyJson);
+
+            var loaded = BackupConfig.Load(path);
+
+            Assert.Equal(BackupConfig.CurrentBackupConfigVersion, loaded.BackupConfigVersion);
+            var github = loaded.Destinations.Single(d => d.Id == "github");
+            var drive = loaded.Destinations.Single(d => d.Id == "drive");
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, github.Include);
+            Assert.Equal(new[] { "projects/**" }, github.Exclude);
+            Assert.Equal(new[] { "settings.json", "CLAUDE.md" }, drive.Include);
+            Assert.Equal(new[] { "projects/**" }, drive.Exclude);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // A config already at the current version with a real N-destination list
+    // (including two destinations of the same Kind - explicitly allowed, see
+    // BackupDestination's own doc comment) must round-trip through Save/Load
+    // unchanged - the migration step must not fire, and every id must
+    // survive independently.
+    [Fact]
+    public void NDestinationsOfTheSameKindRoundTripThroughFile()
+    {
+        var path = TempPath();
+        try
+        {
+            var config = BackupConfig.Default();
+            config.Destinations.Add(new BackupDestination
+            {
+                Id = BackupDestination.NewId(),
+                Name = "Home NAS",
+                Kind = DestinationKind.SyncFolder,
+                Enabled = true,
+                FolderPath = @"\\nas1\backups",
+                Include = new() { "settings.json" },
+                KeepLastCount = 10,
+            });
+            config.Destinations.Add(new BackupDestination
+            {
+                Id = BackupDestination.NewId(),
+                Name = "Office NAS",
+                Kind = DestinationKind.SyncFolder,
+                Enabled = true,
+                FolderPath = @"\\nas2\backups",
+                Include = new() { "CLAUDE.md" },
+                DeleteOlderThanDays = 30,
+            });
+            config.BackupConfigVersion = BackupConfig.CurrentBackupConfigVersion;
+            config.Save(path);
+
+            var loaded = BackupConfig.Load(path);
+
+            // The two well-known destinations plus the two hand-added NAS
+            // ones - four total, two of them sharing Kind SyncFolder.
+            Assert.Equal(4, loaded.Destinations.Count);
+            var nasEntries = loaded.Destinations.Where(d => d.Name is "Home NAS" or "Office NAS").ToList();
+            Assert.Equal(2, nasEntries.Count);
+            Assert.All(nasEntries, d => Assert.Equal(DestinationKind.SyncFolder, d.Kind));
+            Assert.NotEqual(nasEntries[0].Id, nasEntries[1].Id);
+            Assert.Equal(10, nasEntries.Single(d => d.Name == "Home NAS").KeepLastCount);
+            Assert.Equal(30, nasEntries.Single(d => d.Name == "Office NAS").DeleteOlderThanDays);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // BackupDestination.NewId() must never collide in practice.
+    [Fact]
+    public void NewIdGeneratesDistinctIds()
+    {
+        Assert.NotEqual(BackupDestination.NewId(), BackupDestination.NewId());
+    }
+
+    // A missing or corrupt backup.json must still degrade to Default()
+    // (which is already at the current version, with a two-entry
+    // Destinations list) rather than throwing - unchanged contract, just
+    // reasserted against the new Destinations-bearing shape.
+    [Fact]
+    public void MissingOrCorruptFileDegradesToDefaultWithDestinationsPopulated()
+    {
+        var missing = BackupConfig.Load(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json"));
+        Assert.Equal(2, missing.Destinations.Count);
+
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, "{ not valid json ][");
+            var corrupt = BackupConfig.Load(path);
+            Assert.Equal(2, corrupt.Destinations.Count);
+        }
+        finally { File.Delete(path); }
+    }
 }
