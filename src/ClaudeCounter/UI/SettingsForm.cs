@@ -221,8 +221,22 @@ public sealed class SettingsForm : Form
     // form's own Controls.Clear()-driven cleanup.
     private ToolTip? _helpTip;
 
-    public SettingsForm(AppSettings current)
+    // Test-isolation seam (S17-fix): every BackupConfig.Load/Save call in
+    // this class goes through this field instead of calling
+    // BackupConfig.DefaultPath() directly. null (every real caller) resolves
+    // to the real %APPDATA%\ClaudeCounter\backup.json, exactly as before -
+    // production wiring is unchanged. SettingsFormSmokeTests constructs this
+    // form on an STA thread purely to prove it does not throw, but
+    // BuildBackupPage unconditionally calls BackupConfig.Load, and Load
+    // SAVES the file when it migrates a stale BackupConfigVersion - so
+    // without this seam, running the test suite on a machine with a real,
+    // stale backup.json silently rewrites it. A test that wants isolation
+    // passes a GUID-suffixed temp path here instead.
+    private readonly string _backupConfigPath;
+
+    public SettingsForm(AppSettings current, string? backupConfigPath = null)
     {
+        _backupConfigPath = backupConfigPath ?? BackupConfig.DefaultPath();
         var palette = Theme.Current();
 
         Text = "ClaudeCounter Settings";
@@ -510,11 +524,12 @@ public sealed class SettingsForm : Form
     /// generic "Drive" destination's own transport choice.
     ///
     /// Only called when BackupTaskManager.WorkerAvailable() - current values
-    /// are loaded from BackupConfig.DefaultPath().
+    /// are loaded from _backupConfigPath (BackupConfig.DefaultPath() for
+    /// every real caller - see that field's own doc comment).
     /// </summary>
     private (Panel Page, int Height) BuildBackupPage(Palette palette)
     {
-        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var config = BackupConfig.Load(_backupConfigPath);
         var page = new Panel { Dock = DockStyle.Fill, BackColor = palette.Back, Visible = false };
         var y = PageTopY;
         var fullWidth = DialogWidth - PagePadX * 2;
@@ -1067,7 +1082,7 @@ public sealed class SettingsForm : Form
     /// </summary>
     private void OnOpenRestoreDialog(Palette palette)
     {
-        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var config = BackupConfig.Load(_backupConfigPath);
         if (!config.Github.Enabled && !config.Drive.Enabled)
         {
             // Transport-neutral - mirrors RestoreDialog's identical "neither
@@ -1303,7 +1318,7 @@ public sealed class SettingsForm : Form
         // BuildDriveBlock), so both can be read directly here regardless of
         // which one the user currently has on screen. No flush-from-whichever-
         // is-visible step is needed any more.
-        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var config = BackupConfig.Load(_backupConfigPath);
 
         // S14b: validate the sync-folder path the same way SyncFolderBackend
         // itself would at write time - SyncFolderPathValidator.Validate is
@@ -1360,7 +1375,7 @@ public sealed class SettingsForm : Form
         config.Drive.KeepLastCount = _driveKeepLastCount;
         config.Drive.DeleteOlderThanDays = _driveDeleteOlderThanDays;
 
-        config.Save(BackupConfig.DefaultPath());
+        config.Save(_backupConfigPath);
 
         // Unticking both destinations and saving must not silently recreate a
         // task that would run a backup nobody asked for anymore.

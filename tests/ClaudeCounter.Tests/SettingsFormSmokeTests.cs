@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using ClaudeBackup;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
@@ -19,6 +20,22 @@ namespace ClaudeCounter.Tests;
 /// </summary>
 public class SettingsFormSmokeTests
 {
+    // S17-fix: every SettingsForm construction in this suite must pass its
+    // own GUID-suffixed, never-existing temp path here instead of letting
+    // the constructor default to BackupConfig.DefaultPath() - BuildBackupPage
+    // unconditionally calls BackupConfig.Load on construction, and Load
+    // SAVES the file when it migrates a stale BackupConfigVersion (see
+    // BackupConfig.Migrate). Without this, constructing SettingsForm on a
+    // machine with a real, stale %APPDATA%\ClaudeCounter\backup.json
+    // silently rewrites the developer's live config on every test run. A
+    // path that never exists makes Load return Default() without ever
+    // calling Migrate/Save, so nothing is written and no cleanup is needed -
+    // unlike BackupConfigTests' own temp paths, which do get written to and
+    // are cleaned up there. Unique per call (not shared) so this suite stays
+    // safe under xUnit's parallel execution.
+    private static string UniqueBackupConfigPath() =>
+        Path.Combine(Path.GetTempPath(), $"settingsform-smoke-backup-{Guid.NewGuid():N}.json");
+
     private static Exception? ConstructOnStaThread(Func<Form> build)
     {
         Exception? captured = null;
@@ -47,7 +64,7 @@ public class SettingsFormSmokeTests
     [Fact]
     public void SettingsFormConstructsWithoutThrowing()
     {
-        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings()));
+        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath()));
         Assert.Null(error);
     }
 
@@ -73,7 +90,7 @@ public class SettingsFormSmokeTests
         };
         settings.Normalize();
 
-        var error = ConstructOnStaThread(() => new SettingsForm(settings));
+        var error = ConstructOnStaThread(() => new SettingsForm(settings, UniqueBackupConfigPath()));
         Assert.Null(error);
     }
 
@@ -465,7 +482,7 @@ public class SettingsFormSmokeTests
         {
             try
             {
-                using var form = new SettingsForm(new AppSettings());
+                using var form = new SettingsForm(new AppSettings(), UniqueBackupConfigPath());
                 _ = form.Handle; // force handle creation, same as ConstructOnStaThread
                 measuredHeight = form.ClientSize.Height;
             }
@@ -490,5 +507,77 @@ public class SettingsFormSmokeTests
         // did not push the dialog's real, measured height back over it.
         Assert.True(measuredHeight!.Value <= 687,
             $"SettingsForm.ClientSize.Height was {measuredHeight}px, over the ~687px display budget.");
+    }
+
+    private static string? Sha256OrNull(string path) =>
+        File.Exists(path) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))) : null;
+
+    /// <summary>
+    /// S17-fix regression guard. The bug this exists to catch: BuildBackupPage
+    /// used to call BackupConfig.Load(BackupConfig.DefaultPath()) unconditionally,
+    /// and Load SAVES the file whenever it migrates a stale BackupConfigVersion
+    /// (see BackupConfig.Migrate) - so constructing a SettingsForm on this
+    /// developer's machine, via nothing more than
+    /// SettingsFormConstructsWithoutThrowing above, silently rewrote the real
+    /// %APPDATA%\ClaudeCounter\backup.json the moment a v1-&gt;v2 migration was
+    /// added. TrayApplicationContext.EvaluateBackupHealth has the same
+    /// DefaultPath() coupling for %LOCALAPPDATA%\ClaudeCounter\backup-status.json,
+    /// checked here too even though nothing in this suite currently constructs
+    /// a TrayApplicationContext - so this test also catches that becoming
+    /// reachable later without anyone updating this guard.
+    ///
+    /// This is a REAL check, not a tautology: every SettingsForm construction
+    /// in this class already passes a GUID temp path for exactly this reason
+    /// (see UniqueBackupConfigPath), so this test only fails if that seam is
+    /// bypassed - e.g. BuildBackupPage reverted to calling
+    /// BackupConfig.DefaultPath() directly and ignoring the constructor
+    /// parameter, or a future call site inside SettingsForm/RestoreDialog/
+    /// TrayApplicationContext is added without routing through the same seam.
+    /// Skips cleanly (rather than failing) when the real file does not exist,
+    /// so this passes on a clean CI machine that has never run ClaudeCounter
+    /// for real - there is nothing to protect and nothing this test could
+    /// meaningfully assert about a file that was never there.
+    /// </summary>
+    [Fact]
+    public void SuiteNeverTouchesTheRealBackupConfigOrStatusFiles()
+    {
+        var configPath = BackupConfig.DefaultPath();
+        var statusPath = BackupStatus.DefaultPath();
+
+        var configExisted = File.Exists(configPath);
+        var statusExisted = File.Exists(statusPath);
+        if (!configExisted && !statusExisted)
+            return; // nothing real on this machine to protect - see doc comment above
+
+        var configWriteBefore = configExisted ? File.GetLastWriteTimeUtc(configPath) : (DateTime?)null;
+        var configHashBefore = Sha256OrNull(configPath);
+        var statusWriteBefore = statusExisted ? File.GetLastWriteTimeUtc(statusPath) : (DateTime?)null;
+        var statusHashBefore = Sha256OrNull(statusPath);
+
+        // Exercises the exact construction path every other test in this
+        // class already exercises (BuildBackupPage's BackupConfig.Load call),
+        // through the same injected seam.
+        var error = ConstructOnStaThread(() => new SettingsForm(new AppSettings(), UniqueBackupConfigPath()));
+        Assert.Null(error);
+
+        if (configExisted)
+        {
+            Assert.Equal(configWriteBefore, File.GetLastWriteTimeUtc(configPath));
+            Assert.Equal(configHashBefore, Sha256OrNull(configPath));
+        }
+        else
+        {
+            Assert.False(File.Exists(configPath), "backup.json was created by this run and must not have been.");
+        }
+
+        if (statusExisted)
+        {
+            Assert.Equal(statusWriteBefore, File.GetLastWriteTimeUtc(statusPath));
+            Assert.Equal(statusHashBefore, Sha256OrNull(statusPath));
+        }
+        else
+        {
+            Assert.False(File.Exists(statusPath), "backup-status.json was created by this run and must not have been.");
+        }
     }
 }
