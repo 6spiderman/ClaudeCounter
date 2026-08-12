@@ -1,7 +1,8 @@
 # Drive backup setup
 
-ClaudeCounter's Backup tab names each destination directly - **Settings** ->
-**Backup** -> **Back up to**:
+ClaudeCounter can back up to any number of destinations, in any combination -
+**Settings** -> **Backup** -> **Manage destinations...** -> **Add...** lets
+you add as many as you want, including more than one of the same kind:
 
 - **Google Drive**, **OneDrive**, **Dropbox**, or **NAS / network share** (all
   sync folder, recommended) - point ClaudeCounter at a folder your sync client
@@ -14,12 +15,13 @@ ClaudeCounter's Backup tab names each destination directly - **Settings** ->
   [rclone](https://rclone.org), which you authorise once against your own Google
   OAuth client. More setup, but works with any rclone-supported remote, not just
   a folder a sync client already manages.
+- **GitHub** - a separate destination kind entirely (its own doc: the main
+  [README](../README.md)).
 
-They are **not** combined - underneath, this is still one Drive destination
-that uses one transport at a time, so you cannot back up to a NAS (sync
-folder) and an rclone remote simultaneously; picking a different cloud/NAS
-option replaces whichever one was configured before. GitHub plus one of them
-still works, since GitHub is a separate destination.
+Set up any of these, all of them, or several of the same kind - a home NAS
+and an office NAS both work as two separate destinations, each with its own
+settings. Removing a destination later only removes it from ClaudeCounter's
+local configuration; nothing at the destination itself is touched.
 
 This doc covers the sync-folder method first (start here unless you already know
 you need rclone), then OneDrive/Dropbox/NAS specifics, then the rclone method as
@@ -44,19 +46,21 @@ credential handling on ClaudeCounter's side either.
 
 ### Point ClaudeCounter at a folder
 
-**Settings** -> **Backup** -> **Back up to**:
+**Settings** -> **Backup** -> **Manage destinations...** -> **Add...**:
 
 1. Pick **Google Drive**, **OneDrive**, **Dropbox**, or **NAS / network share** -
-   ClaudeCounter immediately tries to auto-detect and fill in the folder path for
-   this destination.
+   the destination's own page opens, and ClaudeCounter immediately tries to
+   auto-detect and fill in the folder path for it.
 2. Tick **Back up to this destination**.
 3. **Sync folder path**: already filled in if detection found exactly one match.
    Left blank if it found none (never invents a path - use Detect... or Browse...
-   instead). If it found more than one match, a picker opened for you to choose.
+   instead). If it found more than one match, use **Detect...** to pick from
+   them.
 4. Choose what to back up with **Choose files...** - this destination has its
-   own selection, independent of GitHub.
-5. **Back up now** to confirm it works. On success you get a "Backup complete"
-   message; check the log via **Open log folder** if anything looks wrong.
+   own selection, independent of every other destination.
+5. **OK** to save this destination, then **Back up now** on the Backup tab to
+   confirm it works. On success you get a "Backup complete" message; check
+   the log via **Open log folder** if anything looks wrong.
 
 ### Detect...
 
@@ -102,11 +106,14 @@ If you already have `M:\ClaudeBackups` configured and want to fix this: open
 
 ### Retention
 
-Drive keeps one zip per run and prunes nothing by default, so a daily backup adds
-365 files a year, same as the rclone transport. **Advanced...** lets you keep
-only the most recent N, delete anything older than N days, or both. Pruning only
-ever touches this app's own `claude-backup-*.zip` files, only runs after a
-successful copy, and never deletes the last remaining backup.
+A sync-folder destination keeps one zip per run and prunes nothing by
+default, so a daily backup adds 365 files a year, same as the rclone
+transport. Each destination's own page (in **Manage destinations...**) has a
+**Retention** section that lets you keep only the most recent N, delete
+anything older than N days, or both. Pruning only ever touches this app's own
+`claude-backup-*.zip` files, only runs after a successful copy, and never
+deletes the last remaining backup. A GitHub destination has no such control -
+git history is its retention model.
 
 ---
 
@@ -258,7 +265,8 @@ You should see `gdrive:`.
 
 ### Part 3 - Point ClaudeCounter at it
 
-**Settings** -> **Backup** -> **Back up to** -> **rclone remote (advanced)**:
+**Settings** -> **Backup** -> **Manage destinations...** -> **Add...** ->
+**rclone remote (advanced)**:
 
 - Tick **Back up to this destination**
 - **Rclone remote**: `gdrive:ClaudeBackups`
@@ -267,17 +275,19 @@ The `gdrive:` part must match the remote name from `rclone config`. The
 `ClaudeBackups` part is a folder rclone creates on first upload.
 
 Choose what to back up with **Choose files...** - this destination has its own
-selection, independent of GitHub.
+selection, independent of every other destination.
 
-Then **Back up now**. On success you get a "Backup complete" message; check the
-log via **Open log folder** if anything looks wrong.
+**OK** to save it, then **Back up now** on the Backup tab. On success you get
+a "Backup complete" message; check the log via **Open log folder** if
+anything looks wrong.
 
 ### Retention (rclone)
 
-Same as the sync-folder transport above: **Advanced...** lets you keep only the
-most recent N, delete anything older than N days, or both. Pruning only ever
-touches this app's own `claude-backup-*.zip` files, only runs after a successful
-upload, and never deletes the last remaining backup.
+Same as the sync-folder kind above: this destination's own page has a
+**Retention** section that lets you keep only the most recent N, delete
+anything older than N days, or both. Pruning only ever touches this app's own
+`claude-backup-*.zip` files, only runs after a successful upload, and never
+deletes the last remaining backup.
 
 ---
 

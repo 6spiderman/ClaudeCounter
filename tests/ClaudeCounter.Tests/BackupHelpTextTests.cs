@@ -5,22 +5,29 @@ namespace ClaudeCounter.Tests;
 
 /// <summary>
 /// BackupHelpText is a pure static type precisely so its copy can be checked
-/// here without constructing SettingsForm or any other Form (this project's
-/// tests never do). The facts asserted below are the load-bearing ones from
+/// here without constructing a Form (this project's tests never do). The
+/// facts asserted below are the load-bearing ones from
 /// docs/superpowers/specs/2026-08-10-settings-redesign.md "Help content" -
 /// getting them wrong would mislead a user about where their credentials go.
+///
+/// S17c: rewritten for any-number-of-destinations-of-any-kind - the old
+/// "GitHub plus one cloud/NAS" field-topic set (DriveEnabled) and the old
+/// "one transport at a time" claim are both gone; see FieldTopics and
+/// FullGuide's own doc comments for what replaced them.
 /// </summary>
 public class BackupHelpTextTests
 {
     [Theory]
+    [InlineData("Name")]
     [InlineData("GithubEnabled")]
     [InlineData("RemoteUrl")]
     [InlineData("Branch")]
-    [InlineData("DriveEnabled")]
+    [InlineData("DestinationEnabled")]
     [InlineData("SyncFolder")]
     [InlineData("RcloneRemote")]
     [InlineData("Include")]
     [InlineData("Exclude")]
+    [InlineData("Retention")]
     public void EveryFieldWithAnInfoButtonHasNonEmptyHelp(string key)
     {
         Assert.True(BackupHelpText.FieldTopics.ContainsKey(key), $"missing topic: {key}");
@@ -36,7 +43,8 @@ public class BackupHelpTextTests
         // the dictionary is limited to them.
         var expected = new[]
         {
-            "GithubEnabled", "RemoteUrl", "Branch", "DriveEnabled", "SyncFolder", "RcloneRemote", "Include", "Exclude",
+            "Name", "GithubEnabled", "RemoteUrl", "Branch", "DestinationEnabled",
+            "SyncFolder", "RcloneRemote", "Include", "Exclude", "Retention",
         };
         Assert.Equal(expected.OrderBy(k => k, StringComparer.Ordinal),
             BackupHelpText.FieldTopics.Keys.OrderBy(k => k, StringComparer.Ordinal));
@@ -62,6 +70,18 @@ public class BackupHelpTextTests
     {
         Assert.Contains("UNC", BackupHelpText.SyncFolder);
         Assert.Contains("mapped drive", BackupHelpText.SyncFolder, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // S17c: retention now lives per-destination (BackupDestinationEditDialog),
+    // not in the Advanced dialog - its own topic must say so, including the
+    // GitHub exception, so a user looking at a GitHub destination's page
+    // (which shows no retention control at all) is not left wondering where
+    // it went.
+    [Fact]
+    public void RetentionTopicStatesItDoesNotApplyToGitHub()
+    {
+        Assert.Contains("GitHub", BackupHelpText.Retention);
+        Assert.Contains("does not apply", BackupHelpText.Retention, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -110,7 +130,7 @@ public class BackupHelpTextTests
         Assert.Contains("retries automatically", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
     }
 
-    // S8: the guide must describe Drive retention's union rule and the
+    // S8: the guide must describe retention's union rule and the
     // never-empty-the-remote floor - both are load-bearing safety facts, not
     // just feature description.
     [Fact]
@@ -122,9 +142,7 @@ public class BackupHelpTextTests
     }
 
     // S14b: the guide must lead with the sync-folder route (mentioned before
-    // the rclone appendix) and state plainly that the Drive destination uses
-    // one transport at a time - a real limitation (you cannot back up to a
-    // NAS and an rclone remote simultaneously), not something to gloss over.
+    // the rclone appendix).
     [Fact]
     public void GuideLeadsWithSyncFolderAheadOfTheRcloneAdvancedAppendix()
     {
@@ -136,9 +154,55 @@ public class BackupHelpTextTests
             "sync folder should be described before the rclone appendix");
     }
 
+    // S17c: the old "one transport at a time" restriction (GitHub plus
+    // exactly one cloud/NAS destination) was a UI limitation, never a real
+    // constraint of the model - it is gone, and the guide must say so
+    // explicitly rather than leaving stale wording that would now be false.
     [Fact]
-    public void GuideStatesDriveUsesOneTransportAtATime()
+    public void GuideStatesAnyNumberOfDestinationsOfAnyKindAreSupported()
     {
-        Assert.Contains("one transport at a time", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("one transport at a time", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("any number of destinations", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("any kind", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // S17c: removing a destination must be documented as local-only - the
+    // brief's explicit requirement is that nobody reading the guide (or the
+    // remove confirmation) is left fearing it deletes their actual backups.
+    [Fact]
+    public void GuideStatesRemovingADestinationOnlyAffectsLocalConfiguration()
+    {
+        Assert.Contains("does not delete anything at the destination itself", BackupHelpText.FullGuide,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // S17c: "all the details to all backups" - every kind must document what
+    // it needs, how it authenticates (or that it needs none), and how
+    // restore works for it, not just GitHub and the generic sync-folder
+    // blurb from before.
+    [Theory]
+    [InlineData("GITHUB")]
+    [InlineData("SYNC FOLDER")]
+    [InlineData("ADVANCED: RCLONE REMOTE")]
+    public void GuideHasADedicatedSectionForEveryDestinationKind(string sectionHeader)
+    {
+        Assert.Contains(sectionHeader, BackupHelpText.FullGuide);
+    }
+
+    [Fact]
+    public void GuideDescribesAuthenticationForEveryKind()
+    {
+        Assert.Contains("AUTHENTICATION:", BackupHelpText.FullGuide);
+        // The sync-folder kinds need none at all - the guide must say so
+        // plainly rather than silently omitting the topic for them.
+        Assert.Contains("none needed at all", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GuideDescribesRestoreForEveryKind()
+    {
+        Assert.Contains("RESTORE:", BackupHelpText.FullGuide);
+        Assert.Contains("commits", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("timestamped zips", BackupHelpText.FullGuide, StringComparison.OrdinalIgnoreCase);
     }
 }

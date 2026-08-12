@@ -202,20 +202,23 @@ to Claude...**
   placed near the tray or centered on screen, each configurable (or turned off)
   independently in Settings.
 - **Backup** (`ClaudeBackup.exe`): scheduled or on-demand backup of a subset
-  of your Claude config to a private GitHub repo and/or one cloud/NAS
-  destination, with restore built in. Installed by default; untick "Backup
+  of your Claude config to any number of destinations you configure, in any
+  combination, with restore built in. Installed by default; untick "Backup
   tools" on the installer's Components page (choose "Custom installation") if
   you would rather leave it out, and every backup control in Settings stays
-  hidden when it is not installed. The GitHub repo you configure **must be
-  private**; ClaudeCounter cannot verify that automatically, so it warns you
-  in Settings and in the log instead. Settings -> Backup -> "Back up to"
-  names each destination directly - **Google Drive**, **OneDrive**,
-  **Dropbox**, **NAS / network share** (all sync folder - no sign-in needed,
-  the sync client or the NAS does the upload, and picking one auto-detects
-  the folder for you), or **rclone remote** (advanced, needs a one-time
-  Google Cloud Console setup of your own OAuth client). GitHub plus one
-  cloud/NAS destination can be active at once; picking a different cloud/NAS
-  option replaces the current one - see
+  hidden when it is not installed. Settings -> Backup -> "Manage
+  destinations..." lets you add, edit, or remove destinations one at a time -
+  **GitHub** (a private repo you create yourself - **must be private**;
+  ClaudeCounter cannot verify that automatically, so it warns you in Settings
+  and in the log instead), **Google Drive**, **OneDrive**, **Dropbox**, **NAS
+  / network share** (all sync folder - no sign-in needed, the sync client or
+  the NAS does the upload, and picking one auto-detects the folder for you),
+  or **rclone remote** (advanced, needs a one-time Google Cloud Console setup
+  of your own OAuth client). Set up any of them, all of them, or several of
+  the same kind - two GitHub repos, or a home NAS and an office NAS, both
+  work, each with its own settings, retention, and Include/Exclude selection.
+  Removing a destination only removes it from ClaudeCounter's local
+  configuration; nothing at the destination itself is deleted. See
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
 - Single instance (a named mutex, on both platforms), single self-contained
