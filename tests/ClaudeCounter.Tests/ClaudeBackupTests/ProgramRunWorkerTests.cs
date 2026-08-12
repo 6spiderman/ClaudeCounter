@@ -65,8 +65,8 @@ public class ProgramRunWorkerTests : IDisposable
         var status = BackupStatus.Load(_statusPath);
         Assert.Equal(0, status.LastExitCode);
         Assert.NotNull(status.LastRunUtc);
-        Assert.Equal(BackupOutcome.Success, status.Github.LastOutcome);
-        Assert.NotNull(status.Github.LastSuccessUtc);
+        Assert.Equal(BackupOutcome.Success, status.For("github").LastOutcome);
+        Assert.NotNull(status.For("github").LastSuccessUtc);
     }
 
     [Fact]
@@ -96,8 +96,8 @@ public class ProgramRunWorkerTests : IDisposable
         Assert.Equal(1, code);
         var status = BackupStatus.Load(_statusPath);
         Assert.Equal(1, status.LastExitCode);
-        Assert.Equal(BackupOutcome.Failed, status.Github.LastOutcome);
-        Assert.Contains("secret-shaped file", status.Github.LastMessage);
+        Assert.Equal(BackupOutcome.Failed, status.For("github").LastOutcome);
+        Assert.Contains("secret-shaped file", status.For("github").LastMessage);
     }
 
     // The one path BackupRunner cannot cover itself: something throws before
@@ -116,9 +116,9 @@ public class ProgramRunWorkerTests : IDisposable
         Assert.Equal(2, code);
         var status = BackupStatus.Load(_statusPath);
         Assert.Equal(2, status.LastExitCode);
-        Assert.Equal(BackupOutcome.Failed, status.Github.LastOutcome);
-        Assert.Contains("simulated selector failure", status.Github.LastMessage);
-        Assert.Null(status.Drive.LastOutcome); // Drive was never enabled - untouched
+        Assert.Equal(BackupOutcome.Failed, status.For("github").LastOutcome);
+        Assert.Contains("simulated selector failure", status.For("github").LastMessage);
+        Assert.Null(status.For("drive").LastOutcome); // Drive was never enabled - untouched
     }
 
     // Rule 3, exercised end to end through RunWorker: a status file that

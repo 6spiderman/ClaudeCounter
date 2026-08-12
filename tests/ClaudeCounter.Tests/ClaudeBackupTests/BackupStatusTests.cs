@@ -17,21 +17,24 @@ public class BackupStatusTests
             var now = DateTimeOffset.UtcNow;
             var status = new BackupStatus
             {
-                Github = new DestinationStatus
+                Destinations = new()
                 {
-                    LastAttemptUtc = now,
-                    LastSuccessUtc = now,
-                    LastOutcome = BackupOutcome.Success,
-                    LastMessage = "Backup completed successfully.",
-                    WasEnabled = true,
-                },
-                Drive = new DestinationStatus
-                {
-                    LastAttemptUtc = now,
-                    LastSuccessUtc = now.AddDays(-5),
-                    LastOutcome = BackupOutcome.Failed,
-                    LastMessage = "rclone: connection refused",
-                    WasEnabled = true,
+                    ["github"] = new DestinationStatus
+                    {
+                        LastAttemptUtc = now,
+                        LastSuccessUtc = now,
+                        LastOutcome = BackupOutcome.Success,
+                        LastMessage = "Backup completed successfully.",
+                        WasEnabled = true,
+                    },
+                    ["drive"] = new DestinationStatus
+                    {
+                        LastAttemptUtc = now,
+                        LastSuccessUtc = now.AddDays(-5),
+                        LastOutcome = BackupOutcome.Failed,
+                        LastMessage = "rclone: connection refused",
+                        WasEnabled = true,
+                    },
                 },
                 LastExitCode = 2,
                 LastRunUtc = now,
@@ -40,14 +43,14 @@ public class BackupStatusTests
             status.Save(path);
             var loaded = BackupStatus.Load(path);
 
-            Assert.Equal(status.Github.LastAttemptUtc, loaded.Github.LastAttemptUtc);
-            Assert.Equal(status.Github.LastSuccessUtc, loaded.Github.LastSuccessUtc);
-            Assert.Equal(status.Github.LastOutcome, loaded.Github.LastOutcome);
-            Assert.Equal(status.Github.LastMessage, loaded.Github.LastMessage);
-            Assert.True(loaded.Github.WasEnabled);
+            Assert.Equal(status.For("github").LastAttemptUtc, loaded.For("github").LastAttemptUtc);
+            Assert.Equal(status.For("github").LastSuccessUtc, loaded.For("github").LastSuccessUtc);
+            Assert.Equal(status.For("github").LastOutcome, loaded.For("github").LastOutcome);
+            Assert.Equal(status.For("github").LastMessage, loaded.For("github").LastMessage);
+            Assert.True(loaded.For("github").WasEnabled);
 
-            Assert.Equal(status.Drive.LastSuccessUtc, loaded.Drive.LastSuccessUtc);
-            Assert.Equal(BackupOutcome.Failed, loaded.Drive.LastOutcome);
+            Assert.Equal(status.For("drive").LastSuccessUtc, loaded.For("drive").LastSuccessUtc);
+            Assert.Equal(BackupOutcome.Failed, loaded.For("drive").LastOutcome);
             Assert.Equal(2, loaded.LastExitCode);
             Assert.Equal(status.LastRunUtc, loaded.LastRunUtc);
         }
@@ -60,9 +63,9 @@ public class BackupStatusTests
         var loaded = BackupStatus.Load(Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.json"));
 
         Assert.NotNull(loaded);
-        Assert.Null(loaded.Github.LastAttemptUtc);
-        Assert.Null(loaded.Github.LastOutcome);
-        Assert.Null(loaded.Drive.LastAttemptUtc);
+        Assert.Null(loaded.For("github").LastAttemptUtc);
+        Assert.Null(loaded.For("github").LastOutcome);
+        Assert.Null(loaded.For("drive").LastAttemptUtc);
         Assert.Null(loaded.LastExitCode);
     }
 
@@ -77,12 +80,18 @@ public class BackupStatusTests
             var loaded = BackupStatus.Load(path);
 
             Assert.NotNull(loaded);
-            Assert.Null(loaded.Github.LastAttemptUtc);
-            Assert.Null(loaded.Drive.LastAttemptUtc);
+            Assert.Null(loaded.For("github").LastAttemptUtc);
+            Assert.Null(loaded.For("drive").LastAttemptUtc);
         }
         finally { File.Delete(path); }
     }
 
+    // S17a: backup-status.json had NO version field at all before this - a
+    // file like this (literal top-level "Github"/"Drive" keys, no
+    // "BackupStatusVersion") is exactly what every real machine has on disk
+    // right now. This is now a MIGRATION test: Load must fold both legacy
+    // keys onto the well-known "github"/"drive" ids without throwing, even
+    // when both are explicitly null rather than merely absent.
     [Fact]
     public void NullDestinationFieldsInJsonDoNotThrowOnLoad()
     {
@@ -93,9 +102,61 @@ public class BackupStatusTests
 
             var loaded = BackupStatus.Load(path);
 
-            Assert.NotNull(loaded.Github);
-            Assert.NotNull(loaded.Drive);
-            Assert.Null(loaded.Github.LastAttemptUtc);
+            Assert.NotNull(loaded.For("github"));
+            Assert.NotNull(loaded.For("drive"));
+            Assert.Null(loaded.For("github").LastAttemptUtc);
+            Assert.Equal(BackupStatus.CurrentBackupStatusVersion, loaded.BackupStatusVersion);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // The full legacy shape (not just null fields): a real pre-S17a
+    // backup-status.json, with actual recorded history under the literal
+    // "Github"/"Drive" keys and no version field. Must migrate onto the
+    // well-known "github"/"drive" ids so BackupConfig's own migration (which
+    // assigns the SAME two ids) lines up deterministically.
+    [Fact]
+    public void LegacyTwoDestinationJsonMigratesOntoWellKnownIds()
+    {
+        var path = TempPath();
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "Github": {
+                    "LastAttemptUtc": "2026-08-12T05:58:37.543966+00:00",
+                    "LastSuccessUtc": "2026-08-12T05:58:37.543966+00:00",
+                    "LastOutcome": 0,
+                    "LastMessage": "Backup completed successfully.",
+                    "WasEnabled": true
+                  },
+                  "Drive": {
+                    "LastAttemptUtc": "2026-08-11T17:00:22.398904+00:00",
+                    "LastSuccessUtc": "2026-08-11T17:00:22.398904+00:00",
+                    "LastOutcome": 0,
+                    "LastMessage": "Backup completed successfully.",
+                    "WasEnabled": false
+                  },
+                  "LastExitCode": 0,
+                  "LastRunUtc": "2026-08-12T05:58:37.543966+00:00"
+                }
+                """);
+
+            var loaded = BackupStatus.Load(path);
+
+            Assert.Equal(BackupOutcome.Success, loaded.For("github").LastOutcome);
+            Assert.True(loaded.For("github").WasEnabled);
+            Assert.Equal(BackupOutcome.Success, loaded.For("drive").LastOutcome);
+            Assert.False(loaded.For("drive").WasEnabled);
+            Assert.Equal(0, loaded.LastExitCode);
+            Assert.Equal(BackupStatus.CurrentBackupStatusVersion, loaded.BackupStatusVersion);
+
+            // Load's legacy migration is in-memory only (see its own doc
+            // comment - it is called on every tray poll and must stay a
+            // cheap, side-effect-free read) - the file on disk is untouched
+            // until a real write happens.
+            var rawAfterLoad = File.ReadAllText(path);
+            Assert.DoesNotContain("\"Destinations\"", rawAfterLoad);
         }
         finally { File.Delete(path); }
     }
@@ -163,9 +224,9 @@ public class BackupStatusTests
     }
 
     // BackupStatus.WithRun always advances LastExitCode/LastRunUtc, even
-    // when neither destination was actually attempted (e.g. "no backup
+    // when no destination was actually attempted (e.g. "no backup
     // destinations enabled") - every terminating path has an exit code and a
-    // time, unlike the per-destination fields, which can legitimately carry
+    // time, unlike the per-destination entries, which can legitimately carry
     // forward unchanged.
     [Fact]
     public void WithRunAlwaysAdvancesExitCodeAndRunTimeEvenWithNoAttempts()
@@ -179,7 +240,109 @@ public class BackupStatusTests
 
         Assert.Equal(1, result.LastExitCode);
         Assert.Equal(now, result.LastRunUtc);
-        Assert.Null(result.Github.LastAttemptUtc);
-        Assert.Null(result.Drive.LastAttemptUtc);
+        Assert.Null(result.For("github").LastAttemptUtc);
+        Assert.Null(result.For("drive").LastAttemptUtc);
+    }
+
+    // S17a: WithRun must handle an arbitrary number of ids, not just the two
+    // well-known ones - three destinations, two of them the same Kind, all
+    // recorded independently in one run.
+    [Fact]
+    public void WithRunHandlesNDestinationsIncludingTwoOfTheSameKind()
+    {
+        var previous = new BackupStatus();
+        var now = DateTimeOffset.UtcNow;
+        var attempts = new Dictionary<string, DestinationAttempt>
+        {
+            ["github"] = DestinationAttempt.Ok(),
+            ["nas-1"] = DestinationAttempt.Ok(),
+            ["nas-2"] = DestinationAttempt.Failed("disk full"),
+        };
+
+        var result = previous.WithRun(new BackupRunResult(2, attempts), now);
+
+        Assert.Equal(3, result.Destinations.Count);
+        Assert.Equal(BackupOutcome.Success, result.For("github").LastOutcome);
+        Assert.Equal(BackupOutcome.Success, result.For("nas-1").LastOutcome);
+        Assert.Equal(BackupOutcome.Failed, result.For("nas-2").LastOutcome);
+        Assert.Equal("disk full", result.For("nas-2").LastMessage);
+    }
+
+    // Removal semantics (S17a, wired up by S17c): dropping a destination's
+    // status must remove exactly that entry and leave every other one alone.
+    [Fact]
+    public void WithoutDestinationRemovesOnlyThatEntry()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var status = new BackupStatus
+        {
+            Destinations = new()
+            {
+                ["github"] = new DestinationStatus { LastAttemptUtc = now, WasEnabled = true },
+                ["drive"] = new DestinationStatus { LastAttemptUtc = now, WasEnabled = true },
+            },
+        };
+
+        var result = status.WithoutDestination("drive");
+
+        Assert.True(result.Destinations.ContainsKey("github"));
+        Assert.False(result.Destinations.ContainsKey("drive"));
+    }
+
+    [Fact]
+    public void WithoutDestinationIsANoOpWhenTheIdIsNotPresent()
+    {
+        var status = new BackupStatus { Destinations = new() { ["github"] = new DestinationStatus() } };
+
+        var result = status.WithoutDestination("does-not-exist");
+
+        Assert.Single(result.Destinations);
+        Assert.True(result.Destinations.ContainsKey("github"));
+    }
+
+    // Orphan pruning (S17a, wired up by S17c): an id with no matching
+    // destination in the current config must be dropped by PruneOrphaned,
+    // while every still-valid id survives.
+    [Fact]
+    public void PruneOrphanedDropsIdsNotInTheValidSet()
+    {
+        var status = new BackupStatus
+        {
+            Destinations = new()
+            {
+                ["github"] = new DestinationStatus { WasEnabled = true },
+                ["removed-nas"] = new DestinationStatus { WasEnabled = true },
+            },
+        };
+
+        var result = status.PruneOrphaned(new[] { "github" });
+
+        Assert.True(result.Destinations.ContainsKey("github"));
+        Assert.False(result.Destinations.ContainsKey("removed-nas"));
+    }
+
+    [Fact]
+    public void RemoveDestinationLoadsMutatesAndSaves()
+    {
+        var path = TempPath();
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            new BackupStatus
+            {
+                Destinations = new()
+                {
+                    ["github"] = new DestinationStatus { LastAttemptUtc = now, WasEnabled = true },
+                    ["drive"] = new DestinationStatus { LastAttemptUtc = now, WasEnabled = true },
+                },
+            }.Save(path);
+
+            BackupStatus.RemoveDestination(path, "drive");
+
+            var loaded = BackupStatus.Load(path);
+            Assert.True(loaded.Destinations.ContainsKey("github"));
+            Assert.False(loaded.Destinations.ContainsKey("drive"));
+        }
+        finally { File.Delete(path); }
     }
 }

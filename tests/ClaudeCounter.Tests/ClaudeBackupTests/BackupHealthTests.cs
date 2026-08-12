@@ -8,11 +8,34 @@ public class BackupHealthTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);
 
-    private static BackupConfig Config(bool githubEnabled = false, bool driveEnabled = false) => new()
+    // S17a: BackupHealth.Evaluate now iterates BackupConfig.Destinations
+    // directly (not the Github/Drive shim, which only syncs into
+    // Destinations on Save()/Load() - see BackupConfig.Github's own doc
+    // comment) - so tests build destinations directly too.
+    private static BackupConfig Config(bool githubEnabled = false, bool driveEnabled = false, DriveTransport driveTransport = DriveTransport.Rclone) => new()
     {
-        Github = new GitTarget { Enabled = githubEnabled, RemoteUrl = "url", Branch = "main" },
-        Drive = new DriveTarget { Enabled = driveEnabled, RcloneRemote = "remote" },
+        Destinations = new()
+        {
+            new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = githubEnabled, RemoteUrl = "url", Branch = "main" },
+            new BackupDestination
+            {
+                Id = "drive",
+                Name = driveTransport == DriveTransport.SyncFolder ? "Sync folder" : "Google Drive (rclone)",
+                Kind = driveTransport == DriveTransport.SyncFolder ? DestinationKind.SyncFolder : DestinationKind.Rclone,
+                Enabled = driveEnabled,
+                RcloneRemote = "remote",
+                FolderPath = driveTransport == DriveTransport.SyncFolder ? @"D:\SyncFolder" : "",
+            },
+        },
     };
+
+    private static BackupStatus Status(DestinationStatus? github = null, DestinationStatus? drive = null)
+    {
+        var destinations = new Dictionary<string, DestinationStatus>();
+        if (github is not null) destinations["github"] = github;
+        if (drive is not null) destinations["drive"] = drive;
+        return new BackupStatus { Destinations = destinations };
+    }
 
     private static DestinationStatus Succeeded(DateTimeOffset successUtc) => new()
     {
@@ -36,7 +59,7 @@ public class BackupHealthTests
     [Fact]
     public void NoDestinationEnabledIsNotConfiguredEvenWithStaleStatusData()
     {
-        var status = new BackupStatus { Github = Failed(Now.AddDays(-100)) };
+        var status = Status(github: Failed(Now.AddDays(-100)));
         var result = BackupHealth.Evaluate(status, Config(), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.NotConfigured, result.State);
@@ -55,7 +78,7 @@ public class BackupHealthTests
     [Fact]
     public void RecentSuccessWithinThresholdIsHealthy()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddHours(-1)) };
+        var status = Status(github: Succeeded(Now.AddHours(-1)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Healthy, result.State);
@@ -64,11 +87,7 @@ public class BackupHealthTests
     [Fact]
     public void BothDestinationsRecentlySucceededIsHealthy()
     {
-        var status = new BackupStatus
-        {
-            Github = Succeeded(Now.AddHours(-1)),
-            Drive = Succeeded(Now.AddHours(-2)),
-        };
+        var status = Status(github: Succeeded(Now.AddHours(-1)), drive: Succeeded(Now.AddHours(-2)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Healthy, result.State);
@@ -77,7 +96,7 @@ public class BackupHealthTests
     [Fact]
     public void LastAttemptFailedIsFailed()
     {
-        var status = new BackupStatus { Github = Failed(Now.AddMinutes(-5), lastSuccessUtc: Now.AddHours(-1)) };
+        var status = Status(github: Failed(Now.AddMinutes(-5), lastSuccessUtc: Now.AddHours(-1)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Failed, result.State);
@@ -86,7 +105,7 @@ public class BackupHealthTests
     [Fact]
     public void SuccessOlderThanThresholdIsStale()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddDays(-10)) };
+        var status = Status(github: Succeeded(Now.AddDays(-10)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Stale, result.State);
@@ -98,11 +117,9 @@ public class BackupHealthTests
     [Fact]
     public void FailedOutranksStaleWhenBothApply()
     {
-        var status = new BackupStatus
-        {
-            Github = Failed(Now.AddMinutes(-1), lastSuccessUtc: Now.AddDays(-1)),
-            Drive = Succeeded(Now.AddDays(-30)),
-        };
+        var status = Status(
+            github: Failed(Now.AddMinutes(-1), lastSuccessUtc: Now.AddDays(-1)),
+            drive: Succeeded(Now.AddDays(-30)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Failed, result.State);
@@ -113,7 +130,7 @@ public class BackupHealthTests
     [Fact]
     public void ZeroThresholdMeansNeverWarnAboutStaleness()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddDays(-400)) };
+        var status = Status(github: Succeeded(Now.AddDays(-400)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 0);
 
         Assert.Equal(BackupHealthState.Healthy, result.State);
@@ -124,7 +141,7 @@ public class BackupHealthTests
     [Fact]
     public void ExactlyAtThresholdIsHealthy()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddDays(-3)) };
+        var status = Status(github: Succeeded(Now.AddDays(-3)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Healthy, result.State);
@@ -133,7 +150,7 @@ public class BackupHealthTests
     [Fact]
     public void OneSecondPastThresholdIsStale()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddDays(-3).AddSeconds(-1)) };
+        var status = Status(github: Succeeded(Now.AddDays(-3).AddSeconds(-1)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Stale, result.State);
@@ -142,7 +159,7 @@ public class BackupHealthTests
     [Fact]
     public void OneSecondShortOfThresholdIsHealthy()
     {
-        var status = new BackupStatus { Github = Succeeded(Now.AddDays(-3).AddSeconds(1)) };
+        var status = Status(github: Succeeded(Now.AddDays(-3).AddSeconds(1)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Healthy, result.State);
@@ -153,11 +170,7 @@ public class BackupHealthTests
     [Fact]
     public void DisabledDestinationIsIgnoredEvenIfItsLastStatusWasFailed()
     {
-        var status = new BackupStatus
-        {
-            Github = Succeeded(Now.AddHours(-1)),
-            Drive = Failed(Now.AddDays(-50)),
-        };
+        var status = Status(github: Succeeded(Now.AddHours(-1)), drive: Failed(Now.AddDays(-50)));
         // Drive disabled in the CURRENT config - only GitHub is relevant.
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: false), Now, staleAfterDays: 3);
 
@@ -171,11 +184,7 @@ public class BackupHealthTests
     [Fact]
     public void PerDestinationDetailNamesWhichDestinationFailed()
     {
-        var status = new BackupStatus
-        {
-            Github = Failed(Now.AddMinutes(-1)),
-            Drive = Succeeded(Now.AddHours(-1)),
-        };
+        var status = Status(github: Failed(Now.AddMinutes(-1)), drive: Succeeded(Now.AddHours(-1)));
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         var github = result.Destinations.Single(d => d.Name == "GitHub");
@@ -193,11 +202,7 @@ public class BackupHealthTests
     [Fact]
     public void MixedHealthyAndNeverRunRollsUpToStaleWithNeverRunDestinationVisible()
     {
-        var status = new BackupStatus
-        {
-            Github = Succeeded(Now.AddHours(-1)), // healthy
-            Drive = new DestinationStatus(), // never run
-        };
+        var status = Status(github: Succeeded(Now.AddHours(-1))); // drive: never run (no entry at all)
         var result = BackupHealth.Evaluate(status, Config(githubEnabled: true, driveEnabled: true), Now, staleAfterDays: 3);
 
         Assert.Equal(BackupHealthState.Stale, result.State);
@@ -226,15 +231,15 @@ public class BackupHealthTests
     // sync-folder-configured destination must be named "Sync folder", not
     // "Google Drive (rclone)", so a failure/staleness message names what the
     // user actually configured (they might be pointed at OneDrive, Dropbox,
-    // or a NAS share, not Google Drive at all).
+    // or a NAS share, not Google Drive at all). S17a: Name now lives directly
+    // on BackupDestination (set at migration/creation time via
+    // BackupHealth.DriveDisplayName - see BackupConfig's own migration) -
+    // Evaluate itself just trusts whatever Name is stored.
     [Fact]
     public void SyncFolderTransportUsesSyncFolderDisplayName()
     {
-        var status = new BackupStatus { Drive = Failed(Now.AddMinutes(-1)) };
-        var config = new BackupConfig
-        {
-            Drive = new DriveTarget { Enabled = true, Transport = DriveTransport.SyncFolder, FolderPath = @"D:\SyncFolder" },
-        };
+        var status = Status(drive: Failed(Now.AddMinutes(-1)));
+        var config = Config(driveEnabled: true, driveTransport: DriveTransport.SyncFolder);
         var result = BackupHealth.Evaluate(status, config, Now, staleAfterDays: 3);
 
         var drive = result.Destinations.Single(d => d.Name == "Sync folder");
@@ -246,10 +251,65 @@ public class BackupHealthTests
     [Fact]
     public void RcloneTransportUsesGoogleDriveRcloneDisplayName()
     {
-        var status = new BackupStatus { Drive = Succeeded(Now.AddHours(-1)) };
+        var status = Status(drive: Succeeded(Now.AddHours(-1)));
         var result = BackupHealth.Evaluate(status, Config(driveEnabled: true), Now, staleAfterDays: 3);
 
         var drive = result.Destinations.Single(d => d.Name == "Google Drive (rclone)");
         Assert.Equal(DestinationHealthState.Healthy, drive.State);
+    }
+
+    // S17a: N destinations, including two of the same Kind - the roll-up
+    // must not assume "at most two".
+    [Fact]
+    public void ThreeDestinationsIncludingTwoOfTheSameKindAreAllEvaluatedIndependently()
+    {
+        var config = new BackupConfig
+        {
+            Destinations = new()
+            {
+                new BackupDestination { Id = "github", Name = "GitHub", Kind = DestinationKind.GitHub, Enabled = true },
+                new BackupDestination { Id = "nas-1", Name = "Home NAS", Kind = DestinationKind.SyncFolder, Enabled = true },
+                new BackupDestination { Id = "nas-2", Name = "Office NAS", Kind = DestinationKind.SyncFolder, Enabled = true },
+            },
+        };
+        var status = new BackupStatus
+        {
+            Destinations = new()
+            {
+                ["github"] = Succeeded(Now.AddHours(-1)),
+                ["nas-1"] = Succeeded(Now.AddHours(-2)),
+                ["nas-2"] = Failed(Now.AddMinutes(-1)),
+            },
+        };
+
+        var result = BackupHealth.Evaluate(status, config, Now, staleAfterDays: 3);
+
+        Assert.Equal(BackupHealthState.Failed, result.State);
+        Assert.Equal(3, result.Destinations.Count);
+        Assert.Equal(DestinationHealthState.Healthy, result.Destinations.Single(d => d.Name == "Home NAS").State);
+        Assert.Equal(DestinationHealthState.Failed, result.Destinations.Single(d => d.Name == "Office NAS").State);
+    }
+
+    // Orphaned status entries (an id in the status file with no matching
+    // destination in config) must be ignored by health entirely - not
+    // evaluated, not counted, not surfaced.
+    [Fact]
+    public void OrphanedStatusEntryIsIgnoredByHealth()
+    {
+        var config = Config(githubEnabled: true);
+        var status = new BackupStatus
+        {
+            Destinations = new()
+            {
+                ["github"] = Succeeded(Now.AddHours(-1)),
+                ["removed-nas"] = Failed(Now.AddDays(-90)), // no longer in config
+            },
+        };
+
+        var result = BackupHealth.Evaluate(status, config, Now, staleAfterDays: 3);
+
+        Assert.Equal(BackupHealthState.Healthy, result.State);
+        Assert.Single(result.Destinations);
+        Assert.Equal("GitHub", result.Destinations[0].Name);
     }
 }

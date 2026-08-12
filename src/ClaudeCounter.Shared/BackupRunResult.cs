@@ -34,5 +34,42 @@ public sealed record DestinationAttempt(bool Enabled, bool Attempted, bool Succe
     public static DestinationAttempt Failed(string message) => new(true, true, false, message);
 }
 
-/// <summary>Overall outcome of one BackupRunner.RunDetailed call - see BackupRunner's exit-code contract.</summary>
-public sealed record BackupRunResult(int ExitCode, DestinationAttempt Github, DestinationAttempt Drive);
+/// <summary>
+/// Overall outcome of one BackupRunner.RunDetailed call - see BackupRunner's
+/// exit-code contract. S17a: generalized from exactly two positional
+/// destinations (Github, Drive) to an id-keyed dictionary over N, so
+/// BackupStatusWriter can merge a run's outcome into backup-status.json's own
+/// id-keyed shape (see BackupStatus.Destinations) without hardcoding a
+/// destination count anywhere. <see cref="Attempts"/> is keyed by the same
+/// <see cref="BackupDestination.Id"/> values BackupConfig.Destinations and
+/// BackupStatus.Destinations use.
+/// </summary>
+public sealed record BackupRunResult(int ExitCode, IReadOnlyDictionary<string, DestinationAttempt> Attempts)
+{
+    /// <summary>
+    /// Back-compat constructor for BackupRunner.RunDetailed, which is out of
+    /// scope for this task (S17b migrates it to build <see cref="Attempts"/>
+    /// directly over N destinations instead of two positional ones). Keys
+    /// the two attempts under the same well-known "github"/"drive" ids
+    /// BackupConfig's v1-&gt;v2 migration assigns to the same two
+    /// destinations, so a result built this way still merges correctly into
+    /// the id-keyed <see cref="BackupStatus"/>.
+    /// </summary>
+    public BackupRunResult(int exitCode, DestinationAttempt github, DestinationAttempt drive)
+        : this(exitCode, new Dictionary<string, DestinationAttempt> { ["github"] = github, ["drive"] = drive })
+    {
+    }
+
+    /// <summary>
+    /// Convenience read accessor for the well-known "github" id - kept for
+    /// BackupRunnerTests, which still asserts against the pre-S17a
+    /// two-destination shape (BackupRunner itself is unchanged this task -
+    /// see this record's own remarks). Falls back to NotAttempted(false)
+    /// rather than throwing when "github" has no entry (e.g. a result built
+    /// directly over an arbitrary id set that does not include it).
+    /// </summary>
+    public DestinationAttempt Github => Attempts.TryGetValue("github", out var attempt) ? attempt : DestinationAttempt.NotAttempted(false);
+
+    /// <summary>Convenience read accessor for the well-known "drive" id - see <see cref="Github"/>'s doc comment.</summary>
+    public DestinationAttempt Drive => Attempts.TryGetValue("drive", out var attempt) ? attempt : DestinationAttempt.NotAttempted(false);
+}

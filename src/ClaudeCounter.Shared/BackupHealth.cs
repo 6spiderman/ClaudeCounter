@@ -91,11 +91,21 @@ public static class BackupHealth
 {
     public static BackupHealthResult Evaluate(BackupStatus status, BackupConfig config, DateTimeOffset now, int staleAfterDays)
     {
+        // S17a: iterates BackupConfig.Destinations (the real N-destination
+        // list) instead of two hardcoded Github.Enabled/Drive.Enabled checks
+        // - the roll-up logic below this is unchanged and already
+        // collection-based. Looking a destination's id up in
+        // status.Destinations (rather than reading status.Github/status.Drive
+        // directly) is also what makes an ORPHANED status entry - an id with
+        // no matching destination here - naturally invisible to health: this
+        // loop only ever enumerates ids that exist in config, so an orphan is
+        // never looked at, let alone evaluated. status.For(id) supplies a
+        // fresh (NeverRun-reading) DestinationStatus for a destination with
+        // no status entry yet, exactly like a missing status file already did
+        // for the old two-destination shape.
         var destinations = new List<DestinationHealth>();
-        if (config.Github.Enabled)
-            destinations.Add(EvaluateDestination("GitHub", status.Github, now, staleAfterDays));
-        if (config.Drive.Enabled)
-            destinations.Add(EvaluateDestination(DriveDisplayName(config.Drive), status.Drive, now, staleAfterDays));
+        foreach (var destination in config.Destinations.Where(d => d.Enabled))
+            destinations.Add(EvaluateDestination(destination.Name, status.For(destination.Id), now, staleAfterDays));
 
         // No destination enabled: show nothing at all - never nag a user who
         // does not use backup. Checked before anything else so a NeverRun/

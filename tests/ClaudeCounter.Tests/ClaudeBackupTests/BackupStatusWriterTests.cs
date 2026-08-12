@@ -8,6 +8,21 @@ public class BackupStatusWriterTests
 {
     private static string TempPath() => Path.Combine(Path.GetTempPath(), $"bkstatus-{Guid.NewGuid():N}.json");
 
+    // S17a: RecordUnhandledException now reads BackupConfig.Destinations (the
+    // real N-destination list) rather than the Github/Drive shim - see
+    // BackupConfig.Github's own doc comment for why the shim only syncs into
+    // Destinations on Save()/Load(), not on plain object-initializer
+    // construction. Building the config via Destinations directly here is
+    // the realistic S17a shape.
+    private static BackupConfig ConfigWithGithubDriveEnabled(bool githubEnabled, bool driveEnabled) => new()
+    {
+        Destinations = new()
+        {
+            new BackupDestination { Id = "github", Kind = DestinationKind.GitHub, Enabled = githubEnabled },
+            new BackupDestination { Id = "drive", Kind = DestinationKind.Rclone, Enabled = driveEnabled },
+        },
+    };
+
     [Fact]
     public void RecordWritesAndPreservesLastSuccessAcrossAFollowingFailure()
     {
@@ -18,15 +33,15 @@ public class BackupStatusWriterTests
             BackupStatusWriter.Record(path, new BackupRunResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
 
             var afterFirst = BackupStatus.Load(path);
-            Assert.Equal(firstRun, afterFirst.Github.LastSuccessUtc);
+            Assert.Equal(firstRun, afterFirst.For("github").LastSuccessUtc);
 
             var secondRun = firstRun.AddDays(1);
             BackupStatusWriter.Record(path, new BackupRunResult(2, DestinationAttempt.Failed("backend failed"), DestinationAttempt.NotAttempted(false)), secondRun);
 
             var afterSecond = BackupStatus.Load(path);
-            Assert.Equal(firstRun, afterSecond.Github.LastSuccessUtc); // preserved
-            Assert.Equal(secondRun, afterSecond.Github.LastAttemptUtc); // moved
-            Assert.Equal(BackupOutcome.Failed, afterSecond.Github.LastOutcome);
+            Assert.Equal(firstRun, afterSecond.For("github").LastSuccessUtc); // preserved
+            Assert.Equal(secondRun, afterSecond.For("github").LastAttemptUtc); // moved
+            Assert.Equal(BackupOutcome.Failed, afterSecond.For("github").LastOutcome);
             Assert.Equal(2, afterSecond.LastExitCode);
         }
         finally { File.Delete(path); }
@@ -57,18 +72,14 @@ public class BackupStatusWriterTests
         var path = TempPath();
         try
         {
-            var config = new BackupConfig
-            {
-                Github = new GitTarget { Enabled = true },
-                Drive = new DriveTarget { Enabled = false },
-            };
+            var config = ConfigWithGithubDriveEnabled(githubEnabled: true, driveEnabled: false);
 
             BackupStatusWriter.RecordUnhandledException(path, config, "unhandled: boom", DateTimeOffset.UtcNow);
 
             var status = BackupStatus.Load(path);
-            Assert.Equal(BackupOutcome.Failed, status.Github.LastOutcome);
-            Assert.Equal("unhandled: boom", status.Github.LastMessage);
-            Assert.Null(status.Drive.LastOutcome); // never attempted - disabled
+            Assert.Equal(BackupOutcome.Failed, status.For("github").LastOutcome);
+            Assert.Equal("unhandled: boom", status.For("github").LastMessage);
+            Assert.Null(status.For("drive").LastOutcome); // never attempted - disabled
             Assert.Equal(2, status.LastExitCode);
         }
         finally { File.Delete(path); }
@@ -89,8 +100,8 @@ public class BackupStatusWriterTests
             BackupStatusWriter.RecordUnhandledException(path, null, "unhandled: boom", DateTimeOffset.UtcNow);
 
             var status = BackupStatus.Load(path);
-            Assert.Null(status.Github.LastOutcome);
-            Assert.Null(status.Drive.LastOutcome);
+            Assert.Null(status.For("github").LastOutcome);
+            Assert.Null(status.For("drive").LastOutcome);
             Assert.Equal(2, status.LastExitCode); // the run itself is still recorded
         }
         finally { File.Delete(path); }
@@ -118,29 +129,54 @@ public class BackupStatusWriterTests
                 path, new BackupRunResult(0, DestinationAttempt.Ok(), DestinationAttempt.NotAttempted(false)), firstRun);
 
             var afterSuccess = BackupStatus.Load(path);
-            Assert.Equal(BackupOutcome.Success, afterSuccess.Github.LastOutcome);
-            Assert.True(afterSuccess.Github.WasEnabled);
+            Assert.Equal(BackupOutcome.Success, afterSuccess.For("github").LastOutcome);
+            Assert.True(afterSuccess.For("github").WasEnabled);
 
             // Every subsequent run now fails before any config is loaded.
             var now = DateTimeOffset.UtcNow;
             BackupStatusWriter.RecordUnhandledException(path, null, "unhandled: config unreadable", now);
 
             var status = BackupStatus.Load(path);
-            Assert.Equal(BackupOutcome.Failed, status.Github.LastOutcome); // not silently carried forward as Success
-            Assert.Equal("unhandled: config unreadable", status.Github.LastMessage);
-            Assert.Equal(now, status.Github.LastAttemptUtc);
-            Assert.Equal(firstRun, status.Github.LastSuccessUtc); // still preserved (rule 4)
+            Assert.Equal(BackupOutcome.Failed, status.For("github").LastOutcome); // not silently carried forward as Success
+            Assert.Equal("unhandled: config unreadable", status.For("github").LastMessage);
+            Assert.Equal(now, status.For("github").LastAttemptUtc);
+            Assert.Equal(firstRun, status.For("github").LastSuccessUtc); // still preserved (rule 4)
             Assert.Equal(2, status.LastExitCode);
 
             // The reviewer-probed end-to-end assertion: health must actually
             // report Failed, not Healthy, once this status is evaluated.
-            var config = new BackupConfig
-            {
-                Github = new GitTarget { Enabled = true },
-                Drive = new DriveTarget { Enabled = false },
-            };
+            var config = ConfigWithGithubDriveEnabled(githubEnabled: true, driveEnabled: false);
             var health = BackupHealth.Evaluate(status, config, now, staleAfterDays: 3);
             Assert.Equal(BackupHealthState.Failed, health.State);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // S17a: RecordUnhandledException must generalize past exactly two ids -
+    // three destinations, only some enabled, none of them named
+    // "github"/"drive".
+    [Fact]
+    public void RecordUnhandledExceptionHandlesNDestinationsBeyondTheWellKnownTwo()
+    {
+        var path = TempPath();
+        try
+        {
+            var config = new BackupConfig
+            {
+                Destinations = new()
+                {
+                    new BackupDestination { Id = "nas-1", Kind = DestinationKind.SyncFolder, Enabled = true },
+                    new BackupDestination { Id = "nas-2", Kind = DestinationKind.SyncFolder, Enabled = false },
+                    new BackupDestination { Id = "rclone-1", Kind = DestinationKind.Rclone, Enabled = true },
+                },
+            };
+
+            BackupStatusWriter.RecordUnhandledException(path, config, "unhandled: boom", DateTimeOffset.UtcNow);
+
+            var status = BackupStatus.Load(path);
+            Assert.Equal(BackupOutcome.Failed, status.For("nas-1").LastOutcome);
+            Assert.Null(status.For("nas-2").LastOutcome); // disabled - never attempted
+            Assert.Equal(BackupOutcome.Failed, status.For("rclone-1").LastOutcome);
         }
         finally { File.Delete(path); }
     }
