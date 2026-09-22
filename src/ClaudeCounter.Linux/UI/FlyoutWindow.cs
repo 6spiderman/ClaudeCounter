@@ -37,10 +37,24 @@ public sealed class FlyoutWindow : Window
         ShowInTaskbar = false;
         Topmost = true;
         WindowStartupLocation = WindowStartupLocation.Manual;
+        // Borderless, like the Windows build's FlyoutForm (FormBorderStyle.None):
+        // this is a transient popup, not a window with its own close button.
+        WindowDecorations = WindowDecorations.None;
 
         Deactivated += (_, _) => Hide();
 
         RebuildContent();
+    }
+
+    // Belt and braces alongside the borderless chrome above: some window
+    // managers still offer a way to close an undecorated window (Alt+F4,
+    // right-click in an alt-tab list). Closing this window for real would
+    // leave it disposed, so the next tray-icon click could never show it
+    // again - it must only ever be hidden until the app itself exits.
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        e.Cancel = true;
+        Hide();
     }
 
     public void UpdateState(PollState state)
