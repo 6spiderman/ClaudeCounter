@@ -9,6 +9,15 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Named Mutex works the same way on Linux as it does on Windows
+        // (verified directly: a second process sees createdNew=false while
+        // the first is running, and true again once it exits) - no "Local\"
+        // prefix here, since that is a Windows Terminal Services convention
+        // with no meaning on Linux.
+        using var mutex = new Mutex(initiallyOwned: true, "ClaudeCounter_SingleInstance", out var createdNew);
+        if (!createdNew)
+            return 0;
+
         try
         {
             return BuildAvaloniaApp()

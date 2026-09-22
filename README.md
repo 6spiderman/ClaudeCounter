@@ -142,13 +142,15 @@ to Claude...**
   see [Authentication](#authentication).
 - **Background polling** with automatic backoff on rate limits and network
   errors, honouring `Retry-After`.
-- **Wakes with your PC** (Windows only, for now) - refreshes the moment
-  Windows resumes, instead of showing stale numbers until the next timer
-  tick. The Linux build just waits for its next poll, like any other app.
+- **Wakes with your PC** - refreshes the moment your PC resumes, instead of
+  showing stale numbers until the next timer tick. Windows via
+  `SystemEvents.PowerModeChanged`; Linux via systemd-logind's
+  `PrepareForSleep` D-Bus signal (needs systemd - the vast majority of
+  desktop distros, but not a non-systemd setup).
 - **Update notifications** from GitHub Releases, at most once a day, shown as a
   menu entry rather than a popup. Off with one checkbox.
-- Single self-contained executable, no telemetry. Single instance on Windows
-  (a named mutex); the Linux build has no such guard yet.
+- Single instance (a named mutex, on both platforms), single self-contained
+  executable, no telemetry.
 
 ## Authentication
 
@@ -318,6 +320,10 @@ the UI and the platform-specific seams below it.
   drawing context on Linux.
 - `TrayPresence` (Linux) checks for a tray host on the session bus at startup,
   since stock GNOME has none - see [No tray icon after installing](#no-tray-icon-after-installing-gnome).
+- `SleepResumeWatcher` (Linux) shells out to `dbus-monitor` for systemd-
+  logind's `PrepareForSleep` signal on the system bus - the same "known CLI
+  over a bespoke D-Bus client" choice as `SecretServiceSessionStore` and
+  `TrayPresence`.
 
 ## Project layout
 

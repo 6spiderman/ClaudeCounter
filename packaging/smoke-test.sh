@@ -28,10 +28,10 @@ if [ ! -x "$EXE_PATH" ]; then
 fi
 EXE_PATH="$(readlink -f "$EXE_PATH")"
 
-# ClaudeCounter has no single-instance guard on Linux yet (see the Linux-port
-# plan), so unlike the Windows script this cannot tell "a second copy" apart
-# from "the first copy" by process count alone - just refuse to run if one is
-# already up, so this script's own teardown does not kill someone else's run.
+# ClaudeCounter is single-instance via a named Mutex, same as Windows, so a
+# second copy exits immediately with code 0 and writes nothing - which looks
+# identical to a silent startup crash. Refuse to run if one is already up,
+# rather than let that ambiguity into the result below.
 if pgrep -f "$EXE_PATH" > /dev/null; then
   echo "An instance of $EXE_PATH is already running - close it first." >&2
   exit 1
@@ -74,12 +74,16 @@ done
 exit_code=0
 if ! kill -0 "$PID" 2> /dev/null; then
   wait "$PID"
-  echo "FAIL: the process exited with code $?" >&2
+  child_exit=$?
+  echo "FAIL: the process exited with code $child_exit" >&2
   if [ -f "$LOG_PATH" ]; then
     echo "--- log ---"
     cat "$LOG_PATH"
   else
     echo "No log was written - it died before logging anything." >&2
+    if [ "$child_exit" -eq 0 ]; then
+      echo "Exit code 0 with no log usually means another instance grabbed the single-instance mutex." >&2
+    fi
   fi
   exit_code=1
 else

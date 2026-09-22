@@ -28,6 +28,7 @@ public sealed class TrayApplicationContext
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
     private readonly PollingService _polling;
+    private readonly SleepResumeWatcher _sleepResume = new();
     private readonly FlyoutWindow _flyout;
     private readonly TrayIcon _trayIcon;
     private readonly NativeMenuItem _signInItem;
@@ -119,10 +120,21 @@ public sealed class TrayApplicationContext
         _polling.Updated += OnPollUpdated;
         _polling.Start();
 
+        // The poll loop's Task.Delay timer is frozen while the machine
+        // sleeps, so on wake the tray shows stale data until the (delayed)
+        // timer fires. Force an immediate refresh on resume instead.
+        _sleepResume.Resumed += OnResumed;
+
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started (Linux).");
         TrayPresence.WarnIfMissing();
 
         MaybeShowOnboarding();
+    }
+
+    private void OnResumed()
+    {
+        Log.Info("System resumed from sleep - refreshing now.");
+        _polling.TriggerNow();
     }
 
     /// <summary>
@@ -342,6 +354,7 @@ public sealed class TrayApplicationContext
         // from DBusTrayIconImpl.WatchAsync() through the dispatcher on the way
         // out; Shutdown() below tears the tray icon down on its own.
         _polling.Dispose();
+        _sleepResume.Dispose();
         _usageClient.Dispose();
         _refresher.Dispose();
         _exchanger.Dispose();
