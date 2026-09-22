@@ -40,13 +40,13 @@ public sealed class SettingsWindow : Window
 
         _warnInput = new NumericUpDown
         {
-            Minimum = 1, Maximum = 99, Value = current.WarnThreshold,
-            Width = 90, HorizontalAlignment = HorizontalAlignment.Right,
+            Minimum = 1, Maximum = 99, Value = current.WarnThreshold, FormatString = "0",
+            Width = 130, HorizontalAlignment = HorizontalAlignment.Right,
         };
         _criticalInput = new NumericUpDown
         {
-            Minimum = 2, Maximum = 100, Value = current.CriticalThreshold,
-            Width = 90, HorizontalAlignment = HorizontalAlignment.Right,
+            Minimum = 2, Maximum = 100, Value = current.CriticalThreshold, FormatString = "0",
+            Width = 130, HorizontalAlignment = HorizontalAlignment.Right,
         };
 
         _autostartCheck = new CheckBox { Content = "Start on login", IsChecked = current.AutostartEnabled };
