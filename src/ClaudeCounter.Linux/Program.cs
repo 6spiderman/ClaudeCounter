@@ -14,6 +14,14 @@ internal static class Program
             return BuildAvaloniaApp()
                 .StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
         }
+        catch (OperationCanceledException) when (TrayApplicationContext.IsExiting)
+        {
+            // A benign race in Avalonia's own tray-icon teardown can still
+            // surface a cancellation through the dispatcher on the way out
+            // even without the toggle above; ExitApplication already logged
+            // the real reason we are here.
+            return 0;
+        }
         catch (Exception e)
         {
             Log.Error($"Unhandled exception on startup: {e}");

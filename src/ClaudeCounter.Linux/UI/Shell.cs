@@ -49,14 +49,19 @@ public static class Shell
         TryStart("xdg-open", directory);
     }
 
-    private static bool TryStart(string fileName, string arguments)
+    /// <summary>Best-effort desktop notification via notify-send. Silently does nothing if unavailable.</summary>
+    public static void Notify(string title, string message) =>
+        TryStart("notify-send", "--app-name=ClaudeCounter", title, message);
+
+    private static bool TryStart(string fileName, params string[] arguments)
     {
         try
         {
-            using var process = Process.Start(new ProcessStartInfo(fileName, arguments)
-            {
-                UseShellExecute = false,
-            });
+            var psi = new ProcessStartInfo(fileName) { UseShellExecute = false };
+            foreach (var arg in arguments)
+                psi.ArgumentList.Add(arg);
+
+            using var process = Process.Start(psi);
             return process is not null;
         }
         catch (Exception e) when (e is Win32Exception or IOException)

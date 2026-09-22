@@ -20,7 +20,10 @@ public static class IconRenderer
     /// Renders a 32x32 tray icon: rounded square in the band color with the
     /// percentage (or "--") in white. Caller owns the returned WindowIcon.
     /// </summary>
-    public static WindowIcon Render(string text, Band band)
+    public static WindowIcon Render(string text, Band band) => new(RenderBitmap(text, band));
+
+    /// <summary>The same badge as a bitmap, for display inline (e.g. the onboarding wizard's sample icon).</summary>
+    public static RenderTargetBitmap RenderBitmap(string text, Band band)
     {
         var visual = new TrayIconVisual(text, band) { Width = Size, Height = Size };
         visual.Measure(new Size(Size, Size));
@@ -28,7 +31,7 @@ public static class IconRenderer
 
         var bitmap = new RenderTargetBitmap(new PixelSize(Size, Size), new Vector(96, 96));
         bitmap.Render(visual);
-        return new WindowIcon(bitmap);
+        return bitmap;
     }
 
     private sealed class TrayIconVisual(string text, Band band) : Control

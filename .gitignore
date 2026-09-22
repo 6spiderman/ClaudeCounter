@@ -485,6 +485,7 @@ $RECYCLE.BIN/
 
 # ClaudeCounter
 publish/
+publish-linux/
 dist/
 packaging/inno/Output/
 

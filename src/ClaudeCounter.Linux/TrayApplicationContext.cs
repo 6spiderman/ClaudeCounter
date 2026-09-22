@@ -23,7 +23,8 @@ public sealed class TrayApplicationContext
     private readonly OAuthTokenEndpoint _tokenEndpoint = new();
     private readonly OAuthTokenRefresher _refresher;
     private readonly OAuthCodeExchanger _exchanger;
-    private readonly LinuxSessionStore _sessionStore = new(new MachineKeyDataProtector());
+    private readonly ISessionStore _sessionStore =
+        new SecretServiceSessionStore(new LinuxSessionStore(new MachineKeyDataProtector()));
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
     private readonly PollingService _polling;
@@ -32,6 +33,10 @@ public sealed class TrayApplicationContext
     private readonly NativeMenuItem _signInItem;
     private readonly NativeMenuItem _updateItem;
     private readonly CancellationTokenSource _lifetime = new();
+
+    /// <summary>Set the moment Exit is chosen, so a stray cancellation from
+    /// Avalonia's own teardown on the way out reads as "exiting", not a crash.</summary>
+    public static bool IsExiting { get; private set; }
 
     private SettingsWindow? _settingsWindow;
     private SignInWindow? _signInWindow;
@@ -115,17 +120,17 @@ public sealed class TrayApplicationContext
         _polling.Start();
 
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started (Linux).");
+        TrayPresence.WarnIfMissing();
 
-        MaybeShowSignIn();
+        MaybeShowOnboarding();
     }
 
     /// <summary>
-    /// First run only, and only when nothing else is already providing a
-    /// token. No multi-step wizard yet (see the Linux-port plan) - straight
-    /// to the sign-in window covers the same "nothing works until you sign
-    /// in" case.
+    /// First run only, and only when there is actually nothing set up. A
+    /// reinstall over a live session, or a machine driven by the environment
+    /// variable, must not be walked through a wizard it does not need.
     /// </summary>
-    private void MaybeShowSignIn()
+    private void MaybeShowOnboarding()
     {
         if (_settings.OnboardingCompleted)
             return;
@@ -137,9 +142,28 @@ public sealed class TrayApplicationContext
             return;
         }
 
-        _settings.OnboardingCompleted = true;
-        SaveSettings();
-        Dispatcher.UIThread.Post(ShowSignIn);
+        Dispatcher.UIThread.Post(ShowOnboarding);
+    }
+
+    private void ShowOnboarding()
+    {
+        var coordinator = new SignInCoordinator(_exchanger, _sessionStore);
+        var wizard = new OnboardingWindow(coordinator, _settings);
+
+        // Poll as soon as they sign in rather than waiting for the wizard to
+        // close.
+        wizard.SignInCompleted += () => _polling.TriggerNow();
+        wizard.Closed += (_, _) =>
+        {
+            SaveSettings();
+            if (_settings.AutostartEnabled)
+                AutostartManager.Enable();
+            else
+                AutostartManager.Disable();
+            Log.Info($"Onboarding finished. Signed in: {wizard.SignedIn}.");
+            _polling.TriggerNow();
+        };
+        wizard.Show();
     }
 
     private async Task CheckForUpdatesAsync()
@@ -311,8 +335,12 @@ public sealed class TrayApplicationContext
     private void ExitApplication()
     {
         Log.Info("ClaudeCounter exiting.");
+        IsExiting = true;
         _lifetime.Cancel();
-        _trayIcon.IsVisible = false;
+        // Not: _trayIcon.IsVisible = false. Toggling it here races Avalonia's
+        // own D-Bus tray-icon teardown and surfaces a TaskCanceledException
+        // from DBusTrayIconImpl.WatchAsync() through the dispatcher on the way
+        // out; Shutdown() below tears the tray icon down on its own.
         _polling.Dispose();
         _usageClient.Dispose();
         _refresher.Dispose();
