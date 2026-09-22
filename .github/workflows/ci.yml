@@ -98,3 +98,89 @@ jobs:
       - name: Startup smoke test
         shell: pwsh
         run: pwsh -File packaging/smoke-test.ps1 -ExePath smoke/ClaudeCounter.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      # Only the two Linux-relevant projects: the whole solution includes the
+      # WinForms project, which cannot restore here without
+      # EnableWindowsTargeting (and shouldn't need to - the Windows job above
+      # already covers it). Building ClaudeCounter.Core here on its own is
+      # itself a useful check: if it ever gained a hidden Windows-only call,
+      # this is what would catch it.
+      - name: Restore
+        run: |
+          dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
+          dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
+
+      - name: Build
+        run: |
+          dotnet build src/ClaudeCounter.Core/ClaudeCounter.Core.csproj -c Release --no-restore
+          dotnet build src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj -c Release --no-restore
+
+      # Core's own tests already run against this same code in the Windows
+      # job (tests/ClaudeCounter.Tests references ClaudeCounter.Core
+      # directly); there is no Linux-only test project yet to run here.
+
+      - name: Publish smoke test
+        run: |
+          dotnet publish src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj \
+            -c Release -r linux-x64 --self-contained true --no-restore \
+            -p:PublishSingleFile=true -p:DebugType=none \
+            -o dist/linux-x64
+          test -f dist/linux-x64/ClaudeCounter
+
+          # "Single file" must mean it, same trap the Windows build already
+          # hit once with WPF's native libraries - see
+          # IncludeNativeLibrariesForSelfExtract in ClaudeCounter.Linux.csproj.
+          stray=$(find dist/linux-x64 -maxdepth 1 -type f ! -name ClaudeCounter)
+          if [ -n "$stray" ]; then
+            echo "Publish left files beside the exe: $stray" >&2
+            exit 1
+          fi
+
+      # A virtual display and a private D-Bus session, neither of which exist
+      # on a bare runner - see packaging/smoke-test.sh. Verified locally
+      # against a real desktop session (both the pass and the crash-without-
+      # a-display cases); this exact xvfb-run/dbus-run-session combination on
+      # an actual ubuntu-latest runner has not been, and may need a tweak.
+      - name: Install Xvfb and D-Bus
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11
+
+      - name: Startup smoke test
+        run: |
+          chmod +x packaging/smoke-test.sh
+          xvfb-run -a dbus-run-session -- packaging/smoke-test.sh dist/linux-x64/ClaudeCounter
+
+      # Pinned by hash, same reasoning as packages.lock.json: a compromised or
+      # silently-bumped upstream release must not change what CI trusts.
+      - name: Install nfpm
+        env:
+          NFPM_VERSION: 2.47.0
+          NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+        run: |
+          curl -sL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum -c -
+          tar xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          chmod +x /tmp/nfpm
+          echo /tmp >> "$GITHUB_PATH"
+
+      # nfpm resolves contents[].src relative to the working directory it is
+      # run from, not the config file - see packaging/nfpm/nfpm.yaml.
+      - name: Package smoke test
+        run: |
+          mkdir -p packaging/nfpm/build
+          cp dist/linux-x64/ClaudeCounter packaging/nfpm/build/ClaudeCounter
+          cd packaging/nfpm
+          VERSION=0.0.0-ci ARCH=amd64 nfpm package --config nfpm.yaml --packager deb --target ../../dist/
+          VERSION=0.0.0-ci ARCH=amd64 nfpm package --config nfpm.yaml --packager rpm --target ../../dist/
+          cd ../..
+          ls dist/*.deb dist/*.rpm

@@ -488,6 +488,7 @@ publish/
 publish-linux/
 dist/
 packaging/inno/Output/
+packaging/nfpm/build/
 
 # Claude Code scratch space (was in .git/info/exclude, which does not travel
 # with a clone - a contributor would otherwise start tracking these)

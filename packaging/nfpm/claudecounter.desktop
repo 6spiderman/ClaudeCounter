@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ClaudeCounter
+Comment=Claude plan usage in the system tray
+Exec=claudecounter
+Icon=claudecounter
+Terminal=false
+Categories=Utility;
+StartupNotify=false
+NoDisplay=false

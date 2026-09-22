@@ -16,6 +16,11 @@ jobs:
   release:
     runs-on: windows-latest
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -205,3 +210,137 @@ jobs:
             dist/*.exe
             dist/*.zip
             dist/SHA256SUMS.txt
+
+  release-linux:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: |
+          dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
+          dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
+
+      # linux-arm64 is cross-published from this x64 runner, the same way the
+      # Windows job already cross-publishes win-arm64 - self-contained
+      # publish just fetches the target RID's runtime and native (SkiaSharp,
+      # HarfBuzzSharp) assets via NuGet, no actual arm64 execution needed to
+      # produce it. It has not been run on real arm64 hardware - see the
+      # README caveat.
+      - name: Publish
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -e
+          for rid in linux-x64 linux-arm64; do
+            dotnet publish src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj \
+              -c Release -r "$rid" --self-contained true --no-restore \
+              -p:PublishSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
+              -o "dist/$rid"
+
+            stray=$(find "dist/$rid" -maxdepth 1 -type f ! -name ClaudeCounter)
+            if [ -n "$stray" ]; then
+              echo "Unexpected files alongside the exe for $rid: $stray" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Xvfb and D-Bus
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11
+
+      # Only the natively-built x64 binary - arm64 is cross-published above
+      # and cannot actually run on this runner's amd64 CPU. See
+      # packaging/smoke-test.sh for what this checks and why.
+      - name: Startup smoke test
+        run: |
+          chmod +x packaging/smoke-test.sh
+          xvfb-run -a dbus-run-session -- packaging/smoke-test.sh dist/linux-x64/ClaudeCounter
+
+      # Pinned by hash, same reasoning as packages.lock.json: a compromised or
+      # silently-bumped upstream release must not change what a tagged
+      # release ships.
+      - name: Install nfpm
+        env:
+          NFPM_VERSION: 2.47.0
+          NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+        run: |
+          curl -sL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  /tmp/nfpm.tar.gz" | sha256sum -c -
+          tar xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          chmod +x /tmp/nfpm
+          echo /tmp >> "$GITHUB_PATH"
+
+      # nfpm resolves contents[].src relative to the working directory it is
+      # run from, not the config file - see packaging/nfpm/nfpm.yaml - hence
+      # cd'ing into packaging/nfpm and staging the binary at build/ first.
+      - name: Build packages and portable archives
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -e
+          declare -A nfpm_arch=( [linux-x64]=amd64 [linux-arm64]=arm64 )
+          declare -A label=( [linux-x64]=x64 [linux-arm64]=arm64 )
+
+          for rid in linux-x64 linux-arm64; do
+            arch="${nfpm_arch[$rid]}"
+            lbl="${label[$rid]}"
+
+            mkdir -p packaging/nfpm/build
+            cp "dist/$rid/ClaudeCounter" packaging/nfpm/build/ClaudeCounter
+            (
+              cd packaging/nfpm
+              VERSION="$VERSION" ARCH="$arch" nfpm package --config nfpm.yaml \
+                --packager deb --target "../../dist/ClaudeCounter-$VERSION-$lbl.deb"
+              VERSION="$VERSION" ARCH="$arch" nfpm package --config nfpm.yaml \
+                --packager rpm --target "../../dist/ClaudeCounter-$VERSION-$lbl.rpm"
+            )
+
+            staging="dist/portable-$lbl"
+            mkdir -p "$staging"
+            cp "dist/$rid/ClaudeCounter" "$staging/"
+            cp LICENSE "$staging/LICENSE.txt"
+            cp README.md "$staging/"
+            tar czf "dist/ClaudeCounter-$VERSION-$lbl-portable.tar.gz" -C "$staging" .
+          done
+
+      # A separate file from the Windows job's SHA256SUMS.txt: the two jobs
+      # run on different runners and cannot safely append to one file without
+      # a race, and gh release upload would need --clobber either way if they
+      # shared a name.
+      - name: Hash artifacts
+        run: |
+          cd dist
+          sha256sum ClaudeCounter-*.deb ClaudeCounter-*.rpm ClaudeCounter-*-portable.tar.gz \
+            > SHA256SUMS-linux.txt
+          cat SHA256SUMS-linux.txt
+
+      # --clobber makes a rerun of this job safe: it replaces its own assets
+      # on the release rather than failing because they already exist.
+      - name: Upload to release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            dist/ClaudeCounter-*.deb dist/ClaudeCounter-*.rpm \
+            dist/ClaudeCounter-*-portable.tar.gz dist/SHA256SUMS-linux.txt \
+            --clobber
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts-linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*-portable.tar.gz
+            dist/SHA256SUMS-linux.txt
