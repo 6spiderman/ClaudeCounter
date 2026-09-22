@@ -15,7 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The WinForms-specific pieces (Shell, IconRenderer, ...) still tested here. -->
     <ProjectReference Include="..\..\src\ClaudeCounter\ClaudeCounter.csproj" />
+    <!-- Explicit, not just transitive via the above, since most tests here exercise Core. -->
+    <ProjectReference Include="..\..\src\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
   </ItemGroup>
 
 </Project>

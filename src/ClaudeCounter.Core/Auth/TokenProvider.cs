@@ -56,13 +56,16 @@ public sealed class TokenProvider
     private readonly CliCredentialsFile _cliFile;
     private readonly Func<DateTimeOffset> _now;
 
+    // No default session store: EncryptedSessionStore needs a platform-specific
+    // IDataProtector (DPAPI, Secret Service, ...) that this project does not
+    // know about, so the caller must always supply one.
     public TokenProvider(
-        ISessionStore? session = null,
+        ISessionStore session,
         ITokenRefresher? refresher = null,
         CliCredentialsFile? cliFile = null,
         Func<DateTimeOffset>? now = null)
     {
-        _session = session ?? new EncryptedSessionStore();
+        _session = session;
         _refresher = refresher ?? new OAuthTokenRefresher();
         _cliFile = cliFile ?? new CliCredentialsFile();
         _now = now ?? (() => DateTimeOffset.UtcNow);
