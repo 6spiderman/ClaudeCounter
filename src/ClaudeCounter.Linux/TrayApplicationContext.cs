@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -34,6 +35,8 @@ public sealed class TrayApplicationContext
     private readonly NativeMenuItem _signInItem;
     private readonly NativeMenuItem _updateItem;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly PosixSignalRegistration _sigTerm;
+    private readonly PosixSignalRegistration _sigInt;
 
     /// <summary>Set the moment Exit is chosen, so a stray cancellation from
     /// Avalonia's own teardown on the way out reads as "exiting", not a crash.</summary>
@@ -125,6 +128,17 @@ public sealed class TrayApplicationContext
         // timer fires. Force an immediate refresh on resume instead.
         _sleepResume.Resumed += OnResumed;
 
+        // Without this, the process does not exit on SIGTERM - confirmed
+        // directly (a bare Avalonia app, even with a TrayIcon and a
+        // long-lived child process, exits fine on SIGTERM by default; this
+        // app specifically did not, for a reason isolation did not pin down).
+        // That is exactly what a desktop session manager sends on logout or
+        // shutdown, so an unresponsive process here can stall or block it
+        // entirely - reported against this port on KDE/Fedora. Cancel the
+        // signal's default handling and drive our own clean shutdown instead.
+        _sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, HandleTerminationSignal);
+        _sigInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, HandleTerminationSignal);
+
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started (Linux).");
         TrayPresence.WarnIfMissing();
 
@@ -135,6 +149,17 @@ public sealed class TrayApplicationContext
     {
         Log.Info("System resumed from sleep - refreshing now.");
         _polling.TriggerNow();
+    }
+
+    // Runs on a thread pool thread, not the UI thread - marshal before
+    // touching anything Avalonia owns. Cancelling here means the process
+    // does not die from the signal's default disposition mid-cleanup; it
+    // exits instead once ExitApplication's own Shutdown() completes.
+    private void HandleTerminationSignal(PosixSignalContext context)
+    {
+        context.Cancel = true;
+        Log.Info($"Received {context.Signal} - exiting.");
+        Dispatcher.UIThread.Post(ExitApplication);
     }
 
     /// <summary>
@@ -346,9 +371,16 @@ public sealed class TrayApplicationContext
 
     private void ExitApplication()
     {
-        Log.Info("ClaudeCounter exiting.");
+        // Idempotent: a signal and the Exit menu item (or two signals) could
+        // both reach here, and every disposal below only tolerates once.
+        if (IsExiting)
+            return;
         IsExiting = true;
+
+        Log.Info("ClaudeCounter exiting.");
         _lifetime.Cancel();
+        _sigTerm.Dispose();
+        _sigInt.Dispose();
         // Not: _trayIcon.IsVisible = false. Toggling it here races Avalonia's
         // own D-Bus tray-icon teardown and surfaces a TaskCanceledException
         // from DBusTrayIconImpl.WatchAsync() through the dispatcher on the way
