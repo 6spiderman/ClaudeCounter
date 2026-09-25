@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- Both RIDs the eventual release workflow should publish for, mirroring
+         win-x64/win-arm64 on the Windows side. -->
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeCounter</AssemblyName>
+
+    <!--
+      Without this, a single-file publish still leaves Skia's and HarfBuzz's
+      native .so files beside the executable - the same trap the Windows build
+      hit with WPF's native libraries. See ClaudeCounter.csproj for the mirror
+      of this comment.
+    -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+  </ItemGroup>
+
+</Project>
