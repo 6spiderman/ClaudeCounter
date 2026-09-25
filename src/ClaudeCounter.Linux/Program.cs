@@ -23,12 +23,18 @@ internal static class Program
             return BuildAvaloniaApp()
                 .StartWithClassicDesktopLifetime(args, ShutdownMode.OnExplicitShutdown);
         }
-        catch (OperationCanceledException) when (TrayApplicationContext.IsExiting)
+        catch (OperationCanceledException e)
         {
-            // A benign race in Avalonia's own tray-icon teardown can still
-            // surface a cancellation through the dispatcher on the way out
-            // even without the toggle above; ExitApplication already logged
-            // the real reason we are here.
+            // Not conditioned on TrayApplicationContext.IsExiting: confirmed
+            // on a real shutdown that the session's D-Bus bus can be torn
+            // down before our own SIGTERM handler gets to run, which cancels
+            // Avalonia's tray-icon watch and surfaces here first - IsExiting
+            // would still be false at that point even though this is an
+            // entirely ordinary shutdown, not a bug. Any cancellation
+            // reaching all the way up through Avalonia's dispatcher loop to
+            // here is by construction something asking us to stop, never a
+            // genuine unhandled error.
+            Log.Info($"Exiting on a cancellation from the platform ({e.GetType().Name}) - normal during shutdown/logout.");
             return 0;
         }
         catch (Exception e)
