@@ -1,0 +1,60 @@
+# nfpm config - builds both the .deb and the .rpm from one file, so there is
+# one packaging path to maintain instead of two (see the Linux-port plan).
+#
+# nfpm resolves every relative path (contents[].src, --target, ...) against
+# the CURRENT WORKING DIRECTORY, not against this file's location - so nfpm
+# must be run FROM this directory, and the binary staged at the fixed path
+# below first, since nfpm globs contents[].src before ${VERSION}/${ARCH}
+# substitution runs (which does work, but only on top-level scalar fields
+# like these two - verified against this nfpm version, 2.47.0):
+#
+#   cd packaging/nfpm
+#   cp ../../dist/linux-x64/ClaudeCounter build/ClaudeCounter
+#   VERSION=1.2.3 ARCH=amd64 \
+#     nfpm package --config nfpm.yaml --packager deb \
+#       --target ../../dist/ClaudeCounter-1.2.3-amd64.deb
+---
+name: "claudecounter"
+arch: "${ARCH}"
+platform: "linux"
+version: "${VERSION}"
+section: "utils"
+priority: "optional"
+maintainer: "6spiderman <6spiderman@users.noreply.github.com>"
+description: |
+  Claude plan usage in the system tray.
+  Shows your five-hour session, weekly, and per-model Claude usage windows in
+  a lightweight tray icon, with a countdown to each reset. Unofficial - not
+  affiliated with, endorsed by, or supported by Anthropic.
+vendor: "6spiderman"
+homepage: "https://github.com/6spiderman/ClaudeCounter"
+license: "MIT"
+
+contents:
+  - src: build/ClaudeCounter
+    dst: /usr/lib/claudecounter/ClaudeCounter
+    file_info:
+      mode: 0755
+
+  - src: /usr/lib/claudecounter/ClaudeCounter
+    dst: /usr/bin/claudecounter
+    type: symlink
+
+  - src: ../../assets/icon.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/claudecounter.svg
+
+  - src: claudecounter.desktop
+    dst: /usr/share/applications/claudecounter.desktop
+
+# A weak hint, not a hard requirement: irrelevant on KDE/XFCE/Cinnamon/MATE,
+# which all provide a tray natively, and harmless if the package name has
+# drifted on a given distro release - the app's own runtime check (see
+# TrayPresence in ClaudeCounter.Linux) and the README are the real fallback
+# for a user on GNOME who has no tray at all.
+overrides:
+  deb:
+    recommends:
+      - gnome-shell-extension-appindicator
+  rpm:
+    recommends:
+      - gnome-shell-extension-appindicator

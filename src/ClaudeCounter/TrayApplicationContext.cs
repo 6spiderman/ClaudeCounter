@@ -22,7 +22,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     // ONE instance, shared by the poll loop and every sign-in dialog. Two
     // stores over the same file would race on read-your-own-write: the dialog
     // writes a session the loop has already cached as absent.
-    private readonly ISessionStore _sessionStore = new EncryptedSessionStore();
+    private readonly ISessionStore _sessionStore = new EncryptedSessionStore(null, new DpapiDataProtector());
 
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();

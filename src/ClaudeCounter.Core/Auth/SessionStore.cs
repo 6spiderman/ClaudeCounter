@@ -50,12 +50,15 @@ public sealed class EncryptedSessionStore : ISessionStore
     private readonly IDataProtector _protector;
     private readonly object _gate = new();
 
-    public EncryptedSessionStore(string? path = null, IDataProtector? protector = null)
+    // No default protector: the concrete implementation (DPAPI, Secret
+    // Service, ...) is platform-specific and lives in the front-end project,
+    // not here.
+    public EncryptedSessionStore(string? path, IDataProtector protector)
     {
         _path = path ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ClaudeCounter", "session.dat");
-        _protector = protector ?? new DpapiDataProtector();
+        _protector = protector;
     }
 
     public string FilePath => _path;

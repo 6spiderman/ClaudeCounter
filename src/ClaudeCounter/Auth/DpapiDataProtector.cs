@@ -3,18 +3,6 @@ using System.Security.Cryptography;
 namespace ClaudeCounter.Core.Auth;
 
 /// <summary>
-/// Seam over DPAPI so the session store can be tested without touching the
-/// Windows crypto stack.
-/// </summary>
-public interface IDataProtector
-{
-    byte[] Protect(byte[] plaintext);
-
-    /// <summary>Returns null when the ciphertext cannot be decrypted.</summary>
-    byte[]? Unprotect(byte[] ciphertext);
-}
-
-/// <summary>
 /// Windows DPAPI at CurrentUser scope. The key is derived from the user's
 /// Windows credentials and is machine-bound: the file cannot be decrypted by
 /// another account, or by the same account on a different PC. That last case is

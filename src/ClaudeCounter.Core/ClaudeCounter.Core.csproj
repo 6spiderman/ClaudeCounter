@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Deliberately plain net8.0, not net8.0-windows: this project holds the
+      polling loop, OAuth flow, usage models and settings model shared by
+      every UI front end (WinForms today, an Avalonia Linux build later).
+      Anything that needs a Windows-only API (DPAPI, the registry, GDI+)
+      belongs in the front-end project instead, behind a seam already defined
+      here (IDataProtector, ISessionStore, ...).
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeCounter.Core</AssemblyName>
+  </PropertyGroup>
+
+</Project>

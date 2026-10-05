@@ -11,6 +11,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{07286211
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeCounter.Tests", "tests\ClaudeCounter.Tests\ClaudeCounter.Tests.csproj", "{33422D6A-7A6F-4B1E-A57A-BE5FA494DE66}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeCounter.Core", "src\ClaudeCounter.Core\ClaudeCounter.Core.csproj", "{BFC52AB8-3E6A-4748-B3ED-D5E59515C295}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeCounter.Linux", "src\ClaudeCounter.Linux\ClaudeCounter.Linux.csproj", "{F16506F5-4FD4-4B0A-BA85-9E626866600E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -28,9 +32,19 @@ Global
 		{33422D6A-7A6F-4B1E-A57A-BE5FA494DE66}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{33422D6A-7A6F-4B1E-A57A-BE5FA494DE66}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{33422D6A-7A6F-4B1E-A57A-BE5FA494DE66}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BFC52AB8-3E6A-4748-B3ED-D5E59515C295}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BFC52AB8-3E6A-4748-B3ED-D5E59515C295}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BFC52AB8-3E6A-4748-B3ED-D5E59515C295}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BFC52AB8-3E6A-4748-B3ED-D5E59515C295}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F16506F5-4FD4-4B0A-BA85-9E626866600E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F16506F5-4FD4-4B0A-BA85-9E626866600E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F16506F5-4FD4-4B0A-BA85-9E626866600E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F16506F5-4FD4-4B0A-BA85-9E626866600E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{A82F9E61-A9EB-4838-8E20-4AC3AD9A31B5} = {ED38E331-7983-4F37-89A9-7888A9C505DA}
 		{33422D6A-7A6F-4B1E-A57A-BE5FA494DE66} = {07286211-B6E1-4555-B0C0-80DFEB52D747}
+		{BFC52AB8-3E6A-4748-B3ED-D5E59515C295} = {ED38E331-7983-4F37-89A9-7888A9C505DA}
+		{F16506F5-4FD4-4B0A-BA85-9E626866600E} = {ED38E331-7983-4F37-89A9-7888A9C505DA}
 	EndGlobalSection
 EndGlobal
