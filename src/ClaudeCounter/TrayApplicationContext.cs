@@ -367,6 +367,10 @@ public sealed class TrayApplicationContext : ApplicationContext
         _flyout.UpdateState(state);
         _flyout.UpdateBackupHealth(backupHealth);
         UpdateSignInItem(state);
+        // Published for `claudecounter --status` and the Plasma widget, which
+        // read this file instead of ever calling the usage API themselves.
+        UsageStatusStore.Write(UsageStatusFile.From(
+            state, _settings.PollIntervalMinutes, _settings.WarnThreshold, _settings.CriticalThreshold, DateTimeOffset.Now));
         Log.Info($"Tooltip: {tooltip.Replace("\n", " | ")}");
 
         // Piggyback on the first good poll rather than the constructor: no

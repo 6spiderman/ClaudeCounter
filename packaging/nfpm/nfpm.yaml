@@ -54,6 +54,13 @@ contents:
   - src: claudecounter.desktop
     dst: /usr/share/applications/claudecounter.desktop
 
+  # The KDE Plasma 6 panel widget (right-click the panel > Add Widgets >
+  # ClaudeCounter). It only runs `claudecounter --status --json`; outside
+  # Plasma nothing reads these files, so it is harmless there.
+  - src: ../plasmoid/com.github.6spiderman.claudecounter/
+    dst: /usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter/
+    type: tree
+
 # Runtime dependencies. The binary is a self-contained .NET publish, so no
 # .NET runtime is needed, but it still links or dlopens these system
 # libraries - list taken from a running instance's mapped libraries on

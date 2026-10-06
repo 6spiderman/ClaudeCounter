@@ -345,6 +345,12 @@ jobs:
           declare -A nfpm_arch=( [linux-x64]=amd64 [linux-arm64]=arm64 )
           declare -A label=( [linux-x64]=x64 [linux-arm64]=arm64 )
 
+          # The widget's version follows the release, like the binaries'.
+          widget=packaging/plasmoid/com.github.6spiderman.claudecounter
+          sed -i "s/\"Version\": \"[^\"]*\"/\"Version\": \"$VERSION\"/" "$widget/metadata.json"
+          python3 -m json.tool "$widget/metadata.json" > /dev/null
+          grep -q "\"Version\": \"$VERSION\"" "$widget/metadata.json"
+
           for rid in linux-x64 linux-arm64; do
             arch="${nfpm_arch[$rid]}"
             lbl="${label[$rid]}"
@@ -366,6 +372,7 @@ jobs:
             cp "dist/$rid/ClaudeBackup" "$staging/"
             cp LICENSE "$staging/LICENSE.txt"
             cp README.md "$staging/"
+            cp -r "$widget" "$staging/plasma-widget"
             tar czf "dist/ClaudeCounter-$VERSION-$lbl-portable.tar.gz" -C "$staging" .
           done
 
@@ -380,6 +387,12 @@ jobs:
           sudo apt-get install -y "./dist/ClaudeCounter-$VERSION-x64.deb"
           test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
           test -x /usr/lib/claudecounter/ClaudeBackup
+          test -f /usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter/metadata.json
+          set +e
+          timeout 20 claudecounter --status
+          code=$?
+          set -e
+          test "$code" -eq 1
           sudo apt-get remove -y claudecounter
 
       # A separate file from the Windows job's SHA256SUMS.txt: the two jobs

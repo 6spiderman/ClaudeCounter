@@ -46,6 +46,21 @@ body:
       required: true
 
   - type: dropdown
+    id: area
+    attributes:
+      label: Where does it show up?
+      options:
+        - Tray icon, tooltip or flyout
+        - Sign-in, Settings or first-run window
+        - Alert popups
+        - Backup or restore
+        - claudecounter --status / Claude Code status line
+        - KDE Plasma widget
+        - Somewhere else
+    validations:
+      required: false
+
+  - type: dropdown
     id: architecture
     attributes:
       label: Architecture

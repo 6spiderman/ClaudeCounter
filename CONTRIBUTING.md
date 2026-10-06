@@ -43,6 +43,29 @@ dotnet publish src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj \
   -p:PublishSingleFile=true -o publish
 ```
 
+### The KDE Plasma widget
+
+The widget in `packaging/plasmoid/com.github.6spiderman.claudecounter/` is
+plain QML with no build step. It only runs `claudecounter --status --json`
+(and `--refresh`), so any change to that JSON is a change to the widget's
+input: keep the field names stable, and cover them in `UsageStatusTests`. To
+try a change on Plasma 6:
+
+```sh
+kpackagetool6 -t Plasma/Applet -i packaging/plasmoid/com.github.6spiderman.claudecounter   # first time
+kpackagetool6 -t Plasma/Applet -u packaging/plasmoid/com.github.6spiderman.claudecounter   # after each edit
+plasmawindowed com.github.6spiderman.claudecounter                                        # popup in a window
+kpackagetool6 -t Plasma/Applet -r com.github.6spiderman.claudecounter                      # remove it again
+```
+
+QML errors go to the terminal `plasmawindowed` was started from.
+`plasmawindowed` remembers the window size in `~/.config/plasmawindowedrc`;
+delete that to see the popup's own size again. It runs whichever
+`claudecounter` is first on your `PATH`, so to test against a local build, put
+a `claudecounter` script that execs your build ahead of `/usr/bin` on `PATH`.
+To see the panel badge instead of the popup, add
+`preferredRepresentation: compactRepresentation` to `main.qml` temporarily.
+
 CI restores in locked mode, so `packages.lock.json` must match what a plain
 `dotnet restore` produces. Note that a `dotnet publish -r <rid>` without
 `--no-restore` rewrites the lock files (it adds `Microsoft.NET.ILLink.Tasks`
@@ -128,7 +151,7 @@ Tests there must pass on both systems: build paths with `Path.Combine`
 file locking. When the behaviour itself only exists on one system (drive
 letters and UNC paths, the registry, files that cannot be deleted while
 open), mark the case `[WindowsOnlyFact]`/`[WindowsOnlyTheory]` - or
-`[UnixOnlyTheory]` for its Linux counterpart - so the other system reports it
+`[UnixOnlyFact]`/`[UnixOnlyTheory]` for Linux-only behaviour - so the other system reports it
 as skipped instead of failing (see `WindowsOnly.cs`).
 
 New behaviour needs a test. Bug fixes need a test that fails before the fix.

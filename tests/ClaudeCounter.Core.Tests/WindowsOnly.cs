@@ -39,3 +39,13 @@ public sealed class UnixOnlyTheoryAttribute : TheoryAttribute
             Skip = "Unix-only behaviour.";
     }
 }
+
+/// <summary>A fact about Unix-only behaviour, such as file permission modes.</summary>
+public sealed class UnixOnlyFactAttribute : FactAttribute
+{
+    public UnixOnlyFactAttribute()
+    {
+        if (OperatingSystem.IsWindows())
+            Skip = "Unix-only behaviour.";
+    }
+}

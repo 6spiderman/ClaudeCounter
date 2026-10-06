@@ -242,6 +242,14 @@ Select-String -Path $log -Pattern 'sk-ant-','accessToken','refreshToken','code_v
 - [ ] Launching a second copy (Start menu or the .exe) opens the running
       copy's flyout, in the tray corner, and the second copy exits
 - [ ] Switch Windows between light and dark mode -> the flyout follows
+- [ ] In PowerShell,
+      `& "$env:LOCALAPPDATA\Programs\ClaudeCounter\ClaudeCounter.exe" --status | Out-String`
+      prints the same session and weekly figures as the tooltip; with the app
+      exited it prints `ClaudeCounter: not running`
+- [ ] The same command with `--status --json` prints JSON; `--refresh`
+      while the app runs makes it poll (the log shows a fresh tooltip line)
+- [ ] With the full path as Claude Code's `statusLine` command, the status
+      line shows the figures
 
 ---
 
@@ -452,6 +460,26 @@ artifact, or from the draft release:
       tray icon gets the red badge and one backup-health popup appears
 - [ ] **Restore...**: preview a backup and restore one file into another
       folder; a safety copy is kept
+- [ ] `claudecounter --status` prints the same session and weekly figures as
+      the tooltip, and exits 0; `claudecounter --status --json` prints JSON
+- [ ] `claudecounter --refresh` makes the app poll (the flyout's "Updated"
+      time changes); with the app exited it prints `ClaudeCounter: not
+      running` and exits 1, and `--status` ends its line with `| not running`
+- [ ] `~/.local/share/ClaudeCounter/usage-status.json` is `-rw-------` and
+      holds no token or email address
+- [ ] **Plasma widget.** Right-click the panel -> **Add Widgets...** ->
+      **ClaudeCounter** is listed; drag it to the panel. The badge shows the
+      session percentage in the tray icon's colour
+- [ ] Clicking the badge opens a popup with every window, its bar, the reset
+      countdowns and "Updated" time; nothing is cut off at the bottom
+- [ ] **Refresh** in the popup (and a middle-click on the badge) makes the
+      app poll; **Open** brings up the flyout
+- [ ] Exit ClaudeCounter from the tray: within 30 seconds the badge turns a
+      grey `--`, and the popup says it is not running and offers **Start**,
+      which starts it again
+- [ ] Lower the warn threshold below current usage in Settings: after the
+      next poll the badge turns amber, like the tray icon
+- [ ] `sudo apt remove claudecounter` removes the widget from **Add Widgets**
 
 ---
 

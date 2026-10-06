@@ -1,0 +1,19 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "ClaudeCounter contributors"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Shows your Claude usage limits, read from the running ClaudeCounter app",
+        "Icon": "claudecounter",
+        "Id": "com.github.6spiderman.claudecounter",
+        "License": "MIT",
+        "Name": "ClaudeCounter",
+        "Version": "1.3.0",
+        "Website": "https://github.com/6spiderman/ClaudeCounter"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
