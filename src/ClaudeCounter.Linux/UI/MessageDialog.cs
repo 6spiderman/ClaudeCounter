@@ -43,20 +43,21 @@ public sealed class MessageDialog : Window
         }
         buttons.Children.Add(ok);
 
+        var text = new TextBlock
+        {
+            Text = message,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        // Only set for a warning: assigning null would not fall back to the
+        // theme's text colour, it would draw the message with no brush at all.
+        if (warning)
+            text.Foreground = new SolidColorBrush(BandPalette.BandColor(Band.Amber));
+
         Content = new StackPanel
         {
             Margin = new Thickness(20),
             Spacing = 16,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = message,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = warning ? new SolidColorBrush(BandPalette.BandColor(Band.Amber)) : null,
-                },
-                buttons,
-            },
+            Children = { text, buttons },
         };
     }
 
