@@ -19,13 +19,13 @@ dotnet build ClaudeCounter.sln -c Release
 dotnet test
 ```
 
-On Linux, the shared library and the Linux app (the WinForms app and the test
-project target Windows, so they only build here with
-`-p:EnableWindowsTargeting=true`, and the tests only run on Windows - CI runs
-them there):
+On Linux, the Linux app and the platform-neutral tests (the WinForms app and
+its test project target Windows, so they only build here with
+`-p:EnableWindowsTargeting=true`, and their tests only run on Windows):
 
 ```sh
 dotnet build src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj -c Release
+dotnet test tests/ClaudeCounter.Core.Tests
 ```
 
 Building a local single-file executable:
@@ -63,7 +63,10 @@ src/ClaudeCounter.Linux/   Linux front end (Avalonia)
   Core/Auth/               Secret Service store, machine-key data protector
   Settings/                XDG autostart manager
   UI/                      Tray flyout, dialogs, icon rendering, tray-presence check
-tests/ClaudeCounter.Tests/ Tests for Core and the Windows front end
+tests/ClaudeCounter.Core.Tests/  Tests for Core and the backup worker (net8.0;
+                                runs on Windows and Linux)
+tests/ClaudeCounter.Tests/       Tests that need WinForms or Windows APIs
+                                (net8.0-windows; runs on Windows only)
 packaging/                 Inno Setup + winget (Windows), nfpm .deb/.rpm (Linux),
                            startup smoke tests for both
 ```
@@ -110,8 +113,23 @@ union, not thrown. Reserve exceptions for genuine bugs.
 ## Tests
 
 xUnit, no mocking library. Fakes are hand-rolled and live in
-`tests/ClaudeCounter.Tests/Fakes/`. Temporary files go through
+`tests/ClaudeCounter.Core.Tests/Fakes/`. Temporary files go through
 `Directory.CreateTempSubdirectory()`.
+
+There are two test projects. **`tests/ClaudeCounter.Core.Tests`** is plain
+`net8.0` and holds everything that tests the shared library and the backup
+worker; CI runs it on both Windows and Linux. **`tests/ClaudeCounter.Tests`**
+targets Windows and holds only what needs WinForms or Windows APIs (forms,
+the Windows icon renderer, DPAPI, Task Scheduler). Put a new test in
+`ClaudeCounter.Core.Tests` unless it cannot compile without Windows.
+
+Tests there must pass on both systems: build paths with `Path.Combine`
+(never `C:\` or `/home` literals as real paths), and do not rely on Windows
+file locking. When the behaviour itself only exists on one system (drive
+letters and UNC paths, the registry, files that cannot be deleted while
+open), mark the case `[WindowsOnlyFact]`/`[WindowsOnlyTheory]` - or
+`[UnixOnlyTheory]` for its Linux counterpart - so the other system reports it
+as skipped instead of failing (see `WindowsOnly.cs`).
 
 New behaviour needs a test. Bug fixes need a test that fails before the fix.
 

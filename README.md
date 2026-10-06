@@ -362,11 +362,15 @@ build the installer as well you need
 ### Linux
 
 ```sh
+dotnet test tests/ClaudeCounter.Core.Tests
 dotnet publish src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj \
   -c Release -r linux-x64 --self-contained true \
   -p:PublishSingleFile=true \
   -o publish
 ```
+
+The tests here are the platform-neutral ones (the shared library and the
+backup worker); the WinForms tests run on Windows.
 
 That produces a single `publish/ClaudeCounter` with no dependencies. To build
 the `.deb`/`.rpm` as well you need [nfpm](https://nfpm.goreleaser.com/):
@@ -450,7 +454,8 @@ src/ClaudeCounter.Linux/  Linux (Avalonia)
   Core/Auth/              Secret Service + machine-key IDataProtector implementations
   Settings/               XDG autostart manager
   UI/                     Tray flyout, dialogs, icon rendering, tray-presence check
-tests/ClaudeCounter.Tests/
+tests/ClaudeCounter.Core.Tests/  Tests for Core and the backup worker (Windows and Linux)
+tests/ClaudeCounter.Tests/       Tests that need WinForms or Windows APIs (Windows only)
 packaging/     Inno Setup script and winget manifests (Windows); nfpm config
                and the .desktop/icon it packages, plus both platforms'
                startup smoke test scripts

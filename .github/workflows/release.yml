@@ -272,6 +272,11 @@ jobs:
           dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
           dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
           dotnet restore src/ClaudeBackup/ClaudeBackup.csproj --locked-mode
+          dotnet restore tests/ClaudeCounter.Core.Tests/ClaudeCounter.Core.Tests.csproj --locked-mode
+
+      # Never publish a red tag - on Linux either.
+      - name: Test
+        run: dotnet test tests/ClaudeCounter.Core.Tests/ClaudeCounter.Core.Tests.csproj -c Release --no-restore
 
       # linux-arm64 is cross-published from this x64 runner, the same way the
       # Windows job already cross-publishes win-arm64 - self-contained

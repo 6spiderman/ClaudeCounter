@@ -8,6 +8,8 @@ using System.Text;
 // other test that touches Log.FilePath flaky whenever it happens to run in
 // parallel with this one.
 [assembly: InternalsVisibleTo("ClaudeCounter.Tests")]
+// The platform-neutral test project (runs on Linux CI as well as Windows).
+[assembly: InternalsVisibleTo("ClaudeCounter.Core.Tests")]
 
 // RelativePathGuard and CredentialScrubber moved here from ClaudeBackup.csproj
 // (see their doc comments) so the restore engine, also in this assembly, can

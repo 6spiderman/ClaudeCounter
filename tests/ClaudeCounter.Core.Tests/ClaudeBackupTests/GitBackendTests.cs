@@ -239,7 +239,7 @@ public class GitBackendTests : IDisposable
     // (which would mean the first layer has a hole - it does not). This also
     // covers the classic prefix-collision bug: a naive StartsWith check
     // would wrongly treat "C:\staging-evil" as being inside "C:\staging".
-    [Theory]
+    [WindowsOnlyTheory]
     [InlineData(@"C:\staging", @"C:\staging\file.json", true)]
     [InlineData(@"C:\staging", @"C:\staging\sub\file.json", true)]
     [InlineData(@"C:\staging", @"C:\staging", true)]
@@ -247,6 +247,22 @@ public class GitBackendTests : IDisposable
     [InlineData(@"C:\staging", @"C:\staging-evil\file.json", false)]
     public void IsWithinDirectoryDetectsEscapes(string baseDir, string candidate, bool expected) =>
         Assert.Equal(expected, GitBackend.IsWithinDirectory(baseDir, candidate));
+
+    // The same cases built from this platform's real paths ('|' separates
+    // segments), so the check also runs where the separator is '/'.
+    [Theory]
+    [InlineData("file.json", true)]
+    [InlineData("sub|file.json", true)]
+    [InlineData("", true)]
+    [InlineData("..|other|file.json", false)]
+    [InlineData("..|staging-evil|file.json", false)]
+    public void IsWithinDirectoryDetectsEscapesOnThisPlatform(string relative, bool expected)
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "staging");
+        var segments = relative.Split('|', StringSplitOptions.RemoveEmptyEntries);
+        var candidate = Path.GetFullPath(Path.Combine([baseDir, .. segments]));
+        Assert.Equal(expected, GitBackend.IsWithinDirectory(baseDir, candidate));
+    }
 
     // Deletions in the selection must propagate: a file present from a
     // previous run but no longer in the current selection must disappear

@@ -52,11 +52,20 @@ public class RestoreDestinationModelTests
 
     // --- IsRefusedDestination -------------------------------------------
 
+    // Built under the temp folder rather than as C:\ literals, so the overlap
+    // checks run with this platform's real separators (on Linux CI too).
+    private static readonly string Root = Path.Combine(Path.GetTempPath(), "cc-restore-dest");
+
+    private static string P(params string[] parts) => Path.Combine([Root, .. parts]);
+
+    private static string Elsewhere(params string[] parts) =>
+        Path.Combine([Path.GetTempPath(), "cc-restore-elsewhere", .. parts]);
+
     [Fact]
     public void CandidateEqualToAProtectedDirIsRefused()
     {
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"C:\staging", new[] { @"C:\staging" });
+            P("staging"), new[] { P("staging") });
 
         Assert.True(refused);
     }
@@ -65,7 +74,7 @@ public class RestoreDestinationModelTests
     public void CandidateNestedInsideAProtectedDirIsRefused()
     {
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"C:\staging\subfolder", new[] { @"C:\staging" });
+            P("staging", "subfolder"), new[] { P("staging") });
 
         Assert.True(refused);
     }
@@ -77,7 +86,7 @@ public class RestoreDestinationModelTests
         // directory as the destination is just as unsafe - Overlaps covers
         // both directions for exactly this reason.
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"C:\staging", new[] { @"C:\staging\subfolder" });
+            P("staging"), new[] { P("staging", "subfolder") });
 
         Assert.True(refused);
     }
@@ -85,11 +94,11 @@ public class RestoreDestinationModelTests
     [Fact]
     public void SiblingWithASharedNamePrefixIsNotRefused()
     {
-        // "C:\staging-evil" is not inside "C:\staging" - a naive
+        // "staging-evil" is not inside "staging" - a naive
         // StartsWith-based check would wrongly refuse it. RelativePathGuard
         // is separator-aware and must not make that mistake here either.
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"C:\staging-evil", new[] { @"C:\staging" });
+            P("staging-evil"), new[] { P("staging") });
 
         Assert.False(refused);
     }
@@ -98,7 +107,7 @@ public class RestoreDestinationModelTests
     public void UnrelatedCandidateIsNotRefused()
     {
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"D:\backups\restored", new[] { @"C:\staging", @"C:\safety", @"C:\drive-temp" });
+            Elsewhere("backups", "restored"), new[] { P("staging"), P("safety"), P("drive-temp") });
 
         Assert.False(refused);
     }
@@ -107,7 +116,7 @@ public class RestoreDestinationModelTests
     public void CandidateIsCheckedAgainstEveryProtectedDirNotJustTheFirst()
     {
         var refused = RestoreDestinationModel.IsRefusedDestination(
-            @"C:\safety\2026-08-11", new[] { @"C:\staging", @"C:\safety", @"C:\drive-temp" });
+            P("safety", "2026-08-11"), new[] { P("staging"), P("safety"), P("drive-temp") });
 
         Assert.True(refused);
     }

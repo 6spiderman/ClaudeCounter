@@ -187,12 +187,24 @@ public class SyncFolderBackendTests : IDisposable
     // this transport) - validated directly via the side-effect-free helper
     // rather than through a real network copy, which no test environment can
     // rely on having available.
-    [Theory]
+    [WindowsOnlyTheory]
     [InlineData(@"\\nas\share\claude", true)]
     [InlineData(@"\\192.168.1.210\media\claude-backups", true)]
     [InlineData(@"relative\path", false)]
     [InlineData("", false)]
-    public void ValidatesRootednessAllowingUncPaths(string folderPath, bool expectRooted)
+    public void ValidatesRootednessAllowingUncPaths(string folderPath, bool expectRooted) =>
+        AssertRootedness(folderPath, expectRooted);
+
+    // A mounted NAS share on Linux is an ordinary absolute path.
+    [UnixOnlyTheory]
+    [InlineData("/mnt/nas/claude", true)]
+    [InlineData("/run/user/1000/gvfs/smb-share:server=nas,share=media/claude", true)]
+    [InlineData("relative/path", false)]
+    [InlineData("", false)]
+    public void ValidatesRootednessOfMountedSharePaths(string folderPath, bool expectRooted) =>
+        AssertRootedness(folderPath, expectRooted);
+
+    private void AssertRootedness(string folderPath, bool expectRooted)
     {
         var error = SyncFolderBackend.ValidateFolderPath(folderPath, _root);
         if (expectRooted)

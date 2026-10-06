@@ -98,7 +98,8 @@ public class SyncFolderScannerTests : IDisposable
         Assert.Contains(found, c => c.Path == Path.Combine(_root, "Google Drive"));
     }
 
-    [Fact]
+    // Drive letters: Path.Combine(@"G:\", ...) only means "G:\My Drive" on Windows.
+    [WindowsOnlyFact]
     public void FindsGoogleDriveViaMyDriveFolderOnAnyProbedDriveRoot()
     {
         var driveRoots = new[] { @"G:\" };
@@ -190,9 +191,12 @@ public class SyncFolderScannerTests : IDisposable
         Assert.Empty(found);
     }
 
-    [Fact]
+    [WindowsOnlyFact]
     public void RealDetectNeverThrowsAndReturnsAList()
     {
+        if (!OperatingSystem.IsWindows())
+            return; // the guard CA1416 needs; the attribute already skips elsewhere
+
         // Not asserting on contents (machine-dependent, like
         // ClaudeLocationScannerTests.ProbeBuildsCandidatesFromRealKnownFolders) -
         // just that the real entry point (real env vars, real drive letters,
@@ -201,9 +205,12 @@ public class SyncFolderScannerTests : IDisposable
         Assert.NotNull(found);
     }
 
-    [Fact]
+    [WindowsOnlyFact]
     public void RealReadMappedNetworkDrivesNeverThrows()
     {
+        if (!OperatingSystem.IsWindows())
+            return;
+
         var found = SyncFolderScanner.ReadMappedNetworkDrives();
         Assert.NotNull(found);
     }

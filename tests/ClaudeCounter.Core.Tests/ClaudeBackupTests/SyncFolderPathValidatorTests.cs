@@ -43,10 +43,20 @@ public class SyncFolderPathValidatorTests : IDisposable
         Assert.Contains("not a full path", error);
     }
 
-    [Theory]
+    [WindowsOnlyTheory]
     [InlineData(@"C:\Users\someone\Google Drive\ClaudeBackups")]
     [InlineData(@"\\192.168.1.210\media\claude-backups")]
     public void RootedNonOverlappingPathIsAccepted(string folderPath)
+    {
+        var error = SyncFolderPathValidator.Validate(folderPath, _root);
+        Assert.Null(error);
+    }
+
+    [UnixOnlyTheory]
+    [InlineData("/home/someone/Dropbox/ClaudeBackups")]
+    [InlineData("/mnt/nas/claude-backups")]
+    [InlineData("/run/user/1000/gvfs/smb-share:server=nas,share=media/claude")]
+    public void RootedNonOverlappingUnixPathIsAccepted(string folderPath)
     {
         var error = SyncFolderPathValidator.Validate(folderPath, _root);
         Assert.Null(error);
