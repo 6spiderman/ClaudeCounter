@@ -11,7 +11,13 @@ internal static class Program
         using var mutex = new Mutex(initiallyOwned: true,
             @"Local\ClaudeCounter_SingleInstance", out var createdNew);
         if (!createdNew)
+        {
+            // Already running: launching it again (Start menu, desktop
+            // shortcut) brings up the running instance's flyout instead of
+            // doing nothing. If it does not answer, exit quietly as before.
+            InstanceChannel.TrySend(InstanceChannel.Show, TimeSpan.FromSeconds(1));
             return;
+        }
 
         // Without these, an unhandled exception dies in the Windows Error
         // Reporting dialog and leaves nothing in our own log - so the user has

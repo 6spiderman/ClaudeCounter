@@ -178,7 +178,11 @@ you a code - paste it back into ClaudeCounter and you are done.
 </p>
 
 You can reach this any time from the tray menu: **right-click the icon -> Sign in
-to Claude...**
+to Claude...** Once signed in, the menu shows **Signed in as** your account,
+with **Sign in with another account...** and **Sign out** underneath. Sign out
+asks first, then forgets ClaudeCounter's own login on this computer (it does
+not sign you out of claude.ai or Claude Code); if Claude Code is signed in, the
+app carries on with Claude Code's session until you sign in again.
 
 ## Features
 
@@ -224,8 +228,9 @@ to Claude...**
   configuration; nothing at the destination itself is deleted. See
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
-- Single instance (a named mutex, on both platforms), single self-contained
-  executable, no telemetry.
+- Single instance (a named mutex, on both platforms): starting ClaudeCounter
+  again while it is running - from the application menu or Start menu - opens
+  the running copy's flyout. Single self-contained executable, no telemetry.
 
 ## Authentication
 

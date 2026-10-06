@@ -38,6 +38,8 @@ public sealed class TrayApplicationContext
     private readonly TrayIcon _trayIcon;
     private readonly NativeMenuItem _signInItem;
     private readonly NativeMenuItem _switchAccountItem;
+    private readonly NativeMenuItem _signOutItem;
+    private InstanceChannel? _channel;
     private readonly NativeMenuItem _updateItem;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly PosixSignalRegistration _sigTerm;
@@ -107,6 +109,8 @@ public sealed class TrayApplicationContext
         _signInItem.Click += (_, _) => ShowSignIn();
         _switchAccountItem = new NativeMenuItem("Sign in with another account...") { IsVisible = false };
         _switchAccountItem.Click += (_, _) => ShowSignIn();
+        _signOutItem = new NativeMenuItem("Sign out") { IsVisible = false };
+        _signOutItem.Click += async (_, _) => await SignOutAsync();
 
         _updateItem = new NativeMenuItem("Update available") { IsVisible = false };
         _updateItem.Click += (_, _) => OpenUpdatePage();
@@ -128,6 +132,7 @@ public sealed class TrayApplicationContext
             refreshItem,
             _signInItem,
             _switchAccountItem,
+            _signOutItem,
             settingsItem,
         };
         // Only when the backup worker is installed, as on Windows.
@@ -188,6 +193,51 @@ public sealed class TrayApplicationContext
 
         MaybeShowOnboarding();
         _ = RefreshAccountEmailAsync();
+
+        // Lets a second launch bring up this instance's flyout, and
+        // `claudecounter --refresh` (or the Plasma widget) ask for a poll.
+        _channel = InstanceChannel.StartServer(command => Dispatcher.UIThread.Post(() => OnChannelCommand(command)));
+    }
+
+    private void OnChannelCommand(string command)
+    {
+        switch (command)
+        {
+            case InstanceChannel.Show:
+                if (_flyout.IsVisible)
+                    _flyout.Activate();
+                else
+                    _flyout.ShowNearTray();
+                break;
+            case InstanceChannel.Refresh:
+                _polling.TriggerNow();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Forgets ClaudeCounter's own login after a confirmation. The poll that
+    /// follows falls back to Claude Code's login if there is one, otherwise
+    /// asks to sign in - TokenProvider's normal order.
+    /// </summary>
+    private async Task SignOutAsync()
+    {
+        if (!await MessageDialog.ConfirmStandaloneAsync(SignInMenu.SignOutConfirmation, "Sign out", "Cancel"))
+            return;
+
+        try
+        {
+            await Task.Run(_sessionStore.Clear); // the keyring call can block
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Sign out: clearing the stored session failed: {e.Message}");
+        }
+
+        _accountEmail = null;
+        Log.Info("Signed out.");
+        _polling.ResetForSignOut();
+        _polling.TriggerNow();
     }
 
     private void OnResumed()
@@ -579,10 +629,11 @@ public sealed class TrayApplicationContext
     {
         _lastState = state;
         var signInNeeded = state.Problem is ProblemKind.SignInRequired or ProblemKind.TokenExpired;
-        var (header, enabled, showSwitch) = SignInMenu.For(state.Source, signInNeeded, _accountEmail);
+        var (header, enabled, showSwitch, showSignOut) = SignInMenu.For(state.Source, signInNeeded, _accountEmail);
         _signInItem.Header = header;
         _signInItem.IsEnabled = enabled;
         _switchAccountItem.IsVisible = showSwitch;
+        _signOutItem.IsVisible = showSignOut;
     }
 
     private async Task RefreshAccountEmailAsync()
@@ -651,6 +702,7 @@ public sealed class TrayApplicationContext
         IsExiting = true;
 
         _lifetime.Cancel();
+        _channel?.Dispose();
         _sigTerm.Dispose();
         _sigInt.Dispose();
         // Not: _trayIcon.IsVisible = false. Toggling it here races Avalonia's

@@ -87,11 +87,12 @@ public sealed class SecretServiceSessionStore(ISessionStore fallback) : ISession
 
     public void Clear()
     {
+        // The file fallback is cleared either way: a session.dat written during
+        // an earlier fallback period must not survive a sign-out and quietly
+        // come back if the keyring later becomes unavailable.
+        fallback.Clear();
         if (_useFallback)
-        {
-            fallback.Clear();
             return;
-        }
         Run(["clear", .. Attributes], stdin: null); // best-effort; a missing item is not an error
     }
 

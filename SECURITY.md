@@ -76,6 +76,16 @@ Plus, only when you explicitly ask it to check for updates:
 There is no telemetry, no analytics and no crash reporting. Your tokens and
 your usage figures are never sent anywhere else.
 
+### The local instance channel
+
+A running ClaudeCounter listens on a local channel - a named pipe on Windows,
+a Unix domain socket on Linux - so that starting it a second time can open the
+running copy's flyout, and `claudecounter --refresh` can ask for a poll. It is
+created with "current user only" permissions, so other users on the machine
+cannot connect, and it is never reachable over the network. It accepts only
+three one-word commands (`show`, `refresh`, `ping`), carries no data in either
+direction beyond an `ok` reply, and ignores anything else.
+
 ## Tokens are never logged
 
 The sign-in flow handles a PKCE verifier, an authorization code, an access

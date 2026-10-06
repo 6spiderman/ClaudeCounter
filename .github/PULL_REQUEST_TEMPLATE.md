@@ -18,6 +18,8 @@ Closes #
 - [ ] Tray icon renders and updates
 - [ ] Flyout opens, closes, and shows correct values
 - [ ] Sign-in flow completes end to end
+- [ ] Sign out (if sign-in or session code changed): confirm, the icon clears,
+      and the session is gone from disk/keyring
 - [ ] `~/.claude/.credentials.json` is byte-identical before and after a run
       (`Get-FileHash $HOME\.claude\.credentials.json`, or `sha256sum` on Linux)
 - [ ] No token, refresh token, authorization code or PKCE verifier appears in

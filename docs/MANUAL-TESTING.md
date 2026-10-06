@@ -117,6 +117,20 @@ Tray menu -> **Sign in to Claude...**
 - [ ] After approving, pasting the code and clicking Connect shows
       "Signed in", then the dialog closes itself after about a second
 - [ ] The tray icon updates within a second or two - no waiting for the next poll
+- [ ] The tray menu now reads **Signed in as** your account (greyed out), with
+      **Sign in with another account...** and **Sign out** below it
+
+### Signing out
+
+- [ ] Tray menu -> **Sign out** asks first; **Cancel** changes nothing
+- [ ] Confirming clears the icon to `--` at once and logs `Signed out.` (no
+      email in the log)
+- [ ] With Claude Code signed in, the next poll shows usage again via Claude
+      Code's session ("Sign in to Claude... (using Claude Code's session)");
+      without it, the menu reads **Sign in to Claude...**
+- [ ] `session.dat` is gone (Windows: `%LocalAppData%\ClaudeCounter`; Linux:
+      the KWallet/keyring entry and any `~/.local/share/ClaudeCounter/session.dat`)
+- [ ] Signing in again works and shows **Signed in as** again
 
 ### Error paths
 
@@ -225,7 +239,8 @@ Select-String -Path $log -Pattern 'sk-ant-','accessToken','refreshToken','code_v
 - [ ] Changing thresholds in Settings recolours the icon straight away
 - [ ] Sleep the PC for a few minutes; on resume the icon refreshes promptly
       instead of showing stale numbers
-- [ ] Launching a second copy does nothing (single instance)
+- [ ] Launching a second copy (Start menu or the .exe) opens the running
+      copy's flyout, in the tray corner, and the second copy exits
 - [ ] Switch Windows between light and dark mode -> the flyout follows
 
 ---
@@ -401,6 +416,10 @@ artifact, or from the draft release:
 - [ ] **Shutdown.** Same, but shut down. No "A stop job is running..." wait
       for ClaudeCounter on the way down.
 - [ ] After logging back in, it starts on its own (autostart) and is signed in
+- [ ] Starting ClaudeCounter from the application launcher while it is
+      running opens its flyout next to the panel
+- [ ] **Sign out** (tray menu) shows a confirmation window, and the keyring
+      entry is removed after confirming
 - [ ] Suspend and resume: the log shows `System resumed from sleep -
       refreshing now.` straight after waking
 - [ ] `pkill -TERM ClaudeCounter` exits within a second, log says

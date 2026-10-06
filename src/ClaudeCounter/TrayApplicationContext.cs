@@ -34,6 +34,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _updateItem;
     private readonly ToolStripMenuItem _signInItem;
     private readonly ToolStripMenuItem _switchAccountItem;
+    private readonly ToolStripMenuItem _signOutItem;
+    private InstanceChannel? _channel;
     private readonly CancellationTokenSource _lifetime = new();
 
     private SettingsForm? _settingsForm;
@@ -98,12 +100,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _signInItem = new ToolStripMenuItem("Sign in to Claude...", null, (_, _) => ShowSignIn());
         _switchAccountItem = new ToolStripMenuItem("Sign in with another account...", null, (_, _) => ShowSignIn()) { Visible = false };
+        _signOutItem = new ToolStripMenuItem("Sign out", null, (_, _) => SignOut()) { Visible = false };
         _accountEmail = ReadAccountEmail();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh now", null, (_, _) => _polling.TriggerNow());
         menu.Items.Add(_signInItem);
         menu.Items.Add(_switchAccountItem);
+        menu.Items.Add(_signOutItem);
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         if (BackupTaskManager.WorkerAvailable())
             menu.Items.Add("Back up now", null, async (_, _) => await RunBackupNowAsync());
@@ -145,7 +149,64 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started.");
 
+        // Lets a second launch bring up this instance's flyout, and
+        // `ClaudeCounter.exe --refresh` ask for a poll. Commands arrive on a
+        // pool thread; _flyout's handle (created above) is the marshaling
+        // target, as for OnSessionEnding.
+        _channel = InstanceChannel.StartServer(command => _flyout.BeginInvoke(new Action(() => OnChannelCommand(command))));
+
         MaybeShowOnboarding();
+    }
+
+    private void OnChannelCommand(string command)
+    {
+        switch (command)
+        {
+            case InstanceChannel.Show:
+                if (_flyout.Visible)
+                {
+                    _flyout.Activate();
+                }
+                else
+                {
+                    // Not the cursor: a launch from the Start menu leaves it
+                    // anywhere. The tray's corner of the primary screen, where
+                    // alert popups go too.
+                    var area = (Screen.PrimaryScreen ?? Screen.AllScreens[0]).WorkingArea;
+                    _flyout.ShowNear(new Point(area.Right - 8, area.Bottom));
+                }
+                break;
+            case InstanceChannel.Refresh:
+                _polling.TriggerNow();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Forgets ClaudeCounter's own login after a confirmation. The poll that
+    /// follows falls back to Claude Code's login if there is one, otherwise
+    /// asks to sign in - TokenProvider's normal order.
+    /// </summary>
+    private void SignOut()
+    {
+        var answer = MessageBox.Show(SignInMenu.SignOutConfirmation, "ClaudeCounter",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+        if (answer != DialogResult.Yes)
+            return;
+
+        try
+        {
+            _sessionStore.Clear();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn($"Sign out: clearing the stored session failed: {e.Message}");
+        }
+
+        _accountEmail = null;
+        Log.Info("Signed out.");
+        _polling.ResetForSignOut();
+        _polling.TriggerNow();
     }
 
     /// <summary>
@@ -580,12 +641,13 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         var needed = state.Problem is ProblemKind.SignInRequired or ProblemKind.TokenExpired;
         var baseFont = SystemFonts.MenuFont ?? Control.DefaultFont;
-        var (header, enabled, showSwitch) = SignInMenu.For(state.Source, needed, _accountEmail);
+        var (header, enabled, showSwitch, showSignOut) = SignInMenu.For(state.Source, needed, _accountEmail);
 
         _signInItem.Font = needed ? new Font(baseFont, FontStyle.Bold) : baseFont;
         _signInItem.Text = header;
         _signInItem.Enabled = enabled;
         _switchAccountItem.Visible = showSwitch;
+        _signOutItem.Visible = showSignOut;
     }
 
     private string? ReadAccountEmail()
@@ -659,6 +721,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
         Application.ApplicationExit -= OnApplicationExit;
         _onboardingTimer?.Dispose();
+        _channel?.Dispose();
         _lifetime.Cancel();
         // Dispose the icon before exiting or a ghost icon lingers until mouse-over.
         _notifyIcon.Visible = false;
