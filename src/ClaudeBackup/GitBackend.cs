@@ -25,6 +25,25 @@ public sealed record BackendResult(bool Ok, string Message);
 /// </summary>
 public sealed class GitBackend
 {
+    /// <summary>
+    /// git refuses to commit at all when no identity is configured ("Please
+    /// tell me who you are") - the norm on a fresh Linux desktop, where
+    /// nothing sets user.email the way Git for Windows' installer usually
+    /// does. When none is configured, give the staging repository - and only
+    /// it, never the user's global config - a local "ClaudeCounter" identity
+    /// for its backup commits. A configured identity, global or local,
+    /// always wins, so existing setups commit exactly as before.
+    /// </summary>
+    private void EnsureCommitIdentity()
+    {
+        var email = _runner.Run("git", new[] { "config", "user.email" }, _stagingDir);
+        if (email.ExitCode == 0)
+            return;
+        _runner.Run("git", new[] { "config", "user.name", "ClaudeCounter" }, _stagingDir);
+        _runner.Run("git", new[] { "config", "user.email", "claudecounter@localhost" }, _stagingDir);
+        Log.Info("GitBackend: no git identity is configured; backup commits are authored as ClaudeCounter (staging repo only).");
+    }
+
     private readonly IProcessRunner _runner;
     private readonly string _stagingDir;
 
@@ -114,6 +133,7 @@ public sealed class GitBackend
             }
             else if (diff.ExitCode == 1)
             {
+                EnsureCommitIdentity();
                 var commit = _runner.Run("git",
                     new[] { "commit", "-m", $"Backup {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}" }, _stagingDir);
                 if (!commit.Ok)

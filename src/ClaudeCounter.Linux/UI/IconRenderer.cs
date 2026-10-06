@@ -18,14 +18,16 @@ public static class IconRenderer
 
     /// <summary>
     /// Renders a 32x32 tray icon: rounded square in the band color with the
-    /// percentage (or "--") in white. Caller owns the returned WindowIcon.
+    /// percentage (or "--") in white, plus - when <paramref name="badge"/> is
+    /// true - the same white-ringed red dot the Windows icon uses to say
+    /// backups need attention. Caller owns the returned WindowIcon.
     /// </summary>
-    public static WindowIcon Render(string text, Band band) => new(RenderBitmap(text, band));
+    public static WindowIcon Render(string text, Band band, bool badge = false) => new(RenderBitmap(text, band, badge));
 
     /// <summary>The same badge as a bitmap, for display inline (e.g. the onboarding wizard's sample icon).</summary>
-    public static RenderTargetBitmap RenderBitmap(string text, Band band)
+    public static RenderTargetBitmap RenderBitmap(string text, Band band, bool badge = false)
     {
-        var visual = new TrayIconVisual(text, band) { Width = Size, Height = Size };
+        var visual = new TrayIconVisual(text, band, badge) { Width = Size, Height = Size };
         visual.Measure(new Size(Size, Size));
         visual.Arrange(new Rect(0, 0, Size, Size));
 
@@ -34,7 +36,7 @@ public static class IconRenderer
         return bitmap;
     }
 
-    private sealed class TrayIconVisual(string text, Band band) : Control
+    private sealed class TrayIconVisual(string text, Band band, bool badge) : Control
     {
         public override void Render(DrawingContext context)
         {
@@ -58,6 +60,17 @@ public static class IconRenderer
             context.DrawText(formatted, new Point(
                 (Size - formatted.Width) / 2,
                 (Size - formatted.Height) / 2));
+
+            if (badge)
+            {
+                // Top-right, ~a third of the icon, white ring around red -
+                // same proportions as the Windows IconRenderer.DrawBadge.
+                var diameter = Size * 0.3125;
+                var ring = new Rect(Size - diameter - 1, 1, diameter, diameter);
+                context.DrawEllipse(Brushes.White, null, ring);
+                var inset = diameter * 0.15;
+                context.DrawEllipse(new SolidColorBrush(Color.FromRgb(237, 28, 36)), null, ring.Deflate(inset));
+            }
         }
     }
 }

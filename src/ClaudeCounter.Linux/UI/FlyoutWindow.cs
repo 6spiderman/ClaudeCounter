@@ -2,7 +2,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using ClaudeBackup;
 using ClaudeCounter.Core;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
@@ -26,6 +28,9 @@ public sealed class FlyoutWindow : Window
     private readonly Func<AppSettings> _getSettings;
     private PollState? _state;
     private string? _updateVersion;
+    // Null when the backup worker is not installed; BackupHealthPresenter
+    // treats that like "not configured" and shows nothing.
+    private BackupHealthResult? _backupHealth;
     private DateTime _autoHiddenAtUtc = DateTime.MinValue;
 
     public event Action? RefreshRequested;
@@ -94,6 +99,13 @@ public sealed class FlyoutWindow : Window
     public void UpdateState(PollState state)
     {
         _state = state;
+        if (IsVisible)
+            RebuildContent();
+    }
+
+    public void UpdateBackupHealth(BackupHealthResult? result)
+    {
+        _backupHealth = result;
         if (IsVisible)
             RebuildContent();
     }
@@ -189,6 +201,24 @@ public sealed class FlyoutWindow : Window
             };
             link.Click += (_, _) => UpdateRequested?.Invoke();
             panel.Children.Add(link);
+        }
+
+        // Same as Windows: whatever BackupHealthPresenter says, amber when it
+        // warrants attention, nothing at all when backup is not in use.
+        var backupLines = BackupHealthPresenter.FlyoutLines(_backupHealth, DateTimeOffset.UtcNow);
+        if (backupLines.Count > 0)
+        {
+            var warrants = _backupHealth is { } bh && bh.State.WarrantsAttention();
+            foreach (var line in backupLines)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = line,
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = warrants ? new SolidColorBrush(BandPalette.BandColor(Band.Amber)) : Brushes.Gray,
+                });
+            }
         }
 
         var updated = _state?.LastSuccessAt is { } last

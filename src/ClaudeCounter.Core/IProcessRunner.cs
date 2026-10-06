@@ -61,6 +61,9 @@ public sealed class ProcessRunner : IProcessRunner
 
     public bool Exists(string file)
     {
+        if (!OperatingSystem.IsWindows())
+            return ExistsOnPath(file, Environment.GetEnvironmentVariable("PATH"), File.Exists);
+
         // `where` walks PATH on Windows; also succeeds for absolute paths that exist.
         try
         {
@@ -71,5 +74,27 @@ public sealed class ProcessRunner : IProcessRunner
         {
             return File.Exists(file);
         }
+    }
+
+    /// <summary>
+    /// The non-Windows <see cref="Exists"/>: there is no `where` there (the
+    /// previous code threw, then fell back to File.Exists("git") relative to
+    /// the working directory, so git and rclone always read as missing on
+    /// Linux). A name with a directory part is checked as a path; a bare name
+    /// is looked up in each PATH directory, as the shell would. Pure apart
+    /// from <paramref name="fileExists"/>, for tests.
+    /// </summary>
+    public static bool ExistsOnPath(string file, string? path, Func<string, bool> fileExists)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+            return false;
+        if (file.Contains('/'))
+            return fileExists(file);
+        foreach (var directory in (path ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (fileExists(Path.Combine(directory, file)))
+                return true;
+        }
+        return false;
     }
 }

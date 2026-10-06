@@ -266,6 +266,165 @@ public static class SyncFolderScanner
         return candidates.Where(c => c.DisplayName.StartsWith(prefix, StringComparison.Ordinal)).ToList();
     }
 
+    /// <summary>
+    /// Linux counterpart of <see cref="Detect"/>: probes the folders Linux sync
+    /// clients create by default, and mounted network shares. Never throws.
+    /// </summary>
+    public static IReadOnlyList<SyncFolderCandidate> DetectLinux()
+    {
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var mounts = ReadLinuxMounts("/proc/self/mounts");
+            var runtimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+            var gvfsDir = string.IsNullOrWhiteSpace(runtimeDir) ? null : System.IO.Path.Combine(runtimeDir, "gvfs");
+            return DetectLinuxFrom(home, mounts, gvfsDir, ListDirectories, Directory.Exists);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<SyncFolderCandidate>();
+        }
+    }
+
+    private static readonly HashSet<string> NetworkFileSystems = new(StringComparer.Ordinal)
+    {
+        "cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.sshfs", "fuse.rclone",
+    };
+
+    /// <summary>
+    /// The pure core of <see cref="DetectLinux"/>. Display names start with the
+    /// same prefixes as the Windows candidates ("OneDrive", "Google Drive",
+    /// "Dropbox", "NAS share") so <see cref="FilterByProvider"/> works
+    /// unchanged on both platforms.
+    /// </summary>
+    /// <param name="home">The user's home folder; blank skips the per-client folders.</param>
+    /// <param name="mounts">Mounted file systems as (source, mount point, type), e.g. from /proc/self/mounts.</param>
+    /// <param name="gvfsDirectory">The GVFS mount directory ($XDG_RUNTIME_DIR/gvfs), where KDE/GNOME file managers mount network shares; null to skip.</param>
+    /// <param name="listDirectories">Names of the subdirectories of a folder (empty if it cannot be read).</param>
+    /// <param name="directoryExists">Whether a folder exists.</param>
+    public static IReadOnlyList<SyncFolderCandidate> DetectLinuxFrom(
+        string home,
+        IReadOnlyList<(string Source, string MountPoint, string FileSystem)> mounts,
+        string? gvfsDirectory,
+        Func<string, IReadOnlyList<string>> listDirectories,
+        Func<string, bool> directoryExists)
+    {
+        var candidates = new List<SyncFolderCandidate>();
+
+        if (!string.IsNullOrWhiteSpace(home))
+        {
+            var homeEntries = listDirectories(home);
+
+            // OneDrive (abraunegg/onedrive and OneDriveGUI default to ~/OneDrive;
+            // business accounts are often "OneDrive - <Org>").
+            foreach (var name in homeEntries.Where(n => n.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal))
+                // The folder name already starts with "OneDrive", so it is the label.
+                candidates.Add(new SyncFolderCandidate(name, System.IO.Path.Combine(home, name)));
+
+            // Google Drive has no official Linux client: these are the names
+            // the common ones use (google-drive-ocamlfuse, rclone mounts set
+            // up by hand, Insync's per-account folders).
+            foreach (var name in new[] { "Google Drive", "GoogleDrive", "google-drive", "gdrive" })
+                candidates.Add(new SyncFolderCandidate($"Google Drive (~/{name})", System.IO.Path.Combine(home, name)));
+            var insync = System.IO.Path.Combine(home, "Insync");
+            if (directoryExists(insync))
+            {
+                foreach (var account in listDirectories(insync).Order(StringComparer.Ordinal))
+                    candidates.Add(new SyncFolderCandidate($"Google Drive (Insync: {account})", System.IO.Path.Combine(insync, account, "Google Drive")));
+            }
+
+            // Dropbox's own Linux client: ~/Dropbox, or "Dropbox (Personal)" /
+            // "Dropbox (<Team>)" when a work account is linked too.
+            foreach (var name in homeEntries.Where(n => n.StartsWith("Dropbox", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal))
+                candidates.Add(new SyncFolderCandidate(name, System.IO.Path.Combine(home, name)));
+        }
+
+        // NAS: network file systems mounted through fstab, autofs or by hand.
+        foreach (var (source, mountPoint, fileSystem) in mounts)
+        {
+            if (NetworkFileSystems.Contains(fileSystem) && !string.IsNullOrWhiteSpace(mountPoint))
+                candidates.Add(new SyncFolderCandidate($"NAS share ({source})", mountPoint));
+        }
+
+        // NAS: shares opened in Dolphin/Nautilus, mounted by GVFS for the
+        // current session ("smb-share:server=nas,share=media").
+        if (gvfsDirectory is not null && directoryExists(gvfsDirectory))
+        {
+            foreach (var name in listDirectories(gvfsDirectory).Order(StringComparer.Ordinal))
+            {
+                if (name.StartsWith("smb-share:", StringComparison.Ordinal) ||
+                    name.StartsWith("nfs:", StringComparison.Ordinal) ||
+                    name.StartsWith("sftp:", StringComparison.Ordinal))
+                    candidates.Add(new SyncFolderCandidate($"NAS share ({name})", System.IO.Path.Combine(gvfsDirectory, name)));
+            }
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var found = new List<SyncFolderCandidate>();
+        foreach (var candidate in candidates)
+        {
+            bool exists;
+            try
+            {
+                exists = directoryExists(candidate.Path);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                exists = false;
+            }
+            if (exists && seen.Add(System.IO.Path.TrimEndingDirectorySeparator(candidate.Path)))
+                found.Add(candidate);
+        }
+        return found;
+    }
+
+    /// <summary>
+    /// Parses a mounts table (/proc/self/mounts format: source, mount point,
+    /// type, ... separated by spaces, with spaces inside fields written as
+    /// \040). Missing or unreadable means no mounts.
+    /// </summary>
+    public static IReadOnlyList<(string Source, string MountPoint, string FileSystem)> ParseLinuxMounts(IEnumerable<string> lines)
+    {
+        var result = new List<(string, string, string)>();
+        foreach (var line in lines)
+        {
+            var fields = line.Split(' ');
+            if (fields.Length < 3)
+                continue;
+            result.Add((Unescape(fields[0]), Unescape(fields[1]), fields[2]));
+        }
+        return result;
+
+        static string Unescape(string field) => System.Text.RegularExpressions.Regex.Replace(
+            field, @"\\([0-7]{3})", m => ((char)Convert.ToInt32(m.Groups[1].Value, 8)).ToString());
+    }
+
+    private static IReadOnlyList<(string Source, string MountPoint, string FileSystem)> ReadLinuxMounts(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? ParseLinuxMounts(File.ReadLines(path)) : Array.Empty<(string, string, string)>();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<(string, string, string)>();
+        }
+    }
+
+    private static IReadOnlyList<string> ListDirectories(string folder)
+    {
+        try
+        {
+            return Directory.Exists(folder)
+                ? Directory.EnumerateDirectories(folder).Select(d => System.IO.Path.GetFileName(d)).ToList()
+                : Array.Empty<string>();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     private static void AddIfSet(
         List<SyncFolderCandidate> candidates, string displayName,
         IReadOnlyDictionary<string, string?> environmentVariables, string key)

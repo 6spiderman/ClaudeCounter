@@ -202,12 +202,14 @@ to Claude...**
   hits 100%, placed near the tray (on Linux, the corner next to your panel)
   or centered on screen, each configurable (or turned off) independently in
   Settings -> Alerts. See [Alerts](#alerts).
-- **Backup** (`ClaudeBackup.exe`, Windows for now): scheduled or on-demand backup of a subset
-  of your Claude config to any number of destinations you configure, in any
-  combination, with restore built in. Installed by default; untick "Backup
-  tools" on the installer's Components page (choose "Custom installation") if
-  you would rather leave it out, and every backup control in Settings stays
-  hidden when it is not installed. Settings -> Backup -> "Manage
+- **Backup** (the `ClaudeBackup` worker, on Windows and Linux): scheduled or
+  on-demand backup of a subset of your Claude config to any number of
+  destinations you configure, in any combination, with restore built in.
+  Installed by default - on Windows, untick "Backup tools" on the installer's
+  Components page (choose "Custom installation") if you would rather leave it
+  out; the Linux `.deb`/`.rpm` always include it - and every backup control in
+  Settings stays hidden when it is not installed. The schedule is a Task
+  Scheduler task on Windows and a systemd user timer on Linux. Settings -> Backup -> "Manage
   destinations..." lets you add, edit, or remove destinations one at a time -
   **GitHub** (a private repo you create yourself - **must be private**;
   ClaudeCounter cannot verify that automatically, so it warns you in Settings
@@ -322,7 +324,11 @@ settings.
 | `~/.local/share/ClaudeCounter/logs/claudecounter.log` | Same rules as Windows |
 | `~/.config/autostart/claudecounter.desktop` | Autostart entry, written when "Start on login" is enabled |
 | `~/.net/ClaudeCounter/` | Native libraries (Skia, HarfBuzz) the single-file binary unpacks on first start. Safe to delete; recreated as needed. |
-| `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program, when installed from the `.deb`/`.rpm` |
+| `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program and the `ClaudeBackup` worker, when installed from the `.deb`/`.rpm` |
+| `~/.config/ClaudeCounter/backup.json` | Backup destinations, selections and schedule. No secrets - credentials stay with git, rclone or your sync client. |
+| `~/.local/share/ClaudeCounter/backup-status.json` | Result of each destination's last backup run, for the health badge and the Last run column |
+| `~/.local/share/ClaudeCounter/backup-repo/`, `backup-tmp/`, `restore-*/` | Backup staging and restore working folders. Restore keeps its safety copies in `restore-safety/`. |
+| `~/.config/systemd/user/claudecounter-backup.{service,timer}` | The backup schedule, written by **Save and register schedule**. `systemctl --user list-timers` shows it. |
 | `~/.claude/.credentials.json` | Claude Code's tokens. **Read only, and only as a fallback.** |
 
 ## Build from source
@@ -419,6 +425,11 @@ the UI and the platform-specific seams below it.
   `PrepareForSleep` signal on the system bus in-process, with the D-Bus
   client Avalonia already ships for its tray icon - no child process that
   could outlive the app.
+- `BackupTaskManager` finds the `ClaudeBackup` worker next to the tray
+  binary and keeps the backup schedule: a Task Scheduler task on Windows, a
+  systemd user service and timer on Linux (`Persistent=` for missed runs,
+  `ConditionACPower=` for "don't start on battery", `Restart=on-failure` for
+  retries). The worker itself is the same code on both.
 - **Logout and shutdown (Linux).** The desktop's logout request arrives
   through X11 session management, which Avalonia handles by closing every
   window and cancelling the logout if any window refuses. The flyout only

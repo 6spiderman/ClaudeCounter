@@ -271,6 +271,7 @@ jobs:
         run: |
           dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
           dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
+          dotnet restore src/ClaudeBackup/ClaudeBackup.csproj --locked-mode
 
       # linux-arm64 is cross-published from this x64 runner, the same way the
       # Windows job already cross-publishes win-arm64 - self-contained
@@ -289,7 +290,13 @@ jobs:
               -p:PublishSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
               -o "dist/$rid"
 
-            stray=$(find "dist/$rid" -maxdepth 1 -type f ! -name ClaudeCounter)
+            dotnet publish src/ClaudeBackup/ClaudeBackup.csproj \
+              -c Release -r "$rid" --self-contained true --no-restore \
+              -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
+              -p:DebugType=none -p:Version="$VERSION" \
+              -o "dist/$rid"
+
+            stray=$(find "dist/$rid" -maxdepth 1 -type f ! -name ClaudeCounter ! -name ClaudeBackup)
             if [ -n "$stray" ]; then
               echo "Unexpected files alongside the exe for $rid: $stray" >&2
               exit 1
@@ -339,6 +346,7 @@ jobs:
 
             mkdir -p packaging/nfpm/build
             cp "dist/$rid/ClaudeCounter" packaging/nfpm/build/ClaudeCounter
+            cp "dist/$rid/ClaudeBackup" packaging/nfpm/build/ClaudeBackup
             (
               cd packaging/nfpm
               VERSION="$VERSION" ARCH="$arch" nfpm package --config nfpm.yaml \
@@ -350,6 +358,7 @@ jobs:
             staging="dist/portable-$lbl"
             mkdir -p "$staging"
             cp "dist/$rid/ClaudeCounter" "$staging/"
+            cp "dist/$rid/ClaudeBackup" "$staging/"
             cp LICENSE "$staging/LICENSE.txt"
             cp README.md "$staging/"
             tar czf "dist/ClaudeCounter-$VERSION-$lbl-portable.tar.gz" -C "$staging" .
@@ -365,6 +374,7 @@ jobs:
           set -e
           sudo apt-get install -y "./dist/ClaudeCounter-$VERSION-x64.deb"
           test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
+          test -x /usr/lib/claudecounter/ClaudeBackup
           sudo apt-get remove -y claudecounter
 
       # A separate file from the Windows job's SHA256SUMS.txt: the two jobs

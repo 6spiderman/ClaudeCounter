@@ -290,4 +290,92 @@ public static class BackupHelpText
         "destination that does have files - that destination still runs, " +
         "and the empty one is skipped and logged. Details always go to the " +
         "log.";
+
+    // --- Linux wording -------------------------------------------------
+    // The guide above is written for Windows (UNC paths, Task Scheduler).
+    // The Linux build shows the same guide with only those passages swapped,
+    // so the two cannot drift apart elsewhere. BackupHelpTextTests check
+    // that every swap still applies.
+
+    /// <summary>The sync-folder field help for the OS this is running on.</summary>
+    public static string SyncFolderForThisOs => OperatingSystem.IsWindows() ? SyncFolder : SyncFolderLinux;
+
+    /// <summary>The full guide for the OS this is running on.</summary>
+    public static string FullGuideForThisOs => OperatingSystem.IsWindows() ? FullGuide : FullGuideLinux;
+
+    public const string SyncFolderLinux =
+        "No sign-in or API setup needed. Point this at a folder your sync " +
+        "client already watches - Dropbox's Linux client, an OneDrive client " +
+        "such as onedrive or OneDriveGUI, or a Google Drive client such as " +
+        "Insync all present it as an ordinary folder, and the sync client " +
+        "does the actual upload on its own. A mounted NAS share works the " +
+        "same way. Picking Google Drive, OneDrive, Dropbox or NAS / network " +
+        "share when adding a destination already tries to find and fill this " +
+        "in for you; use Detect... to search again, or Browse... to pick one " +
+        "by hand. For a NAS, prefer a share mounted permanently (an " +
+        "/etc/fstab or autofs mount, e.g. under /mnt) over one opened in the " +
+        "file manager: a file-manager mount (under /run/user/.../gvfs) only " +
+        "exists while you are logged in and the share is open, so a " +
+        "scheduled backup can find it missing.";
+
+    internal static readonly (string Windows, string Linux)[] LinuxSwaps =
+    {
+        ("your existing Git Credential Manager, or an SSH key",
+         "your existing git credential helper (Git Credential Manager, or " +
+         "git's libsecret helper), or an SSH key"),
+        ("a folder your sync client (Google Drive for Desktop, OneDrive, " +
+         "Dropbox) or NAS share already watches",
+         "a folder your sync client (Dropbox's Linux client, an OneDrive " +
+         "client such as onedrive or OneDriveGUI, or a Google Drive client " +
+         "such as Insync) or a mounted NAS share already watches"),
+        ("For a NAS, prefer a UNC path (\\\\server\\share\\...) over a mapped " +
+         "drive letter (M:\\...) - a drive letter mapping belongs to your " +
+         "interactive sign-in session and is not guaranteed to resolve when " +
+         "the backup runs from Task Scheduler, so a letter-based path can " +
+         "silently fail once scheduled while a UNC path keeps working; " +
+         "Detect... already offers the UNC form for a mapped drive for this " +
+         "reason.",
+         "For a NAS, prefer a share mounted permanently (an /etc/fstab or " +
+         "autofs mount, e.g. under /mnt) over one opened in the file " +
+         "manager: a file-manager mount (under /run/user/.../gvfs) only " +
+         "exists while you are logged in and the share is open, so a " +
+         "scheduled backup can find it missing. Detect... lists both kinds."),
+        ("'Save and register schedule' creates a per-user Windows Task " +
+         "Scheduler task named 'ClaudeCounter Backup' that runs every " +
+         "enabled destination each time it fires. Disabling every " +
+         "destination (or removing them all) and saving removes it. " +
+         "Uninstalling removes it too.",
+         "'Save and register schedule' creates a per-user systemd timer, " +
+         "claudecounter-backup.timer in ~/.config/systemd/user, that runs " +
+         "every enabled destination each time it fires while you are logged " +
+         "in. Disabling every destination (or removing them all) and saving " +
+         "removes it. Uninstalling the package leaves the timer in place, " +
+         "but it then runs nothing."),
+        ("The Advanced dialog controls what happens around a scheduled run: " +
+         "whether a missed backup (e.g. the machine was asleep) runs as soon " +
+         "as possible afterwards (on by default), whether the task requires " +
+         "a network connection to start (on by default, since every " +
+         "destination uploads somewhere), whether it is allowed to start or " +
+         "must stop on battery power (both off by default - a laptop is " +
+         "exactly where missed runs happen, so backups run on battery unless " +
+         "you turn these on), and whether a failed run retries automatically " +
+         "(on by default, every 15 minutes, up to 3 times).",
+         "The Advanced dialog controls what happens around a scheduled run: " +
+         "whether a missed backup (e.g. the machine was off or asleep) runs " +
+         "as soon as possible afterwards (on by default), whether it may " +
+         "start on battery power (allowed by default - a laptop is exactly " +
+         "where missed runs happen), and whether a failed run retries " +
+         "automatically (on by default, every 15 minutes, up to 3 times). " +
+         "Waiting for a network connection and stopping when the laptop " +
+         "goes on battery are Windows-only options."),
+    };
+
+    public static readonly string FullGuideLinux = ToLinux(FullGuide);
+
+    internal static string ToLinux(string guide)
+    {
+        foreach (var (windows, linux) in LinuxSwaps)
+            guide = guide.Replace(windows, linux, StringComparison.Ordinal);
+        return guide;
+    }
 }

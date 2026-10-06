@@ -51,7 +51,7 @@ public static class Log
         try
         {
             var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
                 "ClaudeCounter", "logs");
             Directory.CreateDirectory(dir);
             return Path.Combine(dir, "claudecounter.log");

@@ -12,7 +12,7 @@ public static class AutostartManager
     private const string DesktopFileName = "claudecounter.desktop";
 
     private static string DesktopFilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create),
         "autostart", DesktopFileName);
 
     // Environment.ProcessPath is correct under single-file publish, unlike

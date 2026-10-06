@@ -873,35 +873,12 @@ public sealed class SettingsForm : Form
             ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
-    // I3: matches a URL scheme followed by a userinfo component
-    // (scheme://user[:pass]@...) - the shape a credential-bearing HTTPS
-    // remote takes (e.g. "https://ghp_xxx@github.com/org/repo.git"). Does NOT
-    // match the SSH shorthand form ("git@github.com:org/repo.git"): that has
-    // no "scheme://" prefix at all, and the "git@" there is a fixed username,
-    // not a secret. Public static (not requiring a Form instance) so it is
-    // directly unit-testable per the project's rule against constructing a
-    // Form in a test.
-    private static readonly Regex EmbeddedCredentialPattern =
-        new(@"^[a-z][a-z0-9+.\-]*://[^/@]*@", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // The validators live in Core (BackupDestinationValidation) so the Linux
+    // destination editor applies the same rules; these stay as the Windows
+    // UI's entry points (and the ones SettingsFormValidationTests exercise).
+    public static bool HasEmbeddedCredential(string? url) => BackupDestinationValidation.HasEmbeddedCredential(url);
 
-    /// <summary>
-    /// True when <paramref name="url"/> carries a userinfo component that
-    /// would put a credential into backup.json in plain text - the project's
-    /// hard constraint is that no secret is ever written there. The fix for
-    /// a user who needs authentication is Git Credential Manager or an SSH
-    /// key, not embedding a token in the remote URL.
-    /// </summary>
-    public static bool HasEmbeddedCredential(string? url) =>
-        !string.IsNullOrEmpty(url) && EmbeddedCredentialPattern.IsMatch(url);
-
-    /// <summary>
-    /// True when <paramref name="remote"/> starts with '-'. An rclone remote
-    /// spec passed on the command line as a bare positional argument is
-    /// parsed as an option if it starts with a dash - ArgumentList prevents
-    /// shell injection but not this, so it is rejected in the UI instead.
-    /// </summary>
-    public static bool HasLeadingDash(string? remote) =>
-        !string.IsNullOrEmpty(remote) && remote.StartsWith('-');
+    public static bool HasLeadingDash(string? remote) => BackupDestinationValidation.HasLeadingDash(remote);
 
     protected override void OnShown(EventArgs e)
     {
