@@ -26,7 +26,14 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '8.0.x'
+          # 8.0.x is the runtime the tests run on; 10.0.x is the SDK that
+          # builds everything. Avalonia 12's source generator needs a newer
+          # C# compiler than any 8.0 SDK ships (CS9057), and the highest
+          # installed SDK is the one dotnet picks. Runner images happened to
+          # preinstall a 10.0 SDK already; this makes it explicit.
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Resolve version
         id: version
@@ -159,6 +166,22 @@ jobs:
           # what happened here originally, silently, because nothing had
           # actually parsed this file as YAML before it reached GitHub.
           $sections.Add(@(
+            '## Install'
+            ''
+            '**Windows:** run `ClaudeCounter-' + $env:VERSION + '-x64-setup.exe` (or `-arm64-setup.exe`), or unzip a portable archive.'
+            ''
+            '**Ubuntu, Kubuntu, Debian and derivatives:** download `ClaudeCounter-' + $env:VERSION + '-x64.deb` (or `-arm64.deb`) and install it with apt, which also pulls in its dependencies:'
+            ''
+            '```bash'
+            'sudo apt install ./ClaudeCounter-' + $env:VERSION + '-x64.deb'
+            '```'
+            ''
+            '**Fedora, openSUSE:** `sudo dnf install ./ClaudeCounter-' + $env:VERSION + '-x64.rpm`. Other distributions: unpack a `-portable.tar.gz` and run `ClaudeCounter`.'
+            ''
+            'See the README for first-run setup, the tray on GNOME, and autostart.'
+          ) -join "`n")
+
+          $sections.Add(@(
             '## Verify your download'
             ''
             'Releases are not code-signed, so Windows SmartScreen will warn about them.'
@@ -166,6 +189,12 @@ jobs:
             ''
             '```powershell'
             'Get-FileHash .\<the file you downloaded> -Algorithm SHA256'
+            '```'
+            ''
+            'Linux packages are listed in `SHA256SUMS-linux.txt`, attached to this release:'
+            ''
+            '```bash'
+            'sha256sum --check --ignore-missing SHA256SUMS-linux.txt'
             '```'
           ) -join "`n")
 
@@ -220,7 +249,14 @@ jobs:
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
-          dotnet-version: '8.0.x'
+          # 8.0.x is the runtime the tests run on; 10.0.x is the SDK that
+          # builds everything. Avalonia 12's source generator needs a newer
+          # C# compiler than any 8.0 SDK ships (CS9057), and the highest
+          # installed SDK is the one dotnet picks. Runner images happened to
+          # preinstall a 10.0 SDK already; this makes it explicit.
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Restore
         run: |
@@ -309,6 +345,18 @@ jobs:
             cp README.md "$staging/"
             tar czf "dist/ClaudeCounter-$VERSION-$lbl-portable.tar.gz" -C "$staging" .
           done
+
+      # Same check as CI's: every dependency name in nfpm.yaml must resolve
+      # on Ubuntu, or users hit it at install time. x64 only - the runner
+      # cannot install an arm64 package.
+      - name: Package install test
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -e
+          sudo apt-get install -y "./dist/ClaudeCounter-$VERSION-x64.deb"
+          test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
+          sudo apt-get remove -y claudecounter
 
       # A separate file from the Windows job's SHA256SUMS.txt: the two jobs
       # run on different runners and cannot safely append to one file without

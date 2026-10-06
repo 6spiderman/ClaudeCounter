@@ -22,7 +22,14 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '8.0.x'
+          # 8.0.x is the runtime the tests run on; 10.0.x is the SDK that
+          # builds everything. Avalonia 12's source generator needs a newer
+          # C# compiler than any 8.0 SDK ships (CS9057), and the highest
+          # installed SDK is the one dotnet picks. Runner images happened to
+          # preinstall a 10.0 SDK already; this makes it explicit.
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       # Locked mode fails the build outright if a resolved package version
       # drifts from packages.lock.json - a compromised or silently-bumped
@@ -107,7 +114,14 @@ jobs:
 
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
-          dotnet-version: '8.0.x'
+          # 8.0.x is the runtime the tests run on; 10.0.x is the SDK that
+          # builds everything. Avalonia 12's source generator needs a newer
+          # C# compiler than any 8.0 SDK ships (CS9057), and the highest
+          # installed SDK is the one dotnet picks. Runner images happened to
+          # preinstall a 10.0 SDK already; this makes it explicit.
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       # Only the two Linux-relevant projects: the whole solution includes the
       # WinForms project, which cannot restore here without
@@ -184,3 +198,29 @@ jobs:
           VERSION=0.0.0-ci ARCH=amd64 nfpm package --config nfpm.yaml --packager rpm --target ../../dist/
           cd ../..
           ls dist/*.deb dist/*.rpm
+
+      # Installing for real is what proves every Depends/Recommends name in
+      # nfpm.yaml actually exists on Ubuntu - a typo there only shows up as
+      # an unresolvable dependency at install time, on someone else's machine.
+      - name: Package install test
+        run: |
+          set -e
+          dpkg-deb --info dist/*.deb
+          sudo apt-get install -y ./dist/*.deb
+          test -x /usr/lib/claudecounter/ClaudeCounter
+          test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
+          test -f /usr/share/applications/claudecounter.desktop
+          test -f /usr/share/icons/hicolor/scalable/apps/claudecounter.svg
+          sudo apt-get remove -y claudecounter
+          test ! -e /usr/bin/claudecounter
+
+      # Lets a PR be tried on a real desktop before anything is released:
+      # download from the run's Artifacts and `sudo apt install ./<file>.deb`.
+      - name: Upload packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+          retention-days: 14
