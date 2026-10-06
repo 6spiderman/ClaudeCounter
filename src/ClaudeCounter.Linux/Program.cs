@@ -16,7 +16,13 @@ internal static class Program
         // with no meaning on Linux.
         using var mutex = new Mutex(initiallyOwned: true, "ClaudeCounter_SingleInstance", out var createdNew);
         if (!createdNew)
+        {
+            // Already running: launching it again (from the application menu,
+            // say) brings up the running instance's flyout instead of doing
+            // nothing. If it does not answer, exit quietly as before.
+            InstanceChannel.TrySend(InstanceChannel.Show, TimeSpan.FromSeconds(1));
             return 0;
+        }
 
         try
         {

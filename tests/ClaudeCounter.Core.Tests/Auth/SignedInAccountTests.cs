@@ -75,21 +75,32 @@ public class SignedInAccountTests
     [Fact]
     public void OwnSessionShowsWhoIsSignedIn()
     {
-        Assert.Equal(("Signed in as me@example.com", false, true), SignInMenu.For(TokenSource.OwnSession, false, "me@example.com"));
-        Assert.Equal(("Signed in to Claude", false, true), SignInMenu.For(TokenSource.OwnSession, false, null));
+        Assert.Equal(("Signed in as me@example.com", false, true, true), SignInMenu.For(TokenSource.OwnSession, false, "me@example.com"));
+        Assert.Equal(("Signed in to Claude", false, true, true), SignInMenu.For(TokenSource.OwnSession, false, null));
     }
 
     [Fact]
     public void OtherSourcesKeepOfferingSignIn()
     {
-        Assert.Equal(("Sign in to Claude... (using Claude Code's session)", true, false), SignInMenu.For(TokenSource.CliBootstrap, false, null));
-        Assert.Equal(("Sign in to Claude...", true, false), SignInMenu.For(null, false, null));
+        Assert.Equal(("Sign in to Claude... (using Claude Code's session)", true, false, false), SignInMenu.For(TokenSource.CliBootstrap, false, null));
+        Assert.Equal(("Sign in to Claude...", true, false, false), SignInMenu.For(null, false, null));
         Assert.False(SignInMenu.For(TokenSource.EnvironmentVariable, false, null).Enabled);
     }
 
     [Fact]
     public void AnExpiredOwnSessionAsksToSignInAgain() =>
-        Assert.Equal(("Sign in to Claude...", true, false), SignInMenu.For(TokenSource.OwnSession, true, "me@example.com"));
+        Assert.Equal(("Sign in to Claude...", true, false, false), SignInMenu.For(TokenSource.OwnSession, true, "me@example.com"));
+
+    [Fact]
+    public void SignOutIsOfferedOnlyForClaudeCountersOwnSession()
+    {
+        Assert.True(SignInMenu.For(TokenSource.OwnSession, false, null).ShowSignOut);
+        Assert.False(SignInMenu.For(TokenSource.CliBootstrap, false, null).ShowSignOut);
+        Assert.False(SignInMenu.For(TokenSource.EnvironmentVariable, false, null).ShowSignOut);
+        Assert.False(SignInMenu.For(null, false, null).ShowSignOut);
+        // An expired own session asks to sign in again; nothing left to sign out of.
+        Assert.False(SignInMenu.For(TokenSource.OwnSession, true, "me@example.com").ShowSignOut);
+    }
 
     private sealed class PassthroughProtector : IDataProtector
     {

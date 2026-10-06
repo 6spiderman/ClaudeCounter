@@ -77,6 +77,25 @@ public sealed class PollingService : IDisposable
     /// <summary>Wake the loop for an immediate poll (manual refresh, settings change).</summary>
     public void TriggerNow() => _wake.Cancel();
 
+    /// <summary>
+    /// After a sign-out: forget the previous account's numbers and problem at
+    /// once (a failed poll otherwise keeps the last snapshot on screen) and
+    /// raise <see cref="Updated"/> so the tray shows "--" until the next poll.
+    /// Call on the UI thread, like every other consumer of this service, then
+    /// <see cref="TriggerNow"/>.
+    /// </summary>
+    public void ResetForSignOut()
+    {
+        _state.Snapshot = null;
+        _state.LastSuccessAt = null;
+        _state.Problem = ProblemKind.None;
+        _state.ProblemMessage = null;
+        _state.Source = null;
+        _consecutiveFailures = 0;
+        _retryAfter = null;
+        Updated?.Invoke(_state);
+    }
+
     private async Task RunLoopAsync()
     {
         while (!_cts.IsCancellationRequested)

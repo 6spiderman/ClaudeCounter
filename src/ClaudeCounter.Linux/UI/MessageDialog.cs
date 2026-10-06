@@ -65,6 +65,26 @@ public sealed class MessageDialog : Window
     public static Task ShowAsync(Window owner, string message, bool warning = false) =>
         new MessageDialog(message, warning, "OK", null).ShowDialog(owner);
 
+    /// <summary>
+    /// A question with no owner window - for the tray menu, which has none to
+    /// be modal over. Centred on screen and kept on top; true when the user
+    /// chose <paramref name="yesText"/>.
+    /// </summary>
+    public static Task<bool> ConfirmStandaloneAsync(string message, string yesText = "Yes", string noText = "No")
+    {
+        var dialog = new MessageDialog(message, warning: false, yesText, noText)
+        {
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            Topmost = true,
+            ShowInTaskbar = true,
+        };
+        var answered = new TaskCompletionSource<bool>();
+        dialog.Closed += (_, _) => answered.TrySetResult(dialog._result);
+        dialog.Show();
+        dialog.Activate();
+        return answered.Task;
+    }
+
     /// <summary>A question; true when the user chose <paramref name="yesText"/>.</summary>
     public static async Task<bool> ConfirmAsync(Window owner, string message, string yesText = "Yes", string noText = "No", bool warning = false)
     {
