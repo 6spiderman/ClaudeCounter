@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using ClaudeBackup;
 using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 
@@ -96,6 +97,20 @@ public sealed class AlertPopupWindow : Window
         var (title, body) = AlertContent.For(e, DateTimeOffset.Now);
 
         var popup = new AlertPopupWindow(title, body, titleFontSize, back, fore, centered, autoDismissSeconds);
+        popup.ShowPlaced();
+    }
+
+    /// <summary>
+    /// A popup for a transition into a backup-health problem (the tray only
+    /// calls this on a transition - see BackupHealthPresenter.ShouldNotify).
+    /// Amber, and it follows the placement setting: a backup problem is not
+    /// the "you are at 100%" tier, so it never forces centre and focus.
+    /// </summary>
+    public static void ShowBackupHealth(BackupHealthResult result, PopupPlacement placement, int autoDismissSeconds)
+    {
+        var (title, body) = BackupHealthPresenter.PopupContent(result, DateTimeOffset.Now);
+        var popup = new AlertPopupWindow(title, body, 14, BandPalette.BandColor(Band.Amber), Colors.Black,
+            placement == PopupPlacement.Centered, autoDismissSeconds);
         popup.ShowPlaced();
     }
 

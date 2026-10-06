@@ -2,14 +2,17 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using System.Globalization;
+using ClaudeBackup;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
 
 /// <summary>
-/// Settings, in the same General / Alerts split as the Windows build's
-/// SettingsForm, with the same wording and limits. (Backup is Windows-only
-/// for now, so there is no Backup tab here yet.)
+/// Settings, in the same General / Alerts / Backup split as the Windows
+/// build's SettingsForm, with the same wording and limits. The Backup tab
+/// only appears when the ClaudeBackup worker is installed next to the app,
+/// as on Windows.
 /// </summary>
 public sealed class SettingsWindow : Window
 {
@@ -32,6 +35,20 @@ public sealed class SettingsWindow : Window
     private readonly NumericUpDown _autoDismissInput;
     private readonly NumericUpDown _alertRepeatInput;
 
+    private static readonly (string Value, string Display)[] BackupFrequencies =
+    [
+        ("daily", "Daily"),
+        ("weekly", "Weekly"),
+        ("hourly", "Hourly"),
+    ];
+
+    private readonly string _backupConfigPath;
+    private readonly string _backupStatusPath;
+    private ListBox? _destinationsSummary;
+    private ComboBox? _backupFrequency;
+    private TextBox? _backupTime;
+    private ScheduleConfig _schedule = new();
+
     private readonly TabControl _tabs;
     private readonly TextBlock _error;
     private readonly int _warnDefault;
@@ -40,13 +57,21 @@ public sealed class SettingsWindow : Window
     /// <summary>Raised once the user confirms; call <see cref="ApplyTo"/> to read the values.</summary>
     public event Action? Saved;
 
-    public SettingsWindow(AppSettings current)
+    /// <summary>Raised when destinations were added, edited or removed, so the tray can re-check backup health.</summary>
+    public event Action? BackupDestinationsChanged;
+
+    public SettingsWindow(AppSettings current, string? backupConfigPath = null, string? backupStatusPath = null)
     {
+        _backupConfigPath = backupConfigPath ?? BackupConfig.DefaultPath();
+        _backupStatusPath = backupStatusPath ?? BackupStatus.DefaultPath();
+
         _warnDefault = current.WarnThreshold;
         _criticalDefault = current.CriticalThreshold;
 
         Title = "ClaudeCounter Settings";
-        Width = 440;
+        // Wide enough for the Backup tab's destinations table and its row of
+        // three buttons.
+        Width = 560;
         // Height follows the content rather than a fixed number: text
         // metrics depend on the desktop's fonts and scaling, and a fixed
         // height clipped the OK/Cancel row on Kubuntu/Plasma.
@@ -124,11 +149,18 @@ public sealed class SettingsWindow : Window
                 new TabItem { Header = "Alerts", Content = alerts },
             },
         };
+        var pages = new List<Control> { general, alerts };
+        if (BackupTaskManager.WorkerAvailable())
+        {
+            var backup = BuildBackupPage();
+            _tabs.Items.Add(new TabItem { Header = "Backup", Content = backup });
+            pages.Add(backup);
+        }
 
-        // Both pages as tall as the taller one, so the window does not jump
-        // in size when switching tabs. Measured once the window is open: a
-        // page only has its real (styled) size while it is the selected tab.
-        Opened += (_, _) => EqualizePageHeights(general, alerts);
+        // Every page as tall as the tallest, so the window does not jump in
+        // size when switching tabs. Measured once the window is open: a page
+        // only has its real (styled) size while it is the selected tab.
+        Opened += (_, _) => EqualizePageHeights(pages.ToArray());
 
         _error = new TextBlock
         {
@@ -160,6 +192,173 @@ public sealed class SettingsWindow : Window
                 },
             },
         };
+    }
+
+    private Control BuildBackupPage()
+    {
+        var config = BackupConfig.Load(_backupConfigPath);
+        _schedule = config.Schedule;
+
+        var help = new Button { Content = "Help" };
+        help.Click += async (_, _) => await new BackupHelpDialog().ShowDialog(this);
+        var advanced = new Button { Content = "Advanced..." };
+        advanced.Click += async (_, _) => await OnOpenAdvancedAsync();
+
+        _destinationsSummary = new ListBox { Height = 110 };
+        var manage = new Button { Content = "Manage destinations..." };
+        manage.Click += async (_, _) => await OnManageDestinationsAsync();
+        RefreshDestinationsSummary();
+
+        _backupFrequency = new ComboBox
+        {
+            ItemsSource = BackupFrequencies.Select(f => f.Display).ToArray(),
+            SelectedIndex = Math.Max(0, Array.FindIndex(BackupFrequencies, f => f.Value == config.Schedule.Frequency.ToLowerInvariant())),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Width = FieldWidth,
+        };
+        _backupTime = new TextBox { Text = config.Schedule.Time, Width = FieldWidth, HorizontalAlignment = HorizontalAlignment.Right };
+
+        var restore = new Button { Content = "Restore..." };
+        restore.Click += async (_, _) => await OnOpenRestoreAsync();
+        var saveSchedule = new Button { Content = "Save and register schedule" };
+        saveSchedule.Click += async (_, _) => await OnSaveBackupScheduleAsync();
+        var runNow = new Button { Content = "Back up now" };
+        runNow.Click += async (_, _) =>
+        {
+            runNow.IsEnabled = false;
+            try { await RunBackupNowAsync(); }
+            finally { runNow.IsEnabled = true; }
+        };
+
+        var topButtons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8,
+            Children = { advanced, help },
+        };
+
+        return Page(
+            topButtons,
+            SectionLabel("Backup destinations"),
+            DestinationTable.Header(),
+            _destinationsSummary,
+            manage,
+            LabeledRow("Frequency", _backupFrequency),
+            LabeledRow("Time (24h HH:mm)", _backupTime),
+            new WrapPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Children = { Spaced(restore), Spaced(saveSchedule), Spaced(runNow) },
+            });
+
+        static Control Spaced(Control c)
+        {
+            c.Margin = new Thickness(8, 0, 0, 6);
+            return c;
+        }
+    }
+
+    private void RefreshDestinationsSummary()
+    {
+        var config = BackupConfig.Load(_backupConfigPath);
+        var status = BackupStatus.Load(_backupStatusPath);
+        _destinationsSummary!.ItemsSource = config.Destinations.Select(d => DestinationTable.Row(d, status)).ToList();
+    }
+
+    private async Task OnManageDestinationsAsync()
+    {
+        var dialog = new BackupDestinationsDialog(_backupConfigPath, _backupStatusPath);
+        await dialog.ShowDialog(this);
+        RefreshDestinationsSummary();
+        if (dialog.Changed)
+            BackupDestinationsChanged?.Invoke();
+    }
+
+    private async Task OnOpenAdvancedAsync()
+    {
+        var dialog = new BackupAdvancedDialog(_schedule);
+        if (!await dialog.ShowDialog<bool>(this))
+            return;
+        // Held here until "Save and register schedule", as on Windows.
+        _schedule = new ScheduleConfig
+        {
+            Frequency = _schedule.Frequency,
+            Time = _schedule.Time,
+            StartWhenAvailable = dialog.StartWhenAvailable,
+            RunOnlyIfNetworkAvailable = dialog.RunOnlyIfNetworkAvailable,
+            DisallowStartIfOnBatteries = dialog.DisallowStartIfOnBatteries,
+            StopIfGoingOnBatteries = dialog.StopIfGoingOnBatteries,
+            RestartOnFailure = dialog.RestartOnFailure,
+            RestartIntervalMinutes = dialog.RestartIntervalMinutes,
+            RestartCount = dialog.RestartCount,
+            BackupStaleAfterDays = dialog.BackupStaleAfterDays,
+        };
+    }
+
+    private async Task OnOpenRestoreAsync()
+    {
+        var config = BackupConfig.Load(_backupConfigPath);
+        if (!config.Destinations.Any(d => d.Enabled))
+        {
+            await MessageDialog.ShowAsync(this,
+                "No backup destination is enabled. Add and enable one first, via " +
+                "\"Manage destinations...\" on the Backup tab.");
+            return;
+        }
+        await new RestoreDialog(config, new ProcessRunner()).ShowDialog(this);
+    }
+
+    private async Task RunBackupNowAsync()
+    {
+        var exitCode = await BackupTaskManager.RunNowAsync();
+        RefreshDestinationsSummary();
+        await MessageDialog.ShowAsync(this, BackupTaskManager.ResultMessage(exitCode), warning: exitCode != 0);
+    }
+
+    private async Task OnSaveBackupScheduleAsync()
+    {
+        var time = (_backupTime!.Text ?? "").Trim();
+        if (!TimeOnly.TryParseExact(time, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+        {
+            await MessageDialog.ShowAsync(this, "Time must be a 24-hour value in HH:mm format, e.g. 09:00.", warning: true);
+            return;
+        }
+
+        var config = BackupConfig.Load(_backupConfigPath);
+        config.Schedule.Frequency = BackupFrequencies[_backupFrequency!.SelectedIndex].Value;
+        config.Schedule.Time = time;
+        config.Schedule.StartWhenAvailable = _schedule.StartWhenAvailable;
+        config.Schedule.RunOnlyIfNetworkAvailable = _schedule.RunOnlyIfNetworkAvailable;
+        config.Schedule.DisallowStartIfOnBatteries = _schedule.DisallowStartIfOnBatteries;
+        config.Schedule.StopIfGoingOnBatteries = _schedule.StopIfGoingOnBatteries;
+        config.Schedule.RestartOnFailure = _schedule.RestartOnFailure;
+        config.Schedule.RestartIntervalMinutes = _schedule.RestartIntervalMinutes;
+        config.Schedule.RestartCount = _schedule.RestartCount;
+        config.Schedule.BackupStaleAfterDays = _schedule.BackupStaleAfterDays;
+        config.Save(_backupConfigPath);
+
+        bool ok;
+        string message;
+        if (config.Destinations.Any(d => d.Enabled))
+        {
+            ok = await Task.Run(() => BackupTaskManager.Register(config.Schedule));
+            message = ok
+                ? "Backup settings saved and the schedule registered."
+                : "Backup settings saved, but registering the schedule failed. See the log for details.";
+        }
+        else
+        {
+            var outcome = await Task.Run(BackupTaskManager.Unregister);
+            ok = outcome != UnregisterOutcome.Failed;
+            message = outcome switch
+            {
+                UnregisterOutcome.Removed => "Backup settings saved. No destination is enabled, so the schedule was removed.",
+                UnregisterOutcome.NotFound => "Backup settings saved. No destination is enabled; there was no schedule to remove.",
+                _ => "Backup settings saved, but removing the existing schedule failed. See the log for details.",
+            };
+        }
+        await MessageDialog.ShowAsync(this, message, warning: !ok);
     }
 
     private void EqualizePageHeights(params Control[] pages)

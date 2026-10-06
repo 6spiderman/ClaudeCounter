@@ -131,3 +131,23 @@ public class LinuxSyncFolderScannerTests
     public void InfersLinuxProviders(string path, SyncProvider expected) =>
         Assert.Equal(expected, SyncProviderInference.InferFromPath(path));
 }
+
+/// <summary>ProcessRunner.ExistsOnPath - how git/rclone are found on Linux.</summary>
+public class ProcessRunnerExistsOnPathTests
+{
+    private static readonly HashSet<string> Files = new(StringComparer.Ordinal) { "/usr/bin/git", "/home/u/bin/rclone" };
+
+    [Theory]
+    [InlineData("git", true)]
+    [InlineData("rclone", true)]
+    [InlineData("svn", false)]
+    [InlineData("/usr/bin/git", true)]
+    [InlineData("/opt/git", false)]
+    [InlineData("", false)]
+    public void LooksUpBareNamesOnPathAndChecksPathsDirectly(string file, bool expected) =>
+        Assert.Equal(expected, ProcessRunner.ExistsOnPath(file, "/usr/local/bin:/usr/bin::/home/u/bin", Files.Contains));
+
+    [Fact]
+    public void MissingPathMeansNothingIsFound() =>
+        Assert.False(ProcessRunner.ExistsOnPath("git", null, Files.Contains));
+}
