@@ -145,7 +145,7 @@ public sealed class BackupStatus
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     public static string DefaultPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
         "ClaudeCounter", "backup-status.json");
 
     /// <summary>

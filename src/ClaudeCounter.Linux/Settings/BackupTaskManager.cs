@@ -41,7 +41,7 @@ public static class BackupTaskManager
     public const string WorkerFileName = "ClaudeBackup";
 
     private static string UnitDirectory => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "systemd", "user");
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create), "systemd", "user");
 
     private static string ServicePath => Path.Combine(UnitDirectory, UnitBaseName + ".service");
     private static string TimerPath => Path.Combine(UnitDirectory, UnitBaseName + ".timer");

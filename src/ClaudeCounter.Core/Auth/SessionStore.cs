@@ -56,7 +56,7 @@ public sealed class EncryptedSessionStore : ISessionStore
     public EncryptedSessionStore(string? path, IDataProtector protector)
     {
         _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
             "ClaudeCounter", "session.dat");
         _protector = protector;
     }

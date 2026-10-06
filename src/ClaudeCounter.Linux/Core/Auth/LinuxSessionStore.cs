@@ -15,7 +15,7 @@ public sealed class LinuxSessionStore : ISessionStore
     public LinuxSessionStore(IDataProtector protector, string? path = null)
     {
         _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
             "ClaudeCounter", "session.dat");
         _inner = new EncryptedSessionStore(_path, protector);
     }

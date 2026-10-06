@@ -29,7 +29,7 @@ internal static class Program
 
         try
         {
-            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create);
             var staging = Path.Combine(local, "ClaudeCounter", "backup-repo");
             var temp = Path.Combine(local, "ClaudeCounter", "backup-tmp");
 

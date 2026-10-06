@@ -381,7 +381,7 @@ public sealed class BackupConfig
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     public static string DefaultPath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create),
         "ClaudeCounter", "backup.json");
 
     public static BackupConfig Default()

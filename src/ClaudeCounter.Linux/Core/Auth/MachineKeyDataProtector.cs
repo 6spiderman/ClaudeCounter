@@ -95,7 +95,7 @@ public sealed class MachineKeyDataProtector : IDataProtector
     private static string ReadOrCreateFallbackKey(string? path)
     {
         path ??= Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
             "ClaudeCounter", "machine.key");
 
         try
