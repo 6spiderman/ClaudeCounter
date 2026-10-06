@@ -198,10 +198,10 @@ to Claude...**
   desktop distros, but not a non-systemd setup).
 - **Update notifications** from GitHub Releases, at most once a day, shown as a
   menu entry rather than a popup. Off with one checkbox.
-- **Alert popups** when a window crosses your critical threshold or hits 100%,
-  placed near the tray or centered on screen, each configurable (or turned off)
-  independently in Settings.
-- **Backup** (`ClaudeBackup.exe`): scheduled or on-demand backup of a subset
+- **Alert popups** (Windows for now) when a window crosses your critical
+  threshold or hits 100%, placed near the tray or centered on screen, each
+  configurable (or turned off) independently in Settings.
+- **Backup** (`ClaudeBackup.exe`, Windows for now): scheduled or on-demand backup of a subset
   of your Claude config to any number of destinations you configure, in any
   combination, with restore built in. Installed by default; untick "Backup
   tools" on the installer's Components page (choose "Custom installation") if

@@ -379,7 +379,7 @@ you have not done this yet.
 
 ---
 
-## 14. Linux (KDE Plasma and GNOME)
+## 16. Linux (KDE Plasma and GNOME)
 
 On a real desktop session, ideally Kubuntu/KDE Plasma on Wayland plus one
 GNOME machine. Install the `.deb` from the CI run's **linux-packages**
@@ -420,4 +420,4 @@ Everything above is worth fixing, but these five stop a release outright:
 2. Section 1 - signing in kills the Claude Code session.
 3. Section 7 - a secret reached the log.
 4. Section 0 - the publish output is more than one file.
-5. Section 14 - ClaudeCounter blocks or delays logout or shutdown on Linux.
+5. Section 16 - ClaudeCounter blocks or delays logout or shutdown on Linux.
