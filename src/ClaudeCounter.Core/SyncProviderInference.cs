@@ -35,6 +35,12 @@ public static class SyncProviderInference
         if (folderPath.StartsWith(@"\\", StringComparison.Ordinal))
             return SyncProvider.Nas;
 
+        // Linux: a share opened in the file manager, mounted by GVFS
+        // ($XDG_RUNTIME_DIR/gvfs/smb-share:server=...,share=...).
+        if (folderPath.Contains("/gvfs/smb-share:", StringComparison.Ordinal) ||
+            folderPath.Contains("/gvfs/nfs:", StringComparison.Ordinal))
+            return SyncProvider.Nas;
+
         if (ContainsSegment(folderPath, "onedrive"))
             return SyncProvider.OneDrive;
 
