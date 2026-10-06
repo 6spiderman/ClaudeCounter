@@ -66,12 +66,19 @@ public static class AutostartManager
         }
     }
 
+    // TryExec makes the desktop skip this entry once the binary is gone -
+    // uninstalling the .deb cannot reach into each user's ~/.config to remove
+    // it, and without TryExec the login would try (and fail) to start a
+    // missing program every time. Icon resolves against the icon the package
+    // installs; a portable run without it just shows a generic icon.
     private static string DesktopFileContent(string exePath) =>
         "[Desktop Entry]\n" +
         "Type=Application\n" +
         "Name=ClaudeCounter\n" +
         "Comment=Claude plan usage in the system tray\n" +
         $"Exec=\"{exePath}\"\n" +
+        $"TryExec={exePath}\n" +
+        "Icon=claudecounter\n" +
         "Terminal=false\n" +
         "Hidden=false\n" +
         "X-GNOME-Autostart-enabled=true\n";

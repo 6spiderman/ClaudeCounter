@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -37,6 +38,13 @@ public sealed class TrayApplicationContext
     private readonly CancellationTokenSource _lifetime = new();
     private readonly PosixSignalRegistration _sigTerm;
     private readonly PosixSignalRegistration _sigInt;
+
+    // How long a signal-driven exit may take before the watchdog forces it.
+    // Well inside systemd's 90 s stop timeout for the session's app units,
+    // so a wedged UI thread can no longer hold up logout or shutdown.
+    private static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(5);
+    private int _exitWatchdogStarted;
+    private bool _resourcesReleased;
 
     /// <summary>Set the moment Exit is chosen, so a stray cancellation from
     /// Avalonia's own teardown on the way out reads as "exiting", not a crash.</summary>
@@ -139,8 +147,17 @@ public sealed class TrayApplicationContext
         _sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, HandleTerminationSignal);
         _sigInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, HandleTerminationSignal);
 
+        // Every way out - the Exit menu item, a signal, or the desktop's own
+        // logout/shutdown request via X11 session management, which never
+        // goes through ExitApplication at all - ends with the lifetime
+        // raising Exit, so teardown hangs off that one event.
+        _desktop.Exit += (_, _) => ReleaseResources();
+
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started (Linux).");
-        TrayPresence.WarnIfMissing();
+
+        // Shells out to dbus-send with a timeout of a few seconds; never on
+        // the UI thread, which would freeze the tray icon at startup.
+        _ = Task.Run(TrayPresence.WarnIfMissing);
 
         MaybeShowOnboarding();
     }
@@ -155,11 +172,43 @@ public sealed class TrayApplicationContext
     // touching anything Avalonia owns. Cancelling here means the process
     // does not die from the signal's default disposition mid-cleanup; it
     // exits instead once ExitApplication's own Shutdown() completes.
+    //
+    // Cancelling also means that if the UI thread never runs the posted
+    // ExitApplication - the display or session bus already gone at logout,
+    // or the UI thread stuck - nothing else would end the process, and
+    // systemd would wait out its full stop timeout before killing it. The
+    // watchdog bounds that.
     private void HandleTerminationSignal(PosixSignalContext context)
     {
         context.Cancel = true;
         Log.Info($"Received {context.Signal} - exiting.");
+        StartExitWatchdog();
         Dispatcher.UIThread.Post(ExitApplication);
+    }
+
+    private void StartExitWatchdog()
+    {
+        if (Interlocked.Exchange(ref _exitWatchdogStarted, 1) == 1)
+            return;
+
+        // Background thread: it never keeps the process alive by itself, so
+        // a normal exit within the grace period simply abandons it.
+        new Thread(() =>
+        {
+            Thread.Sleep(ExitGrace);
+            Log.Warn($"Clean shutdown did not finish within {ExitGrace.TotalSeconds:0} s - forcing exit.");
+
+            // Environment.Exit runs ProcessExit handlers, which could block
+            // on the same wedged state; if it has not returned shortly, stop
+            // the process outright.
+            new Thread(() => Environment.Exit(0)) { IsBackground = true, Name = "Forced exit" }.Start();
+            Thread.Sleep(TimeSpan.FromSeconds(2));
+            Process.GetCurrentProcess().Kill();
+        })
+        {
+            IsBackground = true,
+            Name = "Exit watchdog",
+        }.Start();
     }
 
     /// <summary>
@@ -250,6 +299,9 @@ public sealed class TrayApplicationContext
             _flyout.Hide();
             return;
         }
+        // The click that hid it (focus moved to the panel) was meant to close it.
+        if (_flyout.RecentlyDismissed)
+            return;
         _flyout.ShowNearTray();
     }
 
@@ -378,13 +430,31 @@ public sealed class TrayApplicationContext
         IsExiting = true;
 
         Log.Info("ClaudeCounter exiting.");
+        // Raises Exit, which runs ReleaseResources. Forced, so the flyout's
+        // "only hide" close handler cannot veto it.
+        _desktop.Shutdown();
+    }
+
+    /// <summary>
+    /// Idempotent teardown, reached from the lifetime's Exit event on every
+    /// exit path (see the constructor).
+    /// </summary>
+    private void ReleaseResources()
+    {
+        if (_resourcesReleased)
+            return;
+        _resourcesReleased = true;
+        if (!IsExiting)
+            Log.Info("Desktop session is ending (logout/shutdown) - exiting.");
+        IsExiting = true;
+
         _lifetime.Cancel();
         _sigTerm.Dispose();
         _sigInt.Dispose();
         // Not: _trayIcon.IsVisible = false. Toggling it here races Avalonia's
         // own D-Bus tray-icon teardown and surfaces a TaskCanceledException
         // from DBusTrayIconImpl.WatchAsync() through the dispatcher on the way
-        // out; Shutdown() below tears the tray icon down on its own.
+        // out; the lifetime tears the tray icon down on its own.
         _polling.Dispose();
         _sleepResume.Dispose();
         _usageClient.Dispose();
@@ -393,6 +463,5 @@ public sealed class TrayApplicationContext
         _tokenEndpoint.Dispose();
         _updates.Dispose();
         _lifetime.Dispose();
-        _desktop.Shutdown();
     }
 }
