@@ -88,14 +88,44 @@ public class InstanceChannelTests
     }
 
     [Fact]
-    public void TheDefaultNameIsPerUserAndSafeAsAPipeName()
+    public void OnWindowsTheNameIsPerUserAndSession()
+    {
+        var name = InstanceChannel.BuildDefaultName(isWindows: true, @"DOMAIN\Jo Smith", 3, runtimeDir: "/ignored");
+        Assert.Equal("ClaudeCounter.DOMAIN_Jo_Smith.3", name);
+    }
+
+    [Fact]
+    public void OnLinuxTheSocketGoesInTheRuntimeDirectory() =>
+        Assert.Equal("/run/user/1000/ClaudeCounter.sock",
+            InstanceChannel.BuildDefaultName(isWindows: false, "jo", 0, "/run/user/1000/"));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("relative/dir")]
+    public void WithoutAUsableRuntimeDirectoryAPerUserNameIsUsed(string? runtimeDir) =>
+        Assert.Equal("ClaudeCounter.jo_x", InstanceChannel.BuildDefaultName(isWindows: false, "jo.x", 0, runtimeDir));
+
+    [Fact]
+    public void ARuntimeDirectoryTooLongForASocketIsNotUsed()
+    {
+        var longDir = "/" + new string('d', InstanceChannel.MaxSocketPath);
+        Assert.Equal("ClaudeCounter.jo", InstanceChannel.BuildDefaultName(isWindows: false, "jo", 0, longDir));
+    }
+
+    [Fact]
+    public void ThisMachinesDefaultNameIsUsable()
     {
         var name = InstanceChannel.DefaultPipeName;
-        Assert.StartsWith("ClaudeCounter.", name, StringComparison.Ordinal);
-        Assert.True(name.Length > "ClaudeCounter.".Length);
-        Assert.DoesNotContain('/', name);
-        Assert.DoesNotContain('\\', name);
+        Assert.Contains("ClaudeCounter", name, StringComparison.Ordinal);
         Assert.DoesNotContain(' ', name);
+    }
+
+    [UnixOnlyFact]
+    public void ASocketPathThePlatformRejectsMeansNotRunningRatherThanACrash()
+    {
+        var tooLong = "/tmp/" + new string('x', 200);
+        Assert.False(InstanceChannel.TrySend(InstanceChannel.Ping, TimeSpan.FromMilliseconds(300), tooLong));
     }
 }
 

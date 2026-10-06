@@ -1,15 +1,22 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using ClaudeCounter.Core;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
 
 public static class IconRenderer
 {
+    // The thresholds live in Core (UsageBands) so the tray, `claudecounter
+    // --status` and the Plasma widget always agree on the colour.
     public static Band BandFor(double utilization, AppSettings settings) =>
-        utilization >= settings.CriticalThreshold ? Band.Red
-        : utilization >= settings.WarnThreshold ? Band.Amber
-        : Band.Green;
+        UsageBands.For(utilization, settings.WarnThreshold, settings.CriticalThreshold) switch
+        {
+            UsageBand.Red => Band.Red,
+            UsageBand.Amber => Band.Amber,
+            UsageBand.Gray => Band.Gray,
+            _ => Band.Green,
+        };
 
     /// <summary>
     /// Renders a 32x32 tray icon: rounded square in the band color with the

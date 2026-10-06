@@ -9,6 +9,12 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // `claudecounter --status` and the other options print and exit
+        // straight away - before the single-instance mutex, so they work while
+        // the tray app is running. See CommandLine for what each one does.
+        if (CommandLine.IsCommand(args))
+            return CommandLine.Run(args, Console.Out, Console.Error, CommandLine.Environment.Real);
+
         // Named Mutex works the same way on Linux as it does on Windows
         // (verified directly: a second process sees createdNew=false while
         // the first is running, and true again once it exits) - no "Local\"

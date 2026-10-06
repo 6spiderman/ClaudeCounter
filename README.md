@@ -95,7 +95,8 @@ Then start **ClaudeCounter** from your application menu, or run
 
 **Portable** - download `ClaudeCounter-<version>-x64-portable.tar.gz` from the
 [latest release](https://github.com/6spiderman/ClaudeCounter/releases/latest),
-extract it anywhere, and run `./ClaudeCounter`.
+extract it anywhere, and run `./ClaudeCounter`. The archive also holds the
+Plasma widget, in `plasma-widget/` - see [KDE Plasma widget](#kde-plasma-widget).
 
 An `arm64` build is published too, in the same three forms. It is
 cross-compiled and has not been run on real arm64 hardware, so treat it as
@@ -127,6 +128,10 @@ Plasma starts on demand.
   ClaudeCounter, and sign in once more from the tray menu.
 - **The flyout** opens in the corner next to your panel, since Linux desktops
   do not tell apps where a tray icon is on screen.
+- **Panel widget.** The package also installs a Plasma widget: right-click
+  the panel -> **Add Widgets...** -> search **ClaudeCounter**. It shows the
+  session percentage as a coloured badge next to your clock, with the full
+  breakdown on click. See [Plasma widget](#kde-plasma-widget).
 
 #### Uninstall (Linux)
 
@@ -228,6 +233,11 @@ app carries on with Claude Code's session until you sign in again.
   configuration; nothing at the destination itself is deleted. See
   [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
   method first.
+- **Usage outside the tray** - `claudecounter --status` prints a one-line
+  summary (or JSON) for Claude Code's status line, your shell prompt or a
+  script, and a **KDE Plasma panel widget** shows the same numbers as a badge
+  with a popup. Both read what the running app already fetched; see
+  [Usage in Claude Code, your prompt or a Plasma widget](#usage-in-claude-code-your-prompt-or-a-plasma-widget).
 - Single instance (a named mutex, on both platforms): starting ClaudeCounter
   again while it is running - from the application menu or Start menu - opens
   the running copy's flyout. Single self-contained executable, no telemetry.
@@ -305,6 +315,103 @@ Near-tray popups never take focus from what you are typing in; several at
 once stack instead of overlapping. Alerts are held back while the Settings,
 Sign in or first-run window is open, rather than popping up over it.
 
+## Usage in Claude Code, your prompt or a Plasma widget
+
+The tray icon is the main view. These put the same numbers where you are
+already looking, without opening the flyout:
+
+- **In Claude Code's status line**, at the bottom of every session, so you
+  see how close you are to the limit while you work.
+- **In your shell prompt or a script**, for example to warn before you
+  start a long agent run.
+- **On a KDE Plasma panel**, as a widget next to the clock instead of an
+  icon hidden behind the tray's **^** arrow.
+
+All three only read what the running ClaudeCounter last fetched (it writes a
+small status file after every poll). They never sign in or contact
+Anthropic themselves, so they cost nothing against your rate limit and work
+however often they run. ClaudeCounter has to be running for the numbers to
+stay current; if it is not, they say so.
+
+### `claudecounter --status`
+
+```console
+$ claudecounter --status
+5h 42% (1 h 12 min) | week 25% (2 d 19 h)
+```
+
+That is the five-hour session and the weekly window, each with the time
+until it resets. ` | stale` is added when the numbers are older than two
+poll intervals (at least 15 minutes), and ` | not running` when the app has
+stopped. With nothing to show it prints `ClaudeCounter: not running`,
+`ClaudeCounter: not signed in` or `ClaudeCounter: no usage yet`.
+
+| Option | What it does |
+| --- | --- |
+| `--status` | One line, as above |
+| `--status --json` | Everything as JSON: each window's `utilization`, `resetsAt`, `resetsIn` and `band` (`green`/`amber`/`red`/`gray`, from your thresholds), plus `running`, `stale`, `problem` and `extraUsage` |
+| `--refresh` | Asks the running app to check usage now |
+| `--version`, `--help` | What they say |
+
+Exit codes: `0` when usage was printed (even if stale), `1` when there was
+nothing to show, or `--refresh` found no running app, and `2` for an unknown
+option.
+
+**Claude Code status line.** Add this to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "claudecounter --status"
+  }
+}
+```
+
+**Bash prompt**, for example in `~/.bashrc`:
+
+```sh
+PS1='[$(claudecounter --status 2>/dev/null)] \w \$ '
+```
+
+**On Windows** the command is not on your `PATH`, so use the full path,
+`%LocalAppData%\Programs\ClaudeCounter\ClaudeCounter.exe --status` (for
+Claude Code, write it with forward slashes, such as
+`C:/Users/you/AppData/Local/Programs/ClaudeCounter/ClaudeCounter.exe --status`).
+ClaudeCounter is a windowed app, so when you type it into a terminal yourself
+pipe the output, so the shell waits for it: `| Out-String` in PowerShell, or
+`| more` in cmd. Status lines and scripts capture the output already and need
+nothing extra.
+
+### KDE Plasma widget
+
+The `.deb` and `.rpm` install a Plasma 6 widget. Right-click the panel ->
+**Add Widgets...**, search for **ClaudeCounter** and drag it onto the panel
+or desktop.
+
+- **The badge** shows the five-hour session percentage in the same green,
+  amber or red as the tray icon, or a grey `--` when ClaudeCounter is not
+  running or not signed in. Hover it for the one-line summary.
+- **Click it** for every window with its bar and reset countdown, extra
+  usage, and when the numbers were last updated. **Refresh** asks the app to
+  check now (middle-clicking the badge does the same), and **Open** brings up
+  ClaudeCounter, or starts it if it is not running.
+
+It refreshes every 30 seconds and whenever you open it, from the status file
+alone. The tray icon stays, so you can hide that if the widget is enough:
+right-click the tray's **^** arrow -> **Configure System Tray...** ->
+**Entries** -> **ClaudeCounter** -> **Always hidden**.
+
+From the portable `.tar.gz`, install the widget for your user with:
+
+```sh
+kpackagetool6 -t Plasma/Applet -i plasma-widget
+```
+
+The widget runs `claudecounter`, so with the portable build put
+`ClaudeCounter` on your `PATH` under that name (for example
+`ln -s "$PWD/ClaudeCounter" ~/.local/bin/claudecounter`).
+
 ## File locations
 
 ### Windows
@@ -314,10 +421,11 @@ Sign in or first-run window is open, rather than popping up over it.
 | `%LocalAppData%\ClaudeCounter\session.dat` | ClaudeCounter's OAuth session, DPAPI-encrypted for your Windows account on this PC |
 | `%AppData%\ClaudeCounter\settings.json` | Your settings. No secrets. |
 | `%LocalAppData%\ClaudeCounter\logs\claudecounter.log` | Append-only log, rolls to `.1` past ~1 MB. Never contains tokens. |
+| `%LocalAppData%\ClaudeCounter\usage-status.json` | The latest usage numbers, for `--status`. No tokens or email. |
 | `~/.claude/.credentials.json` | Claude Code's tokens. **Read only, and only as a fallback.** |
 
-Uninstalling removes the first and third, and asks before removing your
-settings.
+Uninstalling removes everything under `%LocalAppData%\ClaudeCounter`, and
+asks before removing your settings.
 
 ### Linux
 
@@ -327,9 +435,12 @@ settings.
 | `~/.local/share/ClaudeCounter/session.dat` | The same session, AES-GCM encrypted with a key derived from `/etc/machine-id` - only used if no keyring is available |
 | `~/.config/ClaudeCounter/settings.json` | Your settings. No secrets. |
 | `~/.local/share/ClaudeCounter/logs/claudecounter.log` | Same rules as Windows |
+| `~/.local/share/ClaudeCounter/usage-status.json` | The latest usage numbers, for `--status` and the Plasma widget. Owner-only. No tokens or email. |
+| `$XDG_RUNTIME_DIR/ClaudeCounter.sock` | The running app's local command socket (second launch, `--refresh`). Removed when it exits. |
 | `~/.config/autostart/claudecounter.desktop` | Autostart entry, written when "Start on login" is enabled |
 | `~/.net/ClaudeCounter/` | Native libraries (Skia, HarfBuzz) the single-file binary unpacks on first start. Safe to delete; recreated as needed. |
 | `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program and the `ClaudeBackup` worker, when installed from the `.deb`/`.rpm` |
+| `/usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter/` | The Plasma widget, from the `.deb`/`.rpm` (`~/.local/share/plasma/plasmoids/` if you installed it with `kpackagetool6`) |
 | `~/.config/ClaudeCounter/backup.json` | Backup destinations, selections and schedule. No secrets - credentials stay with git, rclone or your sync client. |
 | `~/.local/share/ClaudeCounter/backup-status.json` | Result of each destination's last backup run, for the health badge and the Last run column |
 | `~/.local/share/ClaudeCounter/backup-repo/`, `backup-tmp/`, `restore-*/` | Backup staging and restore working folders. Restore keeps its safety copies in `restore-safety/`. |
@@ -424,6 +535,16 @@ the UI and the platform-specific seams below it.
 - `PollingService` drives an async loop on the UI thread, so consumers never
   need `Invoke` marshalling. It backs well off when only the user can fix the
   problem, instead of retrying a dead token every two minutes forever.
+- `InstanceChannel` is the local, current-user-only command channel between
+  ClaudeCounter processes (a named pipe on Windows, a Unix socket on Linux):
+  a second launch sends `show`, and `--refresh` sends `refresh`.
+- `UsageStatusStore` writes `usage-status.json` after every poll, and
+  `CommandLine` answers `--status` from it - before the single-instance
+  check, with no UI and no network. A second process never calls the usage
+  API itself, because refreshing ClaudeCounter's session there could rotate
+  the token out from under the running app. `UsageBands` is the one place
+  the green/amber/red thresholds are applied, shared by both tray icons,
+  `--status` and the widget.
 - `IconRenderer` draws the tray icon at runtime rather than shipping bitmaps -
   with GDI+ on Windows (destroying the unmanaged `HICON` after cloning so the
   process does not leak GDI handles on every refresh), with Avalonia's own
@@ -462,8 +583,8 @@ src/ClaudeCounter.Linux/  Linux (Avalonia)
 tests/ClaudeCounter.Core.Tests/  Tests for Core and the backup worker (Windows and Linux)
 tests/ClaudeCounter.Tests/       Tests that need WinForms or Windows APIs (Windows only)
 packaging/     Inno Setup script and winget manifests (Windows); nfpm config
-               and the .desktop/icon it packages, plus both platforms'
-               startup smoke test scripts
+               and the .desktop/icon it packages, the KDE Plasma widget
+               (plasmoid/), plus both platforms' startup smoke test scripts
 assets/        Icon source and generator, screenshots
 ```
 

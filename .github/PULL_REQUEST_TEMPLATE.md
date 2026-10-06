@@ -25,6 +25,8 @@ Closes #
 - [ ] No token, refresh token, authorization code or PKCE verifier appears in
       the log (`%LocalAppData%\ClaudeCounter\logs\claudecounter.log`, or
       `~/.local/share/ClaudeCounter/logs/claudecounter.log` on Linux)
+- [ ] `claudecounter --status` and the Plasma widget still show the right
+      figures (if the polling, the status file or the widget changed)
 - [ ] Upgrade over an existing install works (if packaging changed)
 - [ ] Linux: logging out with the app running (flyout opened at least once)
       is not blocked or delayed (if the Linux app changed)

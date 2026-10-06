@@ -13,6 +13,37 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyIcon(IntPtr hIcon);
 
+    private const int STD_OUTPUT_HANDLE = -11;
+    private const int ATTACH_PARENT_PROCESS = -1;
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AttachConsole(int dwProcessId);
+
+    /// <summary>
+    /// ClaudeCounter.exe is a GUI app, so Windows gives it no console. For
+    /// <c>--status</c> and friends: when the output is already redirected (a
+    /// pipe, a file, Claude Code's status line) the inherited handle works as
+    /// is; when it is not (typed into cmd or PowerShell), borrow the parent's
+    /// console so the text shows up there. Must run before anything touches
+    /// <see cref="Console"/>, which caches its handles on first use.
+    /// </summary>
+    public static void AttachToParentConsoleIfNeeded()
+    {
+        try
+        {
+            var handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+                _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+        catch (Exception)
+        {
+            // No console to write to - the command still runs, just silently.
+        }
+    }
+
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 

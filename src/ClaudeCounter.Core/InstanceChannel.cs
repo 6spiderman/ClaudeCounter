@@ -41,7 +41,10 @@ public sealed class InstanceChannel : IDisposable
     private readonly Action<string> _onCommand;
     private readonly CancellationTokenSource _cts = new();
 
-    /// <summary>The pipe name for this user (and, on Windows, this login session).</summary>
+    /// <summary>
+    /// The pipe name for this user (and, on Windows, this login session). On
+    /// Linux it is a socket path in <c>$XDG_RUNTIME_DIR</c> when there is one.
+    /// </summary>
     public static string DefaultPipeName { get; } = BuildDefaultName();
 
     private InstanceChannel(string pipeName, Action<string> onCommand)
@@ -76,8 +79,11 @@ public sealed class InstanceChannel : IDisposable
             using var cts = new CancellationTokenSource(timeout);
             return SendAsync(command, pipeName ?? DefaultPipeName, cts.Token).GetAwaiter().GetResult();
         }
-        catch (Exception e) when (e is IOException or TimeoutException or OperationCanceledException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // Anything at all - no listener, a timeout, or a pipe path the
+            // platform rejects - just means "could not reach it". A second
+            // launch or --status must never crash on this.
             return false;
         }
     }
@@ -87,6 +93,24 @@ public sealed class InstanceChannel : IDisposable
         TrySend(Ping, TimeSpan.FromMilliseconds(500), pipeName);
 
     private static async Task<bool> SendAsync(string command, string pipeName, CancellationToken ct)
+    {
+        // The listener serves one client at a time and then opens a fresh
+        // pipe; a client that connects in that gap is reset before its
+        // command is read. Nothing was handled, so trying again is safe.
+        while (true)
+        {
+            try
+            {
+                return await SendOnceAsync(command, pipeName, ct).ConfigureAwait(false);
+            }
+            catch (IOException) when (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(50, ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static async Task<bool> SendOnceAsync(string command, string pipeName, CancellationToken ct)
     {
         await using var client = new NamedPipeClientStream(
             ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
@@ -164,10 +188,36 @@ public sealed class InstanceChannel : IDisposable
 
     private static string BuildDefaultName()
     {
-        var user = new string(Environment.UserName.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_').ToArray());
-        if (!OperatingSystem.IsWindows())
-            return $"ClaudeCounter.{user}";
-        using var self = Process.GetCurrentProcess();
-        return $"ClaudeCounter.{user}.{self.SessionId}";
+        if (OperatingSystem.IsWindows())
+        {
+            using var self = Process.GetCurrentProcess();
+            return BuildDefaultName(isWindows: true, Environment.UserName, self.SessionId, runtimeDir: null);
+        }
+        return BuildDefaultName(isWindows: false, Environment.UserName, 0, Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"));
+    }
+
+    // Unix domain socket paths are limited to 108 bytes.
+    internal const int MaxSocketPath = 107;
+
+    /// <remarks>
+    /// On Linux a bare name becomes a socket at <c>$TMPDIR/CoreFxPipe_&lt;name&gt;</c>,
+    /// which breaks when TMPDIR is long (the socket path limit is 108 bytes).
+    /// An absolute name is used as the socket path as is, so prefer the
+    /// per-user runtime directory (<c>/run/user/&lt;uid&gt;</c>): short, readable
+    /// only by this user, and emptied at logout.
+    /// </remarks>
+    internal static string BuildDefaultName(bool isWindows, string userName, int sessionId, string? runtimeDir)
+    {
+        var user = new string(userName.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_').ToArray());
+        if (isWindows)
+            return $"ClaudeCounter.{user}.{sessionId}";
+
+        if (!string.IsNullOrEmpty(runtimeDir) && runtimeDir.StartsWith('/'))
+        {
+            var socket = runtimeDir.TrimEnd('/') + "/ClaudeCounter.sock";
+            if (socket.Length <= MaxSocketPath)
+                return socket;
+        }
+        return $"ClaudeCounter.{user}";
     }
 }

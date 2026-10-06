@@ -82,9 +82,23 @@ A running ClaudeCounter listens on a local channel - a named pipe on Windows,
 a Unix domain socket on Linux - so that starting it a second time can open the
 running copy's flyout, and `claudecounter --refresh` can ask for a poll. It is
 created with "current user only" permissions, so other users on the machine
-cannot connect, and it is never reachable over the network. It accepts only
-three one-word commands (`show`, `refresh`, `ping`), carries no data in either
-direction beyond an `ok` reply, and ignores anything else.
+cannot connect, and it is never reachable over the network. On Linux the
+socket lives in your per-user runtime directory
+(`$XDG_RUNTIME_DIR/ClaudeCounter.sock`, normally `/run/user/<uid>/`, which only
+you can open). It accepts only three one-word commands (`show`, `refresh`,
+`ping`), carries no data in either direction beyond an `ok` reply, and ignores
+anything else.
+
+### The usage status file
+
+After every poll the running app writes `usage-status.json` next to its log
+(see [File locations](README.md#file-locations)). `claudecounter --status`
+and the KDE Plasma widget read it; they never sign in, refresh a token or
+contact Anthropic themselves, so a second process can never rotate the app's
+session. The file holds only usage percentages, reset times, extra-usage
+amounts, the poll state and your alert thresholds. It never contains a token
+or your account's email address. On Linux it is written with owner-only
+permissions (`0600`); on Windows it sits in your own `%LocalAppData%`.
 
 ## Tokens are never logged
 

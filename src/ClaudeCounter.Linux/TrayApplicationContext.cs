@@ -399,6 +399,10 @@ public sealed class TrayApplicationContext
         _flyout.UpdateState(state);
         _flyout.UpdateBackupHealth(backupHealth);
         UpdateSignInItem(state);
+        // Published for `claudecounter --status` and the Plasma widget, which
+        // read this file instead of ever calling the usage API themselves.
+        UsageStatusStore.Write(UsageStatusFile.From(
+            state, _settings.PollIntervalMinutes, _settings.WarnThreshold, _settings.CriticalThreshold, DateTimeOffset.Now));
 
         if (!_updateCheckStarted && state.Problem == ProblemKind.None)
         {

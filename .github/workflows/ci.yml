@@ -116,6 +116,27 @@ jobs:
         shell: pwsh
         run: pwsh -File packaging/smoke-test.ps1 -ExePath smoke/ClaudeCounter.exe
 
+      # ClaudeCounter.exe is a windowed (GUI-subsystem) app, yet --status must
+      # still reach a captured stdout - that is how Claude Code's status line
+      # runs it - and must never start the tray app. Nothing is running here,
+      # so it has to say so and exit 1.
+      - name: Command-line smoke test
+        shell: pwsh
+        run: |
+          $out = (& smoke/ClaudeCounter.exe --status | Out-String).Trim()
+          $code = $LASTEXITCODE
+          Write-Host "--status: '$out' (exit $code)"
+          if ($code -ne 1 -or $out -ne 'ClaudeCounter: not running') { throw "Unexpected --status result." }
+
+          $json = & smoke/ClaudeCounter.exe --status --json | Out-String | ConvertFrom-Json
+          if ($json.running -ne $false -or $json.available -ne $false) { throw "--status --json did not report a stopped app." }
+
+          $version = (& smoke/ClaudeCounter.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $version.StartsWith('ClaudeCounter ')) { throw "--version failed: '$version'" }
+
+          if (Get-Process ClaudeCounter -ErrorAction SilentlyContinue) { throw "A command-line option started the tray app." }
+          exit 0
+
   build-linux:
     runs-on: ubuntu-latest
 
@@ -168,6 +189,11 @@ jobs:
         with:
           name: test-results-linux
           path: TestResults/*.trx
+
+      # metadata.json is read by Plasma, not by anything in this build, so
+      # a syntax error there would otherwise ship silently.
+      - name: Check the Plasma widget metadata
+        run: python3 -m json.tool packaging/plasmoid/com.github.6spiderman.claudecounter/metadata.json > /dev/null
 
       - name: Publish smoke test
         run: |
@@ -256,8 +282,25 @@ jobs:
           test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
           test -f /usr/share/applications/claudecounter.desktop
           test -f /usr/share/icons/hicolor/scalable/apps/claudecounter.svg
+          test -f /usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter/metadata.json
+          test -f /usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter/contents/ui/main.qml
+
+          # --status from the installed command, with nothing running: it
+          # must say so and exit 1 - never start the tray app or hang.
+          set +e
+          out=$(timeout 20 claudecounter --status)
+          code=$?
+          timeout 20 claudecounter --status --json > /tmp/status.json
+          set -e
+          echo "claudecounter --status: '$out' (exit $code)"
+          test "$code" -eq 1
+          test "$out" = "ClaudeCounter: not running"
+          python3 -m json.tool /tmp/status.json
+          timeout 20 claudecounter --version
+
           sudo apt-get remove -y claudecounter
           test ! -e /usr/bin/claudecounter
+          test ! -e /usr/share/plasma/plasmoids/com.github.6spiderman.claudecounter
 
       # Lets a PR be tried on a real desktop before anything is released:
       # download from the run's Artifacts and `sudo apt install ./<file>.deb`.
