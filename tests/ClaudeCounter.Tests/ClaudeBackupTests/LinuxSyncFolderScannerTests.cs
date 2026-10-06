@@ -151,3 +151,66 @@ public class ProcessRunnerExistsOnPathTests
     public void MissingPathMeansNothingIsFound() =>
         Assert.False(ProcessRunner.ExistsOnPath("git", null, Files.Contains));
 }
+
+/// <summary>GitBackend commit identity: git refuses to commit without one.</summary>
+public class GitBackendCommitIdentityTests : IDisposable
+{
+    private sealed class Runner(bool identityConfigured) : IProcessRunner
+    {
+        public List<string> Calls { get; } = new();
+        public bool Exists(string file) => true;
+        public ProcessResult Run(string file, IReadOnlyList<string> args, string? wd = null)
+        {
+            Calls.Add($"{file} {string.Join(' ', args)}");
+            if (args.Count > 0 && args[0] == "init" && wd is not null)
+                Directory.CreateDirectory(Path.Combine(wd, ".git"));
+            if (args.Count > 0 && args[0] == "diff")
+                return new ProcessResult(1, "", ""); // there are changes to commit
+            if (args.Count == 2 && args[0] == "config" && args[1] == "user.email")
+                return new ProcessResult(identityConfigured ? 0 : 1, identityConfigured ? "me@example.com\n" : "", "");
+            return new ProcessResult(0, "", "");
+        }
+    }
+
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"gbid-src-{Guid.NewGuid():N}");
+    private readonly string _staging = Path.Combine(Path.GetTempPath(), $"gbid-stg-{Guid.NewGuid():N}");
+
+    public GitBackendCommitIdentityTests()
+    {
+        Directory.CreateDirectory(_root);
+        File.WriteAllText(Path.Combine(_root, "settings.json"), "{}");
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_root)) Directory.Delete(_root, true);
+        if (Directory.Exists(_staging)) Directory.Delete(_staging, true);
+    }
+
+    [Fact]
+    public void WithNoIdentityTheStagingRepoGetsALocalOneBeforeCommitting()
+    {
+        var runner = new Runner(identityConfigured: false);
+        var result = new GitBackend(runner, _staging).Run(_root, new[] { "settings.json" },
+            new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "main" });
+
+        Assert.True(result.Ok);
+        var setName = runner.Calls.IndexOf("git config user.name ClaudeCounter");
+        var setEmail = runner.Calls.IndexOf("git config user.email claudecounter@localhost");
+        var commit = runner.Calls.FindIndex(c => c.StartsWith("git commit", StringComparison.Ordinal));
+        Assert.True(setName >= 0 && setEmail >= 0 && commit > setEmail);
+        Assert.DoesNotContain(runner.Calls, c => c.Contains("--global", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AConfiguredIdentityIsLeftAlone()
+    {
+        var runner = new Runner(identityConfigured: true);
+        var result = new GitBackend(runner, _staging).Run(_root, new[] { "settings.json" },
+            new GitTarget { Enabled = true, RemoteUrl = "url", Branch = "main" });
+
+        Assert.True(result.Ok);
+        Assert.DoesNotContain(runner.Calls, c => c.StartsWith("git config user.name", StringComparison.Ordinal));
+        Assert.Contains(runner.Calls, c => c.StartsWith("git commit", StringComparison.Ordinal));
+    }
+}
