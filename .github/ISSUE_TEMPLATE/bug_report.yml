@@ -12,17 +12,21 @@ body:
     id: version
     attributes:
       label: ClaudeCounter version
-      description: Right-click the tray icon -> About ClaudeCounter...
-      placeholder: v1.0.0
+      description: |
+        Windows: right-click the tray icon -> About ClaudeCounter...
+        Linux: the first line of the log says "ClaudeCounter vX.Y.Z started", or run `dpkg -s claudecounter`
+      placeholder: v1.1.0
     validations:
       required: true
 
   - type: input
-    id: windows
+    id: os
     attributes:
-      label: Windows version
-      description: Run `winver`, or Settings -> System -> About
-      placeholder: Windows 11 Pro 24H2 (build 26100)
+      label: Operating system
+      description: |
+        Windows: run `winver`, or Settings -> System -> About.
+        Linux: distribution and version, desktop, and session type (`echo $XDG_SESSION_TYPE`).
+      placeholder: Windows 11 Pro 24H2 (build 26100) / Kubuntu 26.04, KDE Plasma 6.6, Wayland
     validations:
       required: true
 
@@ -31,9 +35,12 @@ body:
     attributes:
       label: How did you install it?
       options:
-        - Installer (ClaudeCounter-x.y.z-setup.exe)
+        - Windows installer (ClaudeCounter-x.y.z-setup.exe)
         - winget
-        - Portable zip
+        - Windows portable zip
+        - Linux .deb
+        - Linux .rpm
+        - Linux portable .tar.gz
         - Built from source
     validations:
       required: true
@@ -86,7 +93,8 @@ body:
     attributes:
       label: Relevant log lines
       description: |
-        From `%LocalAppData%\ClaudeCounter\logs\claudecounter.log`.
+        Windows: `%LocalAppData%\ClaudeCounter\logs\claudecounter.log`.
+        Linux: `~/.local/share/ClaudeCounter/logs/claudecounter.log`.
         **Redact any token before pasting.** This is rendered as a code block.
       render: text
     validations:
