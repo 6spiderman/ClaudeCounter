@@ -319,24 +319,24 @@ public static class SyncFolderScanner
             // business accounts are often "OneDrive - <Org>").
             foreach (var name in homeEntries.Where(n => n.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal))
                 // The folder name already starts with "OneDrive", so it is the label.
-                candidates.Add(new SyncFolderCandidate(name, System.IO.Path.Combine(home, name)));
+                candidates.Add(new SyncFolderCandidate(name, LinuxJoin(home, name)));
 
             // Google Drive has no official Linux client: these are the names
             // the common ones use (google-drive-ocamlfuse, rclone mounts set
             // up by hand, Insync's per-account folders).
             foreach (var name in new[] { "Google Drive", "GoogleDrive", "google-drive", "gdrive" })
-                candidates.Add(new SyncFolderCandidate($"Google Drive (~/{name})", System.IO.Path.Combine(home, name)));
-            var insync = System.IO.Path.Combine(home, "Insync");
+                candidates.Add(new SyncFolderCandidate($"Google Drive (~/{name})", LinuxJoin(home, name)));
+            var insync = LinuxJoin(home, "Insync");
             if (directoryExists(insync))
             {
                 foreach (var account in listDirectories(insync).Order(StringComparer.Ordinal))
-                    candidates.Add(new SyncFolderCandidate($"Google Drive (Insync: {account})", System.IO.Path.Combine(insync, account, "Google Drive")));
+                    candidates.Add(new SyncFolderCandidate($"Google Drive (Insync: {account})", LinuxJoin(insync, account, "Google Drive")));
             }
 
             // Dropbox's own Linux client: ~/Dropbox, or "Dropbox (Personal)" /
             // "Dropbox (<Team>)" when a work account is linked too.
             foreach (var name in homeEntries.Where(n => n.StartsWith("Dropbox", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal))
-                candidates.Add(new SyncFolderCandidate(name, System.IO.Path.Combine(home, name)));
+                candidates.Add(new SyncFolderCandidate(name, LinuxJoin(home, name)));
         }
 
         // NAS: network file systems mounted through fstab, autofs or by hand.
@@ -355,7 +355,7 @@ public static class SyncFolderScanner
                 if (name.StartsWith("smb-share:", StringComparison.Ordinal) ||
                     name.StartsWith("nfs:", StringComparison.Ordinal) ||
                     name.StartsWith("sftp:", StringComparison.Ordinal))
-                    candidates.Add(new SyncFolderCandidate($"NAS share ({name})", System.IO.Path.Combine(gvfsDirectory, name)));
+                    candidates.Add(new SyncFolderCandidate($"NAS share ({name})", LinuxJoin(gvfsDirectory, name)));
             }
         }
 
@@ -372,7 +372,7 @@ public static class SyncFolderScanner
             {
                 exists = false;
             }
-            if (exists && seen.Add(System.IO.Path.TrimEndingDirectorySeparator(candidate.Path)))
+            if (exists && seen.Add(candidate.Path.TrimEnd('/')))
                 found.Add(candidate);
         }
         return found;
@@ -398,6 +398,14 @@ public static class SyncFolderScanner
         static string Unescape(string field) => System.Text.RegularExpressions.Regex.Replace(
             field, @"\\([0-7]{3})", m => ((char)Convert.ToInt32(m.Groups[1].Value, 8)).ToString());
     }
+
+    /// <summary>
+    /// Joins Linux path segments with '/', whatever OS runs this - so the pure
+    /// Linux logic above behaves (and is tested) the same on the Windows CI
+    /// runner, where Path.Combine would join with '\\'.
+    /// </summary>
+    internal static string LinuxJoin(params string[] parts) =>
+        string.Join('/', parts.Select((p, i) => i == 0 ? p.TrimEnd('/') : p.Trim('/')));
 
     private static IReadOnlyList<(string Source, string MountPoint, string FileSystem)> ReadLinuxMounts(string path)
     {

@@ -92,7 +92,9 @@ public sealed class ProcessRunner : IProcessRunner
             return fileExists(file);
         foreach (var directory in (path ?? "").Split(':', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (fileExists(Path.Combine(directory, file)))
+            // '/' rather than Path.Combine: this is the non-Windows lookup, and the
+            // tests for it also run on the Windows CI runner.
+            if (fileExists(directory.TrimEnd('/') + "/" + file))
                 return true;
         }
         return false;
