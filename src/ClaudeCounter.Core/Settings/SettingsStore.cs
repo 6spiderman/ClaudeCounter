@@ -11,7 +11,7 @@ public sealed class SettingsStore
     public SettingsStore(string? path = null)
     {
         _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData, Environment.SpecialFolderOption.Create),
             "ClaudeCounter", "settings.json");
     }
 
@@ -19,7 +19,18 @@ public sealed class SettingsStore
     public (AppSettings Settings, bool IsFirstRun) Load()
     {
         if (!File.Exists(_path))
-            return (new AppSettings(), true);
+        {
+            // Normalize a brand-new settings object too (not just loaded ones),
+            // so NotificationStateVersion is already stamped at the current
+            // value before the first save. Skipping this would leave a fresh
+            // install's first settings.json on file with version 0 (the
+            // "pre-Warn" sentinel), causing Normalize() to spuriously clear
+            // real same-version dedupe state the very first time it is loaded
+            // back on a later run.
+            var fresh = new AppSettings();
+            fresh.Normalize();
+            return (fresh, true);
+        }
 
         try
         {
@@ -30,8 +41,14 @@ public sealed class SettingsStore
         }
         catch (Exception e) when (e is JsonException or IOException)
         {
-            // Never crash a tray app over a corrupt settings file.
-            return (new AppSettings(), false);
+            // Never crash a tray app over a corrupt settings file. Still
+            // normalize the fallback object, same as the other two return
+            // paths - Normalize() is the one place every field-level invariant
+            // (including the NotificationStateVersion stamp) is enforced, and
+            // this path must not be the one exception to that.
+            var fallback = new AppSettings();
+            fallback.Normalize();
+            return (fallback, false);
         }
     }
 

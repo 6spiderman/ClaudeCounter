@@ -1,5 +1,7 @@
+using ClaudeBackup;
 using ClaudeCounter.Core;
 using ClaudeCounter.Core.Auth;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
 
@@ -26,6 +28,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
+    private readonly ThresholdTracker _tracker;
     private readonly PollingService _polling;
     private readonly FlyoutForm _flyout;
     private readonly ToolStripMenuItem _updateItem;
@@ -36,8 +39,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     private AboutForm? _aboutForm;
     private SignInForm? _signInForm;
     private Icon? _currentIcon;
-    private (string Text, Band Band)? _iconKey;
+    // S11b: badge is now part of the key - see SetIcon's own remarks - or a
+    // backup-health change alone (no usage-text/band change) would never
+    // trigger a re-render.
+    private (string Text, Band Band, bool Badge)? _iconKey;
     private bool _updateCheckStarted;
+    private bool _shutdownDone;
     private string? _updateUrl;
     private System.Windows.Forms.Timer? _onboardingTimer;
 
@@ -51,13 +58,24 @@ public sealed class TrayApplicationContext : ApplicationContext
             if (_settings.AutostartEnabled)
                 AutostartManager.Enable();
         }
-        else if (_settings.AutostartEnabled)
+        else
         {
-            AutostartManager.EnsurePathCurrent();
+            if (_settings.AutostartEnabled)
+                AutostartManager.EnsurePathCurrent();
+
+            // Normalize() (called inside Load()) may have just bumped
+            // NotificationStateVersion and cleared stale dedupe state in
+            // memory. Persist that immediately rather than waiting for some
+            // unrelated later SaveSettings() call - Normalize() itself does
+            // no I/O, so this is the one place that decision belongs.
+            if (_settings.NotificationStateJustMigrated)
+                _settingsStore.Save(_settings);
         }
 
         _refresher = new OAuthTokenRefresher(_tokenEndpoint);
         _exchanger = new OAuthCodeExchanger(_tokenEndpoint);
+
+        _tracker = new ThresholdTracker(_settings.NotificationState);
 
         _polling = new PollingService(
             new TokenProvider(_sessionStore, _refresher),
@@ -80,6 +98,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Refresh now", null, (_, _) => _polling.TriggerNow());
         menu.Items.Add(_signInItem);
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
+        if (BackupTaskManager.WorkerAvailable())
+            menu.Items.Add("Back up now", null, async (_, _) => await RunBackupNowAsync());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_updateItem);
         menu.Items.Add("Open log folder", null, (_, _) => Shell.ShowLogFolder());
@@ -92,7 +112,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             ContextMenuStrip = menu,
             Visible = true,
         };
-        SetIcon("--", Band.Gray);
+        SetIcon("--", Band.Gray, badge: false);
         _notifyIcon.Text = "ClaudeCounter - waiting for first update";
         _notifyIcon.MouseClick += OnTrayClick;
 
@@ -103,6 +123,18 @@ public sealed class TrayApplicationContext : ApplicationContext
         // on wake the tray shows stale data until the (delayed) timer fires. Force
         // an immediate refresh on resume instead.
         Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
+        // Close cleanly whoever asks: Windows ending the session, or the
+        // installer's Restart Manager closing us for an upgrade. Without these
+        // the tray icon is never disposed on those paths and a ghost lingers.
+        //
+        // Create the flyout's window handle up front, here on the UI thread.
+        // It is never shown until the user clicks the tray icon, but it is the
+        // marshaling target OnSessionEnding posts the exit to, and BeginInvoke
+        // requires a handle that already exists.
+        _ = _flyout.Handle;
+        Microsoft.Win32.SystemEvents.SessionEnding += OnSessionEnding;
+        Application.ApplicationExit += OnApplicationExit;
 
         Log.Info($"ClaudeCounter {AppInfo.DisplayVersion} started.");
 
@@ -246,10 +278,22 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OnPollUpdated(PollState state)
     {
-        UpdateIcon(state);
-        var tooltip = BuildTooltip(state);
+        // S11b: computed once per poll and threaded through the icon/tooltip/
+        // flyout below - loaded fresh from disk every time (like
+        // BackupTaskManager.RunNowAsync and SettingsForm.OnOpenRestoreDialog
+        // already do for backup.json), never cached, so a change made from
+        // the Settings dialog or an in-progress worker run updating
+        // backup-status.json is picked up on the very next poll with no
+        // extra invalidation plumbing. Every existing line below this point
+        // is unchanged in what it does - see UpdateIcon/BuildTooltip's own
+        // remarks for exactly how backupHealth is folded in.
+        var backupHealth = EvaluateBackupHealth();
+
+        UpdateIcon(state, backupHealth);
+        var tooltip = BuildTooltip(state, backupHealth);
         _notifyIcon.Text = tooltip;
         _flyout.UpdateState(state);
+        _flyout.UpdateBackupHealth(backupHealth);
         UpdateSignInItem(state);
         Log.Info($"Tooltip: {tooltip.Replace("\n", " | ")}");
 
@@ -261,9 +305,141 @@ public sealed class TrayApplicationContext : ApplicationContext
             _updateCheckStarted = true;
             _ = CheckForUpdatesAsync();
         }
+
+        EvaluateAlerts(state);
+
+        EvaluateBackupHealthNotification(backupHealth);
     }
 
-    private void UpdateIcon(PollState state)
+    /// <summary>
+    /// S11b: loads backup.json and backup-status.json fresh from disk and
+    /// evaluates health via BackupHealth.Evaluate. Returns null when the
+    /// backup worker is not installed (BackupTaskManager.WorkerAvailable()) -
+    /// the feature does not exist at all in that case, so no badge, no
+    /// tooltip/flyout line, and no popup (every consumer below treats a null
+    /// result exactly like NotConfigured). Safe to call unguarded on the poll
+    /// timer: both Load calls degrade to safe defaults (BackupConfig.Load
+    /// falls back to Default(), BackupStatus.Load falls back to a fresh
+    /// status that reads as NeverRun) rather than throwing - see both types'
+    /// own doc comments, which call out this exact caller.
+    /// </summary>
+    private BackupHealthResult? EvaluateBackupHealth()
+    {
+        if (!BackupTaskManager.WorkerAvailable())
+            return null;
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var status = BackupStatus.Load(BackupStatus.DefaultPath());
+        return BackupHealth.Evaluate(status, config, DateTimeOffset.UtcNow, config.Schedule.BackupStaleAfterDays);
+    }
+
+    /// <summary>
+    /// S11b: one popup per transition into a problem state - see
+    /// BackupHealthPresenter.ShouldNotify, the pure decision this method
+    /// wraps with I/O (settings persistence) and UI (the popup itself, and
+    /// the same modal-dialog suppression EvaluateAlerts already applies to
+    /// usage alerts, for the same reason: a popup created while a modal
+    /// dialog is running would yank focus off it). <paramref
+    /// name="result"/> null means the worker is not installed - nothing to
+    /// evaluate, nothing to persist.
+    ///
+    /// _settings.LastBackupHealthState tracks the last OBSERVED state, not
+    /// just the last one that actually popped up - it is advanced whenever
+    /// the state changes, even when a popup for that change was suppressed by
+    /// a modal dialog, mirroring EvaluateAlerts' own "still persist state
+    /// even when suppressed, so the alert does not fire late once the dialog
+    /// closes" behaviour for usage alerts.
+    /// </summary>
+    private void EvaluateBackupHealthNotification(BackupHealthResult? result)
+    {
+        if (result is null)
+            return;
+
+        var previous = _settings.LastBackupHealthState;
+        if (BackupHealthPresenter.ShouldNotify(previous, result.State))
+        {
+            var modalActive = !_settings.OnboardingCompleted
+                || _settingsForm is { IsDisposed: false }
+                || _signInForm is { IsDisposed: false }
+                || _aboutForm is { IsDisposed: false };
+            if (modalActive)
+            {
+                Log.Info($"Backup health alert suppressed (modal dialog open): {result.State}.");
+            }
+            else
+            {
+                Log.Info($"Backup health alert: {result.State}.");
+                try
+                {
+                    AlertPopupForm.ShowBackupHealth(result, _settings.PopupPlacement, Cursor.Position, _settings.PopupAutoDismissSeconds);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Backup health popup failed: {ex.Message}");
+                }
+            }
+        }
+
+        if (previous != result.State)
+        {
+            _settings.LastBackupHealthState = result.State;
+            SaveSettings();
+        }
+    }
+
+    private void EvaluateAlerts(PollState state)
+    {
+        if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
+            return;
+
+        var events = _tracker.Evaluate(snapshot, _settings, DateTimeOffset.UtcNow);
+        if (events.Count == 0)
+            return;
+
+        // A modal dialog (onboarding, settings, sign-in, about) runs its own
+        // nested message loop, and poll continuations still run underneath it.
+        // A popup created then is not disabled by that loop and is TopMost - a
+        // Maxed popup even calls Activate() - so it would yank focus off the
+        // dialog the user is in the middle of. Still let the tracker consume
+        // the crossing and still persist state below, so the alert does not
+        // fire late once the dialog closes; just suppress showing it now.
+        var modalActive = !_settings.OnboardingCompleted
+            || _settingsForm is { IsDisposed: false }
+            || _signInForm is { IsDisposed: false }
+            || _aboutForm is { IsDisposed: false };
+
+        foreach (var e in events)
+        {
+            var enabled = e.Level switch
+            {
+                AlertLevel.Maxed => _settings.MaxedAlertsEnabled,
+                AlertLevel.Critical => _settings.CriticalAlertsEnabled,
+                AlertLevel.Warn => _settings.WarnAlertsEnabled,
+                _ => false,
+            };
+            if (!enabled)
+                continue;
+            if (modalActive)
+            {
+                Log.Info($"Alert suppressed (modal dialog open): {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+                continue;
+            }
+            Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+            try
+            {
+                AlertPopupForm.Show(e, _settings.PopupPlacement, Cursor.Position, _settings.PopupAutoDismissSeconds);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Alert popup failed: {ex.Message}");
+            }
+        }
+
+        // Persist dedupe state whether or not a popup was shown, so a disabled
+        // alert level does not re-fire on every later poll.
+        SaveSettings();
+    }
+
+    private void UpdateIcon(PollState state, BackupHealthResult? backupHealth)
     {
         string text;
         Band band;
@@ -279,22 +455,24 @@ public sealed class TrayApplicationContext : ApplicationContext
             text = "--";
             band = Band.Gray;
         }
-        SetIcon(text, band);
+        // S11b: keyed off WarrantsAttention() directly - never a hand-rolled
+        // Failed-or-Stale check (see BackupHealthPresenter's own remarks).
+        SetIcon(text, band, backupHealth?.State.WarrantsAttention() ?? false);
     }
 
-    private void SetIcon(string text, Band band)
+    private void SetIcon(string text, Band band, bool badge)
     {
-        if (_iconKey == (text, band))
+        if (_iconKey == (text, band, badge))
             return;
-        var icon = IconRenderer.Render(text, band);
+        var icon = IconRenderer.Render(text, band, badge);
         var previous = _currentIcon;
         _notifyIcon.Icon = icon;
         _currentIcon = icon;
-        _iconKey = (text, band);
+        _iconKey = (text, band, badge);
         previous?.Dispose();
     }
 
-    private string BuildTooltip(PollState state)
+    private string BuildTooltip(PollState state, BackupHealthResult? backupHealth)
     {
         string tooltip;
         if (state.Snapshot is { } s)
@@ -315,11 +493,36 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             tooltip = "ClaudeCounter\n" + (state.ProblemMessage ?? "Waiting for first update");
         }
+
+        // S11b: appended LAST, after the guaranteed Session/Week lines above -
+        // so if the 127-char clamp below has to cut anything, it cuts this
+        // line, never a usage number (see BackupHealthPresenter.TooltipLine's
+        // doc comment and the design spec's tooltip constraint).
+        if (BackupHealthPresenter.TooltipLine(backupHealth) is { } backupLine)
+            tooltip += "\n" + backupLine;
+
         return tooltip.Length <= MaxTooltipLength ? tooltip : tooltip[..MaxTooltipLength];
     }
 
     private static string ResetSuffix(DateTimeOffset? resetsAt, DateTimeOffset now) =>
         resetsAt is { } at ? $", resets in {TimeText.Countdown(at, now)}" : "";
+
+    /// <summary>
+    /// I1: "Back up now" must surface its result instead of firing the
+    /// worker and forgetting about it - a failing backup previously looked
+    /// exactly like a successful one. Awaiting here does not block the UI
+    /// thread: BackupTaskManager.RunNowAsync awaits WaitForExitAsync, which
+    /// yields back to the message loop while the worker runs.
+    /// </summary>
+    private async Task RunBackupNowAsync()
+    {
+        var exitCode = await BackupTaskManager.RunNowAsync();
+        var message = BackupTaskManager.ResultMessage(exitCode);
+        Log.Info($"Back up now: {message}");
+        _notifyIcon.ShowBalloonTip(
+            4000, "ClaudeCounter Backup", message,
+            exitCode == 0 ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
 
     private void ShowSettings()
     {
@@ -329,6 +532,18 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
         _settingsForm = new SettingsForm(_settings);
+        // S17c: BackupDestinationsDialog (opened from the Backup tab's
+        // "Manage destinations..." button) saves each add/edit/remove
+        // immediately, independent of this dialog's own OK/Cancel - so a
+        // removed (or newly broken) destination must be reflected in the
+        // tray's badge/tooltip/popup PROMPTLY, not only the next time
+        // Settings happens to close with OK (which is also when this used
+        // to run) or up to PollIntervalMinutes later at the next scheduled
+        // poll. TriggerNow() wakes the poll loop immediately; PollOnceAsync
+        // always calls Updated (see its own remarks) regardless of
+        // sign-in/network state, so OnPollUpdated's EvaluateBackupHealth
+        // re-evaluation runs even when nothing about usage changed.
+        _settingsForm.BackupDestinationsChanged += () => _polling.TriggerNow();
         if (_settingsForm.ShowDialog() == DialogResult.OK)
         {
             _settingsForm.ApplyTo(_settings);
@@ -397,10 +612,24 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void SaveSettings() => _settingsStore.Save(_settings);
 
-    private void ExitApplication()
+    /// <summary>
+    /// Releases everything the tray owns. Idempotent, because it is reachable
+    /// from three directions: the Exit menu item, Windows ending the session
+    /// (logoff or shutdown), and the installer's Restart Manager asking us to
+    /// close for an upgrade. Only the first of those runs our own code path -
+    /// the other two used to skip it entirely, which left a ghost tray icon
+    /// sitting in the notification area until the user moused over it.
+    /// </summary>
+    private void Shutdown()
     {
+        if (_shutdownDone)
+            return;
+        _shutdownDone = true;
+
         Log.Info("ClaudeCounter exiting.");
         Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        Microsoft.Win32.SystemEvents.SessionEnding -= OnSessionEnding;
+        Application.ApplicationExit -= OnApplicationExit;
         _onboardingTimer?.Dispose();
         _lifetime.Cancel();
         // Dispose the icon before exiting or a ghost icon lingers until mouse-over.
@@ -414,6 +643,43 @@ public sealed class TrayApplicationContext : ApplicationContext
         _updates.Dispose();
         _flyout.Dispose();
         _lifetime.Dispose();
+    }
+
+    private void OnApplicationExit(object? sender, EventArgs e) => Shutdown();
+
+    /// <summary>
+    /// Windows is ending the session, or the installer's Restart Manager is
+    /// asking us to close for an upgrade. Restart Manager waits for the PROCESS
+    /// to terminate, so we do have to exit - but NOT from this thread.
+    ///
+    /// SystemEvents raises this on its own dedicated thread while Windows is
+    /// still waiting for that window procedure to return. Doing the work here
+    /// deadlocks: disposing UI-thread-owned objects hangs, and even a bare
+    /// Environment.Exit never completes. Both were observed - the log stopped
+    /// mid-handler and the process sat alive until Setup gave up.
+    ///
+    /// So post the exit to the UI thread and return immediately. The UI thread
+    /// runs the normal ExitApplication path (full disposal, tray icon removed,
+    /// message loop ended), and the process exits on its own terms.
+    /// </summary>
+    private void OnSessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e)
+    {
+        Log.Info($"Session ending ({e.Reason}) - posting exit to the UI thread.");
+        try
+        {
+            // _flyout's handle is created in the constructor precisely so this
+            // marshaling target always exists, even though it is never shown.
+            _flyout.BeginInvoke(new Action(ExitApplication));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not post the exit request: {ex.Message}");
+        }
+    }
+
+    private void ExitApplication()
+    {
+        Shutdown();
         ExitThread();
     }
 }

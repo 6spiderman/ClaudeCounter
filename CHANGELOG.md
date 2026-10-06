@@ -5,6 +5,123 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - Unreleased
+
+Everything here is on both Windows and Linux.
+
+### Added
+
+- **Backup on Linux**, with the same destinations, selection, retention,
+  restore, health badge and popups as Windows, in a new Backup tab in
+  Settings. The `.deb`/`.rpm` include the `ClaudeBackup` worker; the schedule
+  is a systemd user timer (`~/.config/systemd/user/claudecounter-backup.timer`).
+  Sync-folder detection finds Dropbox, OneDrive and Google Drive client
+  folders and mounted network shares.
+- **Alert popups on Linux**, with the same levels, per-window choices,
+  placement, auto-dismiss and repeat settings as Windows, in a new Alerts tab
+  in Settings. Near-tray popups appear in the corner next to your panel and
+  stack; they never take focus. Settings now has General and Alerts tabs.
+
+- **Alert popups.** A configurable popup when a usage window crosses your
+  critical threshold or hits 100%, independently for the 5-hour session, the
+  rolling 7-day window, and the per-model (Opus/Sonnet) windows. Placement is
+  near the tray or centered on screen, all configurable (or turned off
+  entirely) in Settings.
+- **Configurable alert repeat cadence.** A new "Repeat every" option for alert
+  popups (Settings -> Alerts) lets you choose how often ClaudeCounter re-shows
+  a popup while a window stays at or above an already-alerted level, instead
+  of only once per crossing. Off by default.
+- **ClaudeBackup**, a standalone worker that backs up a subset of your Claude
+  config (settings, CLAUDE.md, commands, agents, top-level plugin manifests)
+  to a private GitHub repo and/or a Drive destination on a schedule you set,
+  or on demand from the tray menu or Settings. Never sends anything to more
+  than one destination without your say-so, never backs up credential-shaped
+  files (a denylist is applied before anything is read), and never writes a
+  secret to `backup.json` or any log. The GitHub repo you point it at **must
+  be private** - ClaudeCounter has no way to verify that automatically, so it
+  warns in the log and says so in Settings. Included by default when you
+  install or upgrade; choose "Custom" instead of "Full installation" on the
+  installer's Components page if you would rather leave it out - the tray
+  hides every backup control when the worker is not installed.
+- **Any number of backup destinations, of any kind, in any combination.**
+  Settings -> Backup -> **Manage destinations...** lets you add, edit, and
+  remove destinations one at a time - GitHub, Google Drive, OneDrive,
+  Dropbox, NAS / network share, and rclone remote (advanced) - with no limit
+  on how many, and no restriction to one-per-kind: two GitHub repos, or a
+  home NAS and an office NAS, both work as two independent destinations,
+  each with its own connection details, its own Include/Exclude selection,
+  and (for the sync-folder and rclone kinds) its own retention settings. The
+  earlier "GitHub plus exactly one cloud/NAS destination" limit was a
+  restriction of the settings UI, never of the underlying model, and is
+  gone. Picking Google Drive, OneDrive, Dropbox, or NAS / network share when
+  adding a destination auto-detects and fills in the folder path for you
+  right away (de-duplicating OneDrive's several environment variables, and
+  offering a mapped NAS drive as its UNC path rather than the drive letter,
+  since a drive letter mapping is not guaranteed to resolve under a
+  scheduled, non-interactive backup run); a **Detect...** button lets you
+  search again by hand, e.g. after signing into a sync client that was not
+  set up yet. Removing a destination only removes it from ClaudeCounter's
+  local configuration - nothing is deleted at the destination itself - and
+  its tray health badge/notification is cleared immediately, rather than
+  lingering until the next scheduled poll. The Backup tab itself now shows a
+  compact, read-only summary (name, kind, enabled, last-run health) instead
+  of every destination's connection fields, which dropped its measured
+  height from 684px to 439px. See
+  [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
+  method first.
+- "Back up now" (tray menu and Settings) now waits for the backup to finish
+  and reports the result - previously it fired the worker and forgot about
+  it, so a failing backup looked identical to a successful one.
+- **Advanced backup settings**, behind a new "Advanced..." button on the
+  Backup tab: a missed scheduled backup (e.g. the machine was asleep) now
+  runs as soon as possible afterwards by default, the task can require a
+  network connection before starting, and a failed run retries automatically
+  (every 15 minutes, up to 3 times, all by default). The task no longer
+  requires being plugged in to run or to keep running - unlike Windows' own
+  new-task defaults, which would have silently reintroduced the
+  missed-backup problem this exists to fix.
+- **Per-destination backup retention**, on each sync-folder or rclone
+  destination's own page in "Manage destinations...": keep only the most
+  recent N backups, delete anything older than N days, or both. Off by
+  default. Applied only after a successful upload, never deletes the single
+  most recent backup no matter how the settings are set, and only ever
+  considers this app's own `claude-backup-*.zip` files - never anything else
+  stored in the same remote folder. Does not apply to a GitHub destination,
+  which keeps its full history in git commits instead.
+
+### Changed
+
+- When alert repeat is turned on, a new 5-hour session now resets the repeat
+  timer for every window - 5-hour, weekly, and per-model - not just its own,
+  so a fresh 5-hour period does not leave another window's popup waiting out
+  a stale interval.
+
+### Fixed
+
+- A GitHub backup destination no longer fails every run on a machine where
+  git has no identity configured ("Please tell me who you are" - usual on a
+  fresh Linux install). Backup commits then use a ClaudeCounter identity set
+  in the backup's own staging repository only; a configured identity still
+  wins, and your global git config is never touched.
+- The app and the backup worker create their per-user data folders when they
+  are missing, instead of writing their log and status files relative to the
+  current directory.
+- **Usage alert popups no longer repeat every few minutes for the same
+  threshold crossing.** A quirk in how the API reports each window's reset
+  time made ClaudeCounter think the reset time had changed on every poll,
+  which cleared the "already alerted" flag and re-showed the same popup
+  again and again instead of once.
+- **The Critical (90%) alert popup now has a red accent**, matching the 100%
+  popup. Previously it had no accent color at all and ended up looking less
+  urgent than the amber 75% Warn popup.
+- A repointed GitHub remote or a changed backup branch now actually takes
+  effect on the next scheduled or manual run, instead of silently continuing
+  to push to whichever remote/branch was configured the very first time.
+- Two backup runs (a scheduled run racing a manual "back up now", or two
+  triggers close together) can no longer interleave against the same staging
+  repo and delete each other's files from the remote backup - ClaudeBackup.exe
+  now takes a single-instance lock, the same way the tray app already does.
+
 ## [1.1.1] - 2026-10-06
 
 ### Fixed (Linux)
@@ -130,6 +247,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.2.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.0
 [1.1.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.1
 [1.1.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.0
 [1.0.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.0.0

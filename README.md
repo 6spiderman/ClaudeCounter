@@ -198,6 +198,32 @@ to Claude...**
   desktop distros, but not a non-systemd setup).
 - **Update notifications** from GitHub Releases, at most once a day, shown as a
   menu entry rather than a popup. Off with one checkbox.
+- **Alert popups** when a window crosses your warn or critical threshold or
+  hits 100%, placed near the tray (on Linux, the corner next to your panel)
+  or centered on screen, each configurable (or turned off) independently in
+  Settings -> Alerts. See [Alerts](#alerts).
+- **Backup** (the `ClaudeBackup` worker, on Windows and Linux): scheduled or
+  on-demand backup of a subset of your Claude config to any number of
+  destinations you configure, in any combination, with restore built in.
+  Installed by default - on Windows, untick "Backup tools" on the installer's
+  Components page (choose "Custom installation") if you would rather leave it
+  out; the Linux `.deb`/`.rpm` always include it - and every backup control in
+  Settings stays hidden when it is not installed. The schedule is a Task
+  Scheduler task on Windows and a systemd user timer on Linux. Settings -> Backup -> "Manage
+  destinations..." lets you add, edit, or remove destinations one at a time -
+  **GitHub** (a private repo you create yourself - **must be private**;
+  ClaudeCounter cannot verify that automatically, so it warns you in Settings
+  and in the log instead), **Google Drive**, **OneDrive**, **Dropbox**, **NAS
+  / network share** (all sync folder - no sign-in needed, the sync client or
+  the NAS does the upload, and picking one auto-detects the folder for you),
+  or **rclone remote** (advanced, needs a one-time Google Cloud Console setup
+  of your own OAuth client). Set up any of them, all of them, or several of
+  the same kind - two GitHub repos, or a home NAS and an office NAS, both
+  work, each with its own settings, retention, and Include/Exclude selection.
+  Removing a destination only removes it from ClaudeCounter's local
+  configuration; nothing at the destination itself is deleted. See
+  [docs/GOOGLE-DRIVE-SETUP.md](docs/GOOGLE-DRIVE-SETUP.md), sync-folder
+  method first.
 - Single instance (a named mutex, on both platforms), single self-contained
   executable, no telemetry.
 
@@ -258,6 +284,22 @@ Right-click the tray icon -> **Settings...**
 | Start on login | Windows: the `HKCU\...\Run` key. Linux: an XDG autostart entry at `~/.config/autostart/`. | On |
 | Check for updates automatically | Ask GitHub once a day whether a newer release exists. | On |
 
+### Alerts
+
+Settings -> **Alerts**, on both Windows and Linux.
+
+| Setting | Description | Default |
+| --- | --- | --- |
+| Popup when a window hits the warn / critical threshold / 100% | Which levels pop up. Each crossing alerts once per window until that window resets. | All on |
+| Watch these windows | 5-hour session, weekly (all models), weekly (Opus), weekly (Sonnet). | Session and weekly on; Opus and Sonnet off |
+| Popup placement | **Near tray** (bottom-right on Windows; the corner next to your panel on Linux) or **Centered**. A 100% popup is always centered. | Near tray |
+| Auto-dismiss popups after | Seconds before a near-tray popup closes itself; 0 = never. Centered popups always wait for you. | 12 |
+| Re-notify every | Minutes before an already-alerted window that is still over its level alerts again; 0 = only once until it resets. | 0 |
+
+Near-tray popups never take focus from what you are typing in; several at
+once stack instead of overlapping. Alerts are held back while the Settings,
+Sign in or first-run window is open, rather than popping up over it.
+
 ## File locations
 
 ### Windows
@@ -282,7 +324,11 @@ settings.
 | `~/.local/share/ClaudeCounter/logs/claudecounter.log` | Same rules as Windows |
 | `~/.config/autostart/claudecounter.desktop` | Autostart entry, written when "Start on login" is enabled |
 | `~/.net/ClaudeCounter/` | Native libraries (Skia, HarfBuzz) the single-file binary unpacks on first start. Safe to delete; recreated as needed. |
-| `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program, when installed from the `.deb`/`.rpm` |
+| `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program and the `ClaudeBackup` worker, when installed from the `.deb`/`.rpm` |
+| `~/.config/ClaudeCounter/backup.json` | Backup destinations, selections and schedule. No secrets - credentials stay with git, rclone or your sync client. |
+| `~/.local/share/ClaudeCounter/backup-status.json` | Result of each destination's last backup run, for the health badge and the Last run column |
+| `~/.local/share/ClaudeCounter/backup-repo/`, `backup-tmp/`, `restore-*/` | Backup staging and restore working folders. Restore keeps its safety copies in `restore-safety/`. |
+| `~/.config/systemd/user/claudecounter-backup.{service,timer}` | The backup schedule, written by **Save and register schedule**. `systemctl --user list-timers` shows it. |
 | `~/.claude/.credentials.json` | Claude Code's tokens. **Read only, and only as a fallback.** |
 
 ## Build from source
@@ -379,6 +425,11 @@ the UI and the platform-specific seams below it.
   `PrepareForSleep` signal on the system bus in-process, with the D-Bus
   client Avalonia already ships for its tray icon - no child process that
   could outlive the app.
+- `BackupTaskManager` finds the `ClaudeBackup` worker next to the tray
+  binary and keeps the backup schedule: a Task Scheduler task on Windows, a
+  systemd user service and timer on Linux (`Persistent=` for missed runs,
+  `ConditionACPower=` for "don't start on battery", `Restart=on-failure` for
+  retries). The worker itself is the same code on both.
 - **Logout and shutdown (Linux).** The desktop's logout request arrives
   through X11 session management, which Avalonia handles by closing every
   window and cancelling the logout if any window refuses. The flyout only

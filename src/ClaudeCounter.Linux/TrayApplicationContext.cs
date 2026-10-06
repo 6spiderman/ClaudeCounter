@@ -4,8 +4,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
+using ClaudeBackup;
 using ClaudeCounter.Core;
 using ClaudeCounter.Core.Auth;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
 
@@ -30,6 +32,7 @@ public sealed class TrayApplicationContext
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
     private readonly PollingService _polling;
+    private readonly ThresholdTracker _tracker;
     private readonly SleepResumeWatcher _sleepResume = new();
     private readonly FlyoutWindow _flyout;
     private readonly TrayIcon _trayIcon;
@@ -53,7 +56,7 @@ public sealed class TrayApplicationContext
     private SettingsWindow? _settingsWindow;
     private SignInWindow? _signInWindow;
     private WindowIcon? _currentIcon;
-    private (string Text, Band Band)? _iconKey;
+    private (string Text, Band Band, bool Badge)? _iconKey;
     private bool _updateCheckStarted;
     private string? _updateUrl;
 
@@ -69,13 +72,22 @@ public sealed class TrayApplicationContext
             if (_settings.AutostartEnabled)
                 AutostartManager.Enable();
         }
-        else if (_settings.AutostartEnabled)
+        else
         {
-            AutostartManager.EnsurePathCurrent();
+            if (_settings.AutostartEnabled)
+                AutostartManager.EnsurePathCurrent();
+
+            // Normalize() (inside Load()) may have just migrated the alert
+            // dedupe state in memory; persist that now rather than on some
+            // unrelated later save. Same as the Windows build.
+            if (_settings.NotificationStateJustMigrated)
+                _settingsStore.Save(_settings);
         }
 
         _refresher = new OAuthTokenRefresher(_tokenEndpoint);
         _exchanger = new OAuthCodeExchanger(_tokenEndpoint);
+
+        _tracker = new ThresholdTracker(_settings.NotificationState);
 
         _polling = new PollingService(
             new TokenProvider(_sessionStore, _refresher),
@@ -109,12 +121,19 @@ public sealed class TrayApplicationContext
             refreshItem,
             _signInItem,
             settingsItem,
-            new NativeMenuItemSeparator(),
-            _updateItem,
-            logItem,
-            new NativeMenuItemSeparator(),
-            exitItem,
         };
+        // Only when the backup worker is installed, as on Windows.
+        if (BackupTaskManager.WorkerAvailable())
+        {
+            var backupItem = new NativeMenuItem("Back up now");
+            backupItem.Click += async (_, _) => await RunBackupNowAsync();
+            menu.Items.Add(backupItem);
+        }
+        menu.Items.Add(new NativeMenuItemSeparator());
+        menu.Items.Add(_updateItem);
+        menu.Items.Add(logItem);
+        menu.Items.Add(new NativeMenuItemSeparator());
+        menu.Items.Add(exitItem);
 
         _trayIcon = new TrayIcon
         {
@@ -307,9 +326,15 @@ public sealed class TrayApplicationContext
 
     private void OnPollUpdated(PollState state)
     {
-        UpdateIcon(state);
-        _trayIcon.ToolTipText = BuildTooltip(state);
+        // Backup health rides along with each usage poll, as on Windows: no
+        // separate timer, and it is re-read from backup-status.json, which
+        // the worker rewrites after every run.
+        var backupHealth = EvaluateBackupHealth();
+
+        UpdateIcon(state, backupHealth);
+        _trayIcon.ToolTipText = BuildTooltip(state, backupHealth);
         _flyout.UpdateState(state);
+        _flyout.UpdateBackupHealth(backupHealth);
         UpdateSignInItem(state);
 
         if (!_updateCheckStarted && state.Problem == ProblemKind.None)
@@ -317,9 +342,131 @@ public sealed class TrayApplicationContext
             _updateCheckStarted = true;
             _ = CheckForUpdatesAsync();
         }
+
+        EvaluateAlerts(state);
+        EvaluateBackupHealthNotification(backupHealth);
     }
 
-    private void UpdateIcon(PollState state)
+    /// <summary>Null when the backup worker is not installed.</summary>
+    private static BackupHealthResult? EvaluateBackupHealth()
+    {
+        if (!BackupTaskManager.WorkerAvailable())
+            return null;
+        var config = BackupConfig.Load(BackupConfig.DefaultPath());
+        var status = BackupStatus.Load(BackupStatus.DefaultPath());
+        return BackupHealth.Evaluate(status, config, DateTimeOffset.UtcNow, config.Schedule.BackupStaleAfterDays);
+    }
+
+    /// <summary>
+    /// Pops up once on a transition into a problem state (see
+    /// BackupHealthPresenter.ShouldNotify), held back while a dialog is open,
+    /// and remembers every observed state so a later failure re-arms after a
+    /// recovery. Mirrors the Windows build.
+    /// </summary>
+    private void EvaluateBackupHealthNotification(BackupHealthResult? result)
+    {
+        if (result is null)
+            return;
+
+        var previous = _settings.LastBackupHealthState;
+        if (BackupHealthPresenter.ShouldNotify(previous, result.State))
+        {
+            var dialogOpen = !_settings.OnboardingCompleted || _settingsWindow is not null || _signInWindow is not null;
+            if (dialogOpen)
+            {
+                Log.Info($"Backup health alert suppressed (dialog open): {result.State}.");
+            }
+            else
+            {
+                Log.Info($"Backup health alert: {result.State}.");
+                try
+                {
+                    AlertPopupWindow.ShowBackupHealth(result, _settings.PopupPlacement, _settings.PopupAutoDismissSeconds);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Backup health popup failed: {ex.Message}");
+                }
+            }
+        }
+
+        if (previous != result.State)
+        {
+            _settings.LastBackupHealthState = result.State;
+            SaveSettings();
+        }
+    }
+
+    /// <summary>
+    /// Runs the worker and reports the result as a desktop notification (the
+    /// Windows build's balloon tip) - a failing "Back up now" must not look
+    /// like a successful one.
+    /// </summary>
+    private async Task RunBackupNowAsync()
+    {
+        var exitCode = await BackupTaskManager.RunNowAsync();
+        var message = BackupTaskManager.ResultMessage(exitCode);
+        Log.Info($"Back up now: {message}");
+        Shell.Notify("ClaudeCounter Backup", message);
+        _polling.TriggerNow(); // refresh the badge/tooltip from the new status
+    }
+
+    /// <summary>
+    /// Same rules as the Windows build: ThresholdTracker decides which
+    /// crossings are new (once per crossing per window, re-armed on reset,
+    /// optionally repeated), the per-level toggles decide which are shown.
+    /// </summary>
+    private void EvaluateAlerts(PollState state)
+    {
+        if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
+            return;
+
+        var events = _tracker.Evaluate(snapshot, _settings, DateTimeOffset.UtcNow);
+        if (events.Count == 0)
+            return;
+
+        // While a dialog is open (first-run wizard, Settings, Sign in) a
+        // popup - a centered one takes focus - would land on top of what the
+        // user is doing. The tracker has still consumed the crossing and the
+        // state is still saved below, so it does not fire late either; it is
+        // just not shown. Mirrors the Windows build.
+        var dialogOpen = !_settings.OnboardingCompleted
+            || _settingsWindow is not null
+            || _signInWindow is not null;
+
+        foreach (var e in events)
+        {
+            var enabled = e.Level switch
+            {
+                AlertLevel.Maxed => _settings.MaxedAlertsEnabled,
+                AlertLevel.Critical => _settings.CriticalAlertsEnabled,
+                AlertLevel.Warn => _settings.WarnAlertsEnabled,
+                _ => false,
+            };
+            if (!enabled)
+                continue;
+            if (dialogOpen)
+            {
+                Log.Info($"Alert suppressed (dialog open): {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+                continue;
+            }
+            Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+            try
+            {
+                AlertPopupWindow.Show(e, _settings.PopupPlacement, _settings.PopupAutoDismissSeconds);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Alert popup failed: {ex.Message}");
+            }
+        }
+
+        // Persist dedupe state whether or not a popup was shown, so a disabled
+        // level does not re-fire on every later poll.
+        SaveSettings();
+    }
+
+    private void UpdateIcon(PollState state, BackupHealthResult? backupHealth)
     {
         string text;
         Band band;
@@ -335,19 +482,29 @@ public sealed class TrayApplicationContext
             text = "--";
             band = Band.Gray;
         }
-        SetIcon(text, band);
+        SetIcon(text, band, backupHealth?.State.WarrantsAttention() ?? false);
     }
 
-    private void SetIcon(string text, Band band)
+    private void SetIcon(string text, Band band, bool badge = false)
     {
-        if (_iconKey == (text, band))
+        if (_iconKey == (text, band, badge))
             return;
-        _currentIcon = IconRenderer.Render(text, band);
+        _currentIcon = IconRenderer.Render(text, band, badge);
         _trayIcon.Icon = _currentIcon;
-        _iconKey = (text, band);
+        _iconKey = (text, band, badge);
     }
 
-    private static string BuildTooltip(PollState state)
+    private static string BuildTooltip(PollState state, BackupHealthResult? backupHealth)
+    {
+        var usage = BuildUsageTooltip(state);
+        // A backup problem is one extra line, never a number - see
+        // BackupHealthPresenter.TooltipLine.
+        return BackupHealthPresenter.TooltipLine(backupHealth) is { } backupLine
+            ? usage + "\n" + backupLine
+            : usage;
+    }
+
+    private static string BuildUsageTooltip(PollState state)
     {
         if (state.Snapshot is { } s)
         {
@@ -377,6 +534,7 @@ public sealed class TrayApplicationContext
             return;
         }
         _settingsWindow = new SettingsWindow(_settings);
+        _settingsWindow.BackupDestinationsChanged += () => _polling.TriggerNow();
         _settingsWindow.Saved += () =>
         {
             _settingsWindow!.ApplyTo(_settings);

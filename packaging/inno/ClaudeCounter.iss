@@ -77,18 +77,42 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 
-; Detect a running instance so an upgrade prompts the user to close it rather
-; than failing on a locked executable. The mutex name must match the one
-; Program.cs takes for single-instance enforcement.
-AppMutex=Local\ClaudeCounter_SingleInstance
+; Close a running instance automatically for an upgrade, instead of failing on
+; a locked executable.
+;
+; Deliberately NO AppMutex. AppMutex only DETECTS a named mutex and shows a
+; "please close all instances now" prompt - it cannot close anything - and it
+; is checked before the Restart Manager step, so it short-circuits
+; CloseApplications entirely and the user is left closing the app by hand.
+; Restart Manager does the job properly; TrayApplicationContext.Shutdown()
+; handles its close request and disposes the tray icon so no ghost is left.
 CloseApplications=yes
 RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+; Backup is a headline feature as of 1.2, so it ships checked by default
+; instead of the opt-in stance from earlier releases (when it was
+; experimental and a default/full install deliberately left it out). A
+; [Types] section is required to get a checked-by-default component: without
+; one, a [Components] entry always starts unchecked regardless of flags. The
+; "full" type is the one preselected when the wizard opens, so listing
+; "backup" under it is what makes the checkbox start ticked; "custom" is
+; still offered so a user who wants the smaller install can untick it.
+; Trade-off accepted: ClaudeBackup.exe is ~35 MB, so a default install is
+; meaningfully larger than before - worth it for the feature to actually be
+; discovered instead of silently absent.
+[Types]
+Name: "full"; Description: "Full installation"
+Name: "custom"; Description: "Custom installation"; Flags: iscustom
+
+[Components]
+Name: "backup"; Description: "Backup tools (ClaudeBackup)"; Types: full custom
+
 [Files]
 Source: "{#SourceDir}\{#AppName}.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\ClaudeBackup.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: backup
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -118,9 +142,23 @@ Type: filesandordirs; Name: "{localappdata}\{#AppName}"
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usPostUninstall then
   begin
+    // Remove the backup component's scheduled task, if it was ever created.
+    // schtasks exits non-zero when the task does not exist (component was
+    // never installed, or backup was never configured) - that is expected
+    // and must not block or warn during uninstall, so the result is ignored.
+    // M2: "ClaudeCounter Backup" here must stay in sync with
+    // BackupTaskManager.TaskName in src/ClaudeCounter/Settings/BackupTaskManager.cs -
+    // this .iss script cannot import that C# const, so if the task name ever
+    // changes there, update it here too or every already-installed copy's
+    // scheduled task is orphaned on uninstall.
+    Exec('schtasks.exe', '/Delete /F /TN "ClaudeCounter Backup"',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
     if DirExists(ExpandConstant('{userappdata}\{#AppName}')) then
     begin
       if SuppressibleMsgBox(

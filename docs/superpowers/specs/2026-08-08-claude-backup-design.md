@@ -82,8 +82,8 @@ Subject to the same `TreatWarningsAsErrors=true` and locked package restore.
 {
   "sourceRoot": "%USERPROFILE%\\.claude",   // plus ~/.claude.json handled specially
   "include": ["settings.json", "CLAUDE.md", "commands/**", "agents/**",
-              "plugins/**/*.json"],
-  "exclude": ["projects/**", "statsig/**", "**/*cache*"],
+              "plugins/*.json"],
+  "exclude": ["projects/**", "statsig/**", "**/cache/**"],
   "github": { "enabled": true,  "remoteUrl": "git@github.com:user/claude-backup.git",
               "branch": "main" },
   "drive":  { "enabled": true,  "rcloneRemote": "gdrive:ClaudeBackups" },
@@ -93,6 +93,19 @@ Subject to the same `TreatWarningsAsErrors=true` and locked package restore.
 
 - **Include/exclude** are user-editable (the "let me choose files" decision), with
   the secure defaults above. `projects/` is excluded by default.
+- **Why `plugins/*.json` and not `plugins/**/*.json`** (changed during implementation
+  after a security review measured the real cost): the recursive form selected 144
+  files on a real machine, of which the only irreplaceable user state was
+  `installed_plugins.json`, `known_marketplaces.json`, and `blocklist.json` - all
+  captured by the top-level form. The rest is re-downloadable third-party content,
+  and three of those files carried secret-shaped keys (`"Authorization"`, `"API_KEY"`)
+  that a filename-based denylist cannot catch. It was also the only default whose file
+  set is not enumerable in advance, since plugin authors choose the filenames and the
+  set grows on every install. Users who want the full plugin tree opt in knowingly.
+- **Why `**/cache/**` and not `**/*cache*`**: globs match per path segment, so the
+  substring form only ever matched a file's own name - it pruned 1 file out of 144.
+  Worse, when used to prune directories it discarded files no exclude actually
+  matched. See the denylist limits below.
 - Globs are resolved relative to `sourceRoot`; the denylist is applied last.
 
 ## Backends

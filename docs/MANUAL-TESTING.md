@@ -257,6 +257,9 @@ Best on a clean VM. Minimum: a spare user account.
 ```
 
 - [ ] Installer runs with **no UAC prompt**
+- [ ] The Select Components page shows "Backup tools (ClaudeBackup)"
+      **checked** by default (Full installation) - unchecking it via
+      Custom installation must leave `ClaudeBackup.exe` out of `{app}`
 - [ ] Installs to `%LocalAppData%\Programs\ClaudeCounter`
 - [ ] Start Menu shortcut works
 - [ ] "Launch ClaudeCounter" on the final page works
@@ -320,7 +323,63 @@ until someone has ticked these.
 
 ---
 
-## 14. Linux (KDE Plasma and GNOME)
+## 14. Alert popups
+
+Threshold and 100% popups fire from `EvaluateAlerts` on each poll. Force a
+crossing by lowering the critical threshold in Settings to just below your
+current usage, or wait for a real one.
+
+- [ ] Forcing a window from below critical to above it produces **exactly one**
+      popup for that window
+- [ ] A critical crossing (below 100%) shows the compact tier: normal-size
+      popup, window name and percentage
+- [ ] A crossing to 100% shows the large tier: centered "Time to touch some
+      grass" popup, regardless of the placement setting
+- [ ] With placement set to **Near tray**, a below-100% critical popup appears
+      near the tray corner
+- [ ] With placement set to **Centered**, a below-100% critical popup appears
+      centered on screen instead
+- [ ] The next poll after a popup fires does **not** re-pop the same crossing
+- [ ] Restart the app after a popup has fired -> still does not re-pop the same
+      crossing
+- [ ] Let the window reset (or wait for `resets_at` to change) -> the next
+      crossing of that window alerts again (re-arm)
+- [ ] With a near-tray popup showing, type in another app while it appears ->
+      no keystrokes are lost and focus never leaves the app you were typing in
+- [ ] Force two windows to cross in the same poll -> two popups appear stacked
+      upward from the tray corner with a visible gap between them, and both
+      auto-dismiss on their own after about 12 seconds
+- [ ] Open Settings at 100%, 125% and 150% display scaling -> all alert
+      controls (the enable checkboxes, per-window checkboxes, and placement
+      choice) are fully visible and unclipped at each scale
+
+---
+
+## 15. Backup - Google Drive
+
+Full setup is in [docs/GOOGLE-DRIVE-SETUP.md](GOOGLE-DRIVE-SETUP.md); this is
+just the pre-release checklist. Needs a machine with rclone already
+authorised against a published (not Testing) OAuth client - see that doc if
+you have not done this yet.
+
+- [ ] `rclone` is installed and on `PATH`:
+      `rclone version`
+- [ ] The remote is configured and listed:
+      `rclone listremotes` shows your `gdrive:` (or equivalent) entry
+- [ ] Settings -> Backup -> Google Drive is enabled with a valid
+      `remote:folder` and at least one file selected
+- [ ] **Back up now** produces a timestamped zip in the remote folder -
+      confirm in the Drive web UI or `rclone ls gdrive:ClaudeBackups`
+- [ ] With retention configured (Advanced...), running backups past the
+      configured count/age prunes older zips, and the single most recent
+      backup always survives
+- [ ] Restore from a Drive snapshot: open the restore dialog, pick a Drive
+      backup, preview it, and restore it - confirm the restored files land
+      where expected and a safety copy of what was overwritten is made
+
+---
+
+## 16. Linux (KDE Plasma and GNOME)
 
 On a real desktop session, ideally Kubuntu/KDE Plasma on Wayland plus one
 GNOME machine. Install the `.deb` from the CI run's **linux-packages**
@@ -350,6 +409,30 @@ artifact, or from the draft release:
       missing autostart program
 - [ ] GNOME without the AppIndicator extension: a one-time notification says
       no tray was found
+- [ ] Settings has **General** and **Alerts** tabs of the same height; OK and
+      Cancel are fully visible on both
+- [ ] Lower the critical threshold below current usage: one popup per
+      crossed window appears next to the panel, stacked with a gap, without
+      taking focus from the window you are typing in, and closes itself after
+      the auto-dismiss time
+- [ ] Restart the app: the same crossing does **not** pop up again
+- [ ] With an alert popup open, log out: the logout is not blocked
+- [ ] The `.deb` installs `/usr/lib/claudecounter/ClaudeBackup`; Settings has
+      a **Backup** tab and the tray menu has **Back up now**
+- [ ] Add a Dropbox/OneDrive (or NAS) destination: the folder is detected and
+      filled in when its client is set up (Detect... lists mounted shares);
+      **Choose files...** shows `~/.claude` as a tree
+- [ ] **Back up now** reports "Backup complete." as a desktop notification and
+      a timestamped zip appears in the folder; the Last run column says OK
+- [ ] A GitHub destination works on a machine with no `git config --global
+      user.email` (commits as ClaudeCounter, `~/.gitconfig` untouched)
+- [ ] **Save and register schedule**: `systemctl --user list-timers` shows
+      `claudecounter-backup.timer` at the chosen time; disabling every
+      destination and saving removes it
+- [ ] Point a destination at a folder that does not exist and back up: the
+      tray icon gets the red badge and one backup-health popup appears
+- [ ] **Restore...**: preview a backup and restore one file into another
+      folder; a safety copy is kept
 
 ---
 
@@ -361,4 +444,4 @@ Everything above is worth fixing, but these five stop a release outright:
 2. Section 1 - signing in kills the Claude Code session.
 3. Section 7 - a secret reached the log.
 4. Section 0 - the publish output is more than one file.
-5. Section 14 - ClaudeCounter blocks or delays logout or shutdown on Linux.
+5. Section 16 - ClaudeCounter blocks or delays logout or shutdown on Linux.

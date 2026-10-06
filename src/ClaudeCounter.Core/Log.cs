@@ -1,4 +1,29 @@
+using System.Runtime.CompilerServices;
 using System.Text;
+
+// Lets LogTests exercise WithRetry directly with a fake failing action,
+// instead of taking a real OS-level exclusive lock on the shared log file
+// this whole test assembly writes to - doing that would make this test
+// itself the concurrent-writer hazard I4 exists to fix, and would make every
+// other test that touches Log.FilePath flaky whenever it happens to run in
+// parallel with this one.
+[assembly: InternalsVisibleTo("ClaudeCounter.Tests")]
+
+// RelativePathGuard and CredentialScrubber moved here from ClaudeBackup.csproj
+// (see their doc comments) so the restore engine, also in this assembly, can
+// reuse them. GitBackend and RcloneBackend - still in ClaudeBackup.csproj -
+// call both as internal members, exactly as before the move; this is what
+// keeps that access working across the assembly boundary.
+[assembly: InternalsVisibleTo("ClaudeBackup")]
+
+// S10 (restore to a different folder): RestoreDialog's own destination-
+// refusal rule (RestoreDestinationModel.IsRefusedDestination, in
+// ClaudeCounter.csproj - the WinForms UI project, which normally sees only
+// this assembly's public surface) reuses RelativePathGuard.Overlaps rather
+// than duplicating its separator-aware containment check. Same reasoning as
+// the ClaudeBackup grant above, extended to the one other project that now
+// needs it.
+[assembly: InternalsVisibleTo("ClaudeCounter")]
 
 namespace ClaudeCounter.Core;
 
@@ -26,7 +51,7 @@ public static class Log
         try
         {
             var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.Create),
                 "ClaudeCounter", "logs");
             Directory.CreateDirectory(dir);
             return Path.Combine(dir, "claudecounter.log");
@@ -36,6 +61,21 @@ public static class Log
             return null;
         }
     }
+
+    // How many times a write/roll retries after a sharing violation before
+    // giving up. This file is written by both the tray and the worker (see
+    // class doc), which was not true before this release - previously only
+    // one process ever wrote it. AppendAllText opens with FileShare.Read, so
+    // a second concurrent writer gets an IOException; the in-process `lock
+    // (Gate)` above does nothing to prevent that, since it only serializes
+    // writers within THIS process. Left unhandled, that exception falls into
+    // the catch below and the line is silently dropped - unacceptable here
+    // because the log is the ONLY diagnostic channel ("see the log for
+    // details" appears in every failure message this app shows). A few
+    // retries with a short backoff gives the other process's write - which
+    // takes microseconds - time to finish and release its handle.
+    private const int MaxRetries = 5;
+    private const int RetryDelayMs = 15;
 
     private static void Write(string level, string message)
     {
@@ -47,7 +87,7 @@ public static class Log
             {
                 RollIfNeeded();
                 var line = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}{Environment.NewLine}";
-                File.AppendAllText(LogPath, line, Encoding.UTF8);
+                WithRetry(() => File.AppendAllText(LogPath, line, Encoding.UTF8));
             }
         }
         catch
@@ -64,12 +104,41 @@ public static class Log
             if (!info.Exists || info.Length <= MaxBytes)
                 return;
             var backup = LogPath + ".1";
-            File.Delete(backup); // no-op when absent
-            File.Move(LogPath!, backup);
+            WithRetry(() =>
+            {
+                File.Delete(backup); // no-op when absent
+                File.Move(LogPath!, backup);
+            });
         }
         catch
         {
             // A roll failure is non-fatal; keep appending to the current file.
+        }
+    }
+
+    /// <summary>
+    /// Retries <paramref name="action"/> up to <see cref="MaxRetries"/> times
+    /// with a short fixed backoff, swallowing only <see cref="IOException"/>
+    /// between attempts (a sharing violation from a concurrent writer - the
+    /// case this exists for) - any other exception, or the final attempt's
+    /// IOException, propagates to the caller's own catch, which is what keeps
+    /// this method non-throwing overall via Write's and RollIfNeeded's own
+    /// try/catch. Not a general-purpose retry helper: it exists solely to
+    /// close the concurrent-writer gap described above.
+    /// </summary>
+    internal static void WithRetry(Action action)
+    {
+        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (IOException) when (attempt < MaxRetries)
+            {
+                Thread.Sleep(RetryDelayMs);
+            }
         }
     }
 }

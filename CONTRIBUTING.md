@@ -132,3 +132,26 @@ project's [MIT license](LICENSE).
 ## Security
 
 Do not open a public issue for a vulnerability. See [SECURITY.md](SECURITY.md).
+
+## A note on packages.lock.json
+
+CI restores with `dotnet restore ClaudeCounter.sln --locked-mode`, which fails the
+build outright if a committed lock file does not match what the projects actually
+reference.
+
+A local self-contained publish can rewrite these files - it has previously added a
+`Microsoft.NET.ILLink.Tasks` entry that no project references, which made
+`--locked-mode` fail with NU1004 on three projects while a plain `dotnet restore`
+kept "fixing" the working tree so the problem was invisible locally.
+
+So: if `git status` shows a `packages.lock.json` change you did not intend, do not
+commit it. Regenerate with a plain `dotnet restore ClaudeCounter.sln`, then prove
+the CI path from a clean tree:
+
+```
+git status --short          # must be empty
+dotnet restore ClaudeCounter.sln --locked-mode
+```
+
+Verifying after a plain restore rather than from the committed state is what let
+this reach the branch in the first place.

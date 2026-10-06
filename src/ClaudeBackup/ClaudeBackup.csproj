@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- The worker needs its own per-RID publish for the installer payload
+         (B10 packages ClaudeBackup.exe alongside the tray; the Linux .deb/.rpm
+         package ClaudeBackup next to the Linux tray). This does not affect
+         the tray's own publish: neither tray project references this
+         project at all, precisely so a RID-specific publish of the tray
+         never pulls this project into that graph. -->
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64</RuntimeIdentifiers>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>ClaudeBackup</AssemblyName>
+    <RootNamespace>ClaudeBackup</RootNamespace>
+    <AssemblyTitle>ClaudeBackup</AssemblyTitle>
+    <Product>ClaudeCounter</Product>
+    <Description>Scheduled backup worker for Claude configuration</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shares ClaudeCounter.Core.Log and the backup config types (BackupConfig,
+         ScheduleConfig, ...) with the tray app without a WinForms dependency. -->
+    <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+  </ItemGroup>
+
+</Project>

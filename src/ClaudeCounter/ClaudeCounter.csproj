@@ -44,6 +44,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Also carries the backup config types (BackupConfig, ScheduleConfig, ...)
+         used by BackupTaskManager and SettingsForm. The tray never references
+         ClaudeBackup.csproj itself - see the note on BackupTaskManager. -->
     <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
   </ItemGroup>
 
