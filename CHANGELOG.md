@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-10-06
+
+### Fixed (Linux)
+
+- The Settings dialog no longer cuts off its **OK** and **Cancel** buttons. It
+  had a fixed height that was too short for the content at KDE Plasma's
+  default font size. The Settings, Sign in and first-run dialogs now size
+  themselves to their content, so a longer error message or the fallback
+  sign-in link can no longer be clipped either.
+- The first-run wizard now says where your sign-in is kept: your desktop's
+  keyring, or an encrypted file if there is none.
+
 ## [1.1.0] - 2026-10-06
 
 ### Added
@@ -118,5 +130,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.1.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.1
 [1.1.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.0
 [1.0.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.0.0

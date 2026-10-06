@@ -17,7 +17,11 @@ public sealed class SignInWindow : Window
     {
         Title = "Sign in to Claude";
         Width = 480;
-        Height = 380;
+        // Grows with the content (the fallback link box, a wrapped error
+        // message) instead of clipping it. The usual size is kept by the root
+        // panel's MinHeight below - a window's own MinHeight is ignored when
+        // it sizes to content.
+        SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
@@ -31,6 +35,7 @@ public sealed class SignInWindow : Window
         Content = new StackPanel
         {
             Margin = new Avalonia.Thickness(20),
+            MinHeight = 340, // + 2 x 20 margin = the usual 380 px window
             Spacing = 10,
             Children =
             {

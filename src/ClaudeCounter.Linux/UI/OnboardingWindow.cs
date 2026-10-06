@@ -43,7 +43,11 @@ public sealed class OnboardingWindow : Window
 
         Title = "Welcome to ClaudeCounter";
         Width = 560;
-        Height = 460;
+        // Steps differ in height and the sign-in step grows with its status
+        // text; size to the content instead of clipping it. The minimum lives
+        // on the root panel (below), not here: a window's own MinHeight is
+        // ignored when it sizes to content.
+        SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
@@ -98,7 +102,9 @@ public sealed class OnboardingWindow : Window
         nav.Children.Add(rightButtons);
         nav.Children.Add(_skipButton);
 
-        var root = new DockPanel { Margin = new Avalonia.Thickness(20) };
+        // 420 + the 20 px margin on each side = the window's usual 460 px, so
+        // it does not jump smaller between steps.
+        var root = new DockPanel { Margin = new Avalonia.Thickness(20), MinHeight = 420 };
         DockPanel.SetDock(nav, Dock.Bottom);
         root.Children.Add(nav);
         root.Children.Add(_host);
@@ -159,7 +165,8 @@ public sealed class OnboardingWindow : Window
                 new TextBlock
                 {
                     Text = "ClaudeCounter reads your plan usage from Anthropic and nothing else. " +
-                           "Your sign-in is stored on this keyring, for your account on this PC only, " +
+                           "Your sign-in is kept in your desktop's keyring (or an encrypted file if there is none), " +
+                           "for your account on this PC only, " +
                            "and is never sent anywhere except Anthropic's own servers.\n\n" +
                            "There is no telemetry and no analytics.\n\n" +
                            "ClaudeCounter is not affiliated with, endorsed by, or supported by Anthropic.",
