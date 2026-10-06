@@ -417,6 +417,22 @@ artifact, or from the draft release:
       the auto-dismiss time
 - [ ] Restart the app: the same crossing does **not** pop up again
 - [ ] With an alert popup open, log out: the logout is not blocked
+- [ ] The `.deb` installs `/usr/lib/claudecounter/ClaudeBackup`; Settings has
+      a **Backup** tab and the tray menu has **Back up now**
+- [ ] Add a Dropbox/OneDrive (or NAS) destination: the folder is detected and
+      filled in when its client is set up (Detect... lists mounted shares);
+      **Choose files...** shows `~/.claude` as a tree
+- [ ] **Back up now** reports "Backup complete." as a desktop notification and
+      a timestamped zip appears in the folder; the Last run column says OK
+- [ ] A GitHub destination works on a machine with no `git config --global
+      user.email` (commits as ClaudeCounter, `~/.gitconfig` untouched)
+- [ ] **Save and register schedule**: `systemctl --user list-timers` shows
+      `claudecounter-backup.timer` at the chosen time; disabling every
+      destination and saving removes it
+- [ ] Point a destination at a folder that does not exist and back up: the
+      tray icon gets the red badge and one backup-health popup appears
+- [ ] **Restore...**: preview a backup and restore one file into another
+      folder; a safety copy is kept
 
 ---
 

@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - Unreleased
 
-Backup is in the Windows build only for now; the Linux build gains it in a
-later release. Alert popups, and everything else here, are on both.
+Everything here is on both Windows and Linux.
 
 ### Added
 
+- **Backup on Linux**, with the same destinations, selection, retention,
+  restore, health badge and popups as Windows, in a new Backup tab in
+  Settings. The `.deb`/`.rpm` include the `ClaudeBackup` worker; the schedule
+  is a systemd user timer (`~/.config/systemd/user/claudecounter-backup.timer`).
+  Sync-folder detection finds Dropbox, OneDrive and Google Drive client
+  folders and mounted network shares.
 - **Alert popups on Linux**, with the same levels, per-window choices,
   placement, auto-dismiss and repeat settings as Windows, in a new Alerts tab
   in Settings. Near-tray popups appear in the corner next to your panel and
@@ -93,6 +98,14 @@ later release. Alert popups, and everything else here, are on both.
 
 ### Fixed
 
+- A GitHub backup destination no longer fails every run on a machine where
+  git has no identity configured ("Please tell me who you are" - usual on a
+  fresh Linux install). Backup commits then use a ClaudeCounter identity set
+  in the backup's own staging repository only; a configured identity still
+  wins, and your global git config is never touched.
+- The app and the backup worker create their per-user data folders when they
+  are missing, instead of writing their log and status files relative to the
+  current directory.
 - **Usage alert popups no longer repeat every few minutes for the same
   threshold crossing.** A quirk in how the API reports each window's reset
   time made ClaudeCounter think the reset time had changed on every poll,
