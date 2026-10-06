@@ -37,6 +37,7 @@ public sealed class TrayApplicationContext
     private readonly FlyoutWindow _flyout;
     private readonly TrayIcon _trayIcon;
     private readonly NativeMenuItem _signInItem;
+    private readonly NativeMenuItem _switchAccountItem;
     private readonly NativeMenuItem _updateItem;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly PosixSignalRegistration _sigTerm;
@@ -59,6 +60,10 @@ public sealed class TrayApplicationContext
     private (string Text, Band Band, bool Badge)? _iconKey;
     private bool _updateCheckStarted;
     private string? _updateUrl;
+    // The signed-in account, for "Signed in as ..." - read from the session
+    // store off the UI thread (a locked keyring can block), never per poll.
+    private string? _accountEmail;
+    private PollState? _lastState;
 
     public TrayApplicationContext(IClassicDesktopStyleApplicationLifetime desktop)
     {
@@ -100,6 +105,8 @@ public sealed class TrayApplicationContext
 
         _signInItem = new NativeMenuItem("Sign in to Claude...");
         _signInItem.Click += (_, _) => ShowSignIn();
+        _switchAccountItem = new NativeMenuItem("Sign in with another account...") { IsVisible = false };
+        _switchAccountItem.Click += (_, _) => ShowSignIn();
 
         _updateItem = new NativeMenuItem("Update available") { IsVisible = false };
         _updateItem.Click += (_, _) => OpenUpdatePage();
@@ -120,6 +127,7 @@ public sealed class TrayApplicationContext
         {
             refreshItem,
             _signInItem,
+            _switchAccountItem,
             settingsItem,
         };
         // Only when the backup worker is installed, as on Windows.
@@ -179,6 +187,7 @@ public sealed class TrayApplicationContext
         _ = Task.Run(TrayPresence.WarnIfMissing);
 
         MaybeShowOnboarding();
+        _ = RefreshAccountEmailAsync();
     }
 
     private void OnResumed()
@@ -257,7 +266,11 @@ public sealed class TrayApplicationContext
 
         // Poll as soon as they sign in rather than waiting for the wizard to
         // close.
-        wizard.SignInCompleted += () => _polling.TriggerNow();
+        wizard.SignInCompleted += () =>
+        {
+            _polling.TriggerNow();
+            _ = RefreshAccountEmailAsync();
+        };
         wizard.Closed += (_, _) =>
         {
             SaveSettings();
@@ -550,16 +563,43 @@ public sealed class TrayApplicationContext
         _settingsWindow.Show();
     }
 
+    /// <summary>
+    /// The first menu entry says who is signed in, rather than always
+    /// offering "Sign in to Claude...":
+    /// <list type="bullet">
+    /// <item>ClaudeCounter's own session - "Signed in as you@example.com"
+    /// (or "Signed in to Claude" for a session saved before the email was
+    /// recorded), greyed out, plus "Sign in with another account...".</item>
+    /// <item>Claude Code's session - the sign-in prompt, noting the fallback.</item>
+    /// <item>The environment-variable token - says so, greyed out.</item>
+    /// <item>Nothing usable - "Sign in to Claude...".</item>
+    /// </list>
+    /// </summary>
     private void UpdateSignInItem(PollState state)
     {
-        var needed = state.Problem is ProblemKind.SignInRequired or ProblemKind.TokenExpired;
-        _signInItem.Header = state.IsBootstrapped
-            ? "Sign in to Claude... (using Claude Code's session)"
-            : "Sign in to Claude...";
-        // NativeMenuItem has no bold-font affordance across every backend;
-        // the header text change above is what actually shows in a native
-        // menu, so the "needed" flag currently only documents intent.
-        _ = needed;
+        _lastState = state;
+        var signInNeeded = state.Problem is ProblemKind.SignInRequired or ProblemKind.TokenExpired;
+        var (header, enabled, showSwitch) = SignInMenu.For(state.Source, signInNeeded, _accountEmail);
+        _signInItem.Header = header;
+        _signInItem.IsEnabled = enabled;
+        _switchAccountItem.IsVisible = showSwitch;
+    }
+
+    private async Task RefreshAccountEmailAsync()
+    {
+        string? email;
+        try
+        {
+            email = await Task.Run(() => _sessionStore.Read()?.AccountEmail);
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Could not read the signed-in account: {e.Message}");
+            return;
+        }
+        _accountEmail = email;
+        if (_lastState is { } state)
+            UpdateSignInItem(state);
     }
 
     private void ShowSignIn()
@@ -572,7 +612,11 @@ public sealed class TrayApplicationContext
 
         var coordinator = new SignInCoordinator(_exchanger, _sessionStore);
         _signInWindow = new SignInWindow(coordinator);
-        _signInWindow.SignedIn += _ => _polling.TriggerNow();
+        _signInWindow.SignedIn += session =>
+        {
+            _accountEmail = session.AccountEmail;
+            _polling.TriggerNow();
+        };
         _signInWindow.Closed += (_, _) => _signInWindow = null;
         _signInWindow.Show();
     }

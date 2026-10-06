@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-10-06
+
+### Fixed
+
+- The tray menu says who is signed in - "Signed in as you@example.com", or
+  "Signed in to Claude" - instead of always offering "Sign in to Claude...",
+  and adds "Sign in with another account...". Windows and Linux.
+
 ## [1.2.0] - 2026-10-06
 
 Everything here is on both Windows and Linux.
@@ -247,6 +255,7 @@ Everything here is on both Windows and Linux.
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.2.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.1
 [1.2.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.0
 [1.1.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.1
 [1.1.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.0

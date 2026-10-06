@@ -5,7 +5,10 @@ public sealed record OAuthTokens(
     string AccessToken,
     string RefreshToken,
     long ExpiresAtUnixMs,
-    string? Scopes)
+    string? Scopes,
+    // The signed-in account's email, when the response names it
+    // (account.email_address). Display only - shown as "Signed in as ...".
+    string? AccountEmail = null)
 {
     public DateTimeOffset ExpiresAt => DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAtUnixMs);
 }

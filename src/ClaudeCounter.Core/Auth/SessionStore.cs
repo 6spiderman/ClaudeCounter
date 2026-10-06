@@ -15,10 +15,24 @@ public sealed record OAuthSession(
     /// <summary>Bumped if the shape changes; an unknown value reads as "no session".</summary>
     public int Version { get; init; } = CurrentVersion;
 
+    /// <summary>
+    /// The account this session belongs to, for "Signed in as ..." in the
+    /// tray menu. Optional and additive: a session saved before this existed
+    /// simply has none (no version bump needed), and it is never logged.
+    /// </summary>
+    public string? AccountEmail { get; init; }
+
     public const int CurrentVersion = 1;
 
-    public static OAuthSession FromTokens(OAuthTokens tokens, DateTimeOffset now) =>
-        new(tokens.AccessToken, tokens.RefreshToken, tokens.ExpiresAt, tokens.Scopes, now);
+    /// <param name="previousEmail">
+    /// Kept when <paramref name="tokens"/> name no account - a refresh
+    /// response need not repeat it.
+    /// </param>
+    public static OAuthSession FromTokens(OAuthTokens tokens, DateTimeOffset now, string? previousEmail = null) =>
+        new(tokens.AccessToken, tokens.RefreshToken, tokens.ExpiresAt, tokens.Scopes, now)
+        {
+            AccountEmail = tokens.AccountEmail ?? previousEmail,
+        };
 }
 
 public interface ISessionStore
