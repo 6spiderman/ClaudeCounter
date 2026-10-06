@@ -4,7 +4,7 @@ namespace ClaudeBackup;
 /// One destination's outcome for a single backup run - the shape
 /// BackupRunner.RunDetailed (ClaudeBackup.csproj) reports and
 /// BackupStatusWriter/DestinationStatus.WithAttempt consume to update
-/// backup-status.json. Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj)
+/// backup-status.json. Lives in ClaudeCounter.Core (not ClaudeBackup.csproj)
 /// alongside BackupStatus, for the same reason: the status-writing types must
 /// not require the tray to reference the worker project.
 /// </summary>

@@ -12,8 +12,8 @@ namespace ClaudeBackup;
 /// exception message, or a result message through here first. One regex, one
 /// place to fix it, instead of copies drifting apart.
 ///
-/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where it was
-/// originally defined) so the restore engine - itself in Shared, for the
+/// Lives in ClaudeCounter.Core (not ClaudeBackup.csproj, where it was
+/// originally defined) so the restore engine - itself in Core, for the
 /// reasons documented on <see cref="IProcessRunner"/> - can reuse it rather
 /// than duplicating the regex. GitBackend and RcloneBackend keep using it
 /// unchanged; only the physical file moved, and the namespace did not change.

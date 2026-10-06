@@ -5,7 +5,7 @@ namespace ClaudeBackup;
 /// config can cause a secret to be uploaded. Matching is case-insensitive on the
 /// file name (via <see cref="Path.GetFileName(string)"/>), not the full path.
 ///
-/// S6: lives in ClaudeCounter.Shared (not ClaudeBackup.csproj) - same reasoning,
+/// S6: lives in ClaudeCounter.Core (not ClaudeBackup.csproj) - same reasoning,
 /// and same "keep the ClaudeBackup namespace even though the file physically
 /// moved" pattern, as BackupConfig.cs. The Backup tab's file picker (in the
 /// ClaudeCounter tray project) needs this to grey out denylisted nodes, and

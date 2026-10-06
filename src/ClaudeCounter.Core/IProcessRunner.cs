@@ -18,10 +18,10 @@ public sealed record ProcessResult(int ExitCode, string StdOut, string StdErr)
 /// ...) and actually shelling out, so those backends are unit-testable with a
 /// fake runner and never need to invoke a real external binary in tests.
 ///
-/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where it was
+/// Lives in ClaudeCounter.Core (not ClaudeBackup.csproj, where it was
 /// originally defined) for the same reason BackupConfig and SecretDenylist
-/// do - see their doc comments. The restore engine (src/ClaudeCounter.Shared/Restore)
-/// needs it and is itself in Shared so the tray's future RestoreDialog can call
+/// do - see their doc comments. The restore engine (src/ClaudeCounter.Core/Restore)
+/// needs it and is itself in Core so the tray's future RestoreDialog can call
 /// it in-process without ClaudeCounter.csproj taking a ProjectReference on
 /// ClaudeBackup.csproj (that reference is what breaks the tray's single-file
 /// publish - see BackupTaskManager's doc comment). The namespace stays

@@ -22,7 +22,7 @@
   <ItemGroup>
     <!-- Shares ClaudeCounter.Core.Log and the backup config types (BackupConfig,
          ScheduleConfig, ...) with the tray app without a WinForms dependency. -->
-    <ProjectReference Include="..\ClaudeCounter.Shared\ClaudeCounter.Shared.csproj" />
+    <ProjectReference Include="..\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
   </ItemGroup>
 
 </Project>

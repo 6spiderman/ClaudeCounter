@@ -95,7 +95,7 @@ public sealed class DestinationStatus
 /// see <see cref="Destinations"/>) plus the overall exit code and run time.
 /// Written by the worker (ClaudeBackup.exe) via <see
 /// cref="BackupStatusWriter"/>, read by the tray to compute backup health -
-/// see <see cref="BackupHealth"/>. Lives in ClaudeCounter.Shared, not
+/// see <see cref="BackupHealth"/>. Lives in ClaudeCounter.Core, not
 /// ClaudeBackup.csproj, so the tray never needs a ProjectReference on the
 /// worker (same reasoning as BackupConfig, CredentialScrubber,
 /// IProcessRunner - see their doc comments; that reference is what breaks

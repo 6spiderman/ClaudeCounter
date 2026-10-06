@@ -4,7 +4,7 @@ using ClaudeCounter.Core;
 namespace ClaudeCounter.Notifications;
 
 /// <summary>
-/// Pure mapping from a <see cref="BackupHealthResult"/> (ClaudeCounter.Shared's
+/// Pure mapping from a <see cref="BackupHealthResult"/> (ClaudeCounter.Core's
 /// BackupHealth.Evaluate output) to what each tray surface should show -
 /// extracted out of TrayApplicationContext/FlyoutForm/AlertPopupForm
 /// specifically so it is unit-testable with no Form, no Icon, and no disk I/O

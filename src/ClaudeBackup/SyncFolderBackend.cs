@@ -130,11 +130,11 @@ public sealed class SyncFolderBackend
     /// when valid, or the exact message <see cref="Run"/> should fail with.
     ///
     /// S14b: now a thin forwarding wrapper around <see cref="SyncFolderPathValidator.Validate"/>
-    /// (ClaudeCounter.Shared) rather than owning the rules itself - SettingsForm
+    /// (ClaudeCounter.Core) rather than owning the rules itself - SettingsForm
     /// (ClaudeCounter.csproj, which has no ProjectReference to this project)
     /// needs to run this exact same validation at Save time and cannot reach
-    /// an internal member here, so the rules moved to Shared and this method
-    /// now just delegates. Kept (not deleted) so every existing direct call
+    /// an internal member here, so the rules moved to ClaudeCounter.Core and
+    /// this method now just delegates. Kept (not deleted) so every existing direct call
     /// in SyncFolderBackendTests keeps compiling and passing unchanged.
     /// Internal (not private) so it can still be tested directly - mirrors
     /// GitBackend.IsWithinDirectory's own forwarding-wrapper pattern.

@@ -6,7 +6,7 @@ namespace ClaudeCounter.UI;
 /// <summary>
 /// The Backup tab's "Restore..." dialog - the UI half of restore (design spec
 /// step 3 onward; listing/materialisation/classification/apply are all
-/// already built and reviewed in src/ClaudeCounter.Shared/Restore). This
+/// already built and reviewed in src/ClaudeCounter.Core/Restore). This
 /// class only sequences the flow and paints it; every actual safety
 /// decision - what counts as New/Changed/Identical/LiveOnly, what the
 /// denylist and containment checks refuse, where the safety copy goes - is

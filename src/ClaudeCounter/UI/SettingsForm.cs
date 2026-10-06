@@ -72,7 +72,7 @@ public sealed class SettingsForm : Form
     // entirely absent (fields stay null, and no tab button is created) when
     // ClaudeBackup.exe is not installed next to the tray exe. This project has
     // no ProjectReference to ClaudeBackup.csproj - the ClaudeBackup types used
-    // below (BackupConfig, ScheduleConfig, ...) live in ClaudeCounter.Shared
+    // below (BackupConfig, ScheduleConfig, ...) live in ClaudeCounter.Core
     // instead. Do not add a reference to ClaudeBackup.csproj here; it drags the
     // worker's RID-specific publish graph into the tray's single-file publish
     // and breaks it.

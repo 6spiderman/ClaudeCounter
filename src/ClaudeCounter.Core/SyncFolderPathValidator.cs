@@ -11,7 +11,7 @@ namespace ClaudeBackup;
 /// without that last guard the archive would land inside the tree being
 /// backed up and every subsequent run would sweep up its own predecessors.
 ///
-/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where
+/// Lives in ClaudeCounter.Core (not ClaudeBackup.csproj, where
 /// <c>SyncFolderBackend</c> itself lives) for the same reason
 /// <see cref="DriveRetention"/> was moved here: the Settings dialog
 /// (ClaudeCounter.csproj) has no ProjectReference to ClaudeBackup.csproj -

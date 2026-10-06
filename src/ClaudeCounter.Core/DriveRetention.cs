@@ -14,8 +14,8 @@ namespace ClaudeBackup;
 /// backends' retention logic does, to filter a directory listing down to
 /// restorable snapshots.
 ///
-/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where it was
-/// originally defined) so the restore engine - itself in Shared, for the
+/// Lives in ClaudeCounter.Core (not ClaudeBackup.csproj, where it was
+/// originally defined) so the restore engine - itself in Core, for the
 /// reasons documented on <see cref="IProcessRunner"/> - can call <see
 /// cref="IsOurs"/> directly instead of duplicating the naming-scheme check a
 /// third time. The namespace stays "ClaudeBackup" so RcloneBackend and

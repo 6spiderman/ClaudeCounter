@@ -15,7 +15,7 @@ namespace ClaudeCounter.Settings;
 /// no ProjectReference to ClaudeBackup.csproj at all - detection is a plain
 /// File.Exists check. The config types (ClaudeBackup.BackupConfig /
 /// ScheduleConfig / GitTarget / DriveTarget) used below live in
-/// ClaudeCounter.Shared, which both this project and the worker reference; do
+/// ClaudeCounter.Core, which both this project and the worker reference; do
 /// not re-add a reference to ClaudeBackup.csproj to "simplify" this - that
 /// drags the worker's own RID-specific publish graph into the tray's
 /// single-file publish and breaks it (see the release workflow's publish

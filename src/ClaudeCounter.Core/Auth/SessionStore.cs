@@ -130,11 +130,10 @@ public sealed class EncryptedSessionStore : ISessionStore
     // bounded retry, mirroring the pattern ClaudeCounter.Core.Log.WithRetry
     // already uses for its own concurrent-writer race, gives that transient
     // hold time to clear instead of letting the rename fail outright. Scoped
-    // to this one call rather than reusing Log.WithRetry directly - that
-    // method is internal to ClaudeCounter.Shared and not friend-visible to
-    // this project (see Log.cs's InternalsVisibleTo list) - and broadened to
-    // retry UnauthorizedAccessException too, since that is the exception type
-    // actually observed here, not IOException.
+    // to this one call rather than reusing Log.WithRetry directly, because
+    // this retry is broadened to UnauthorizedAccessException too - the
+    // exception type actually observed here - while Log.WithRetry only
+    // retries IOException.
     private const int MoveMaxRetries = 5;
     private const int MoveRetryDelayMs = 15;
 

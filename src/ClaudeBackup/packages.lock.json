@@ -4,12 +4,6 @@
     "net8.0": {
       "claudecounter.core": {
         "type": "Project"
-      },
-      "claudecounter.shared": {
-        "type": "Project",
-        "dependencies": {
-          "ClaudeCounter.Core": "[0.0.0-dev, )"
-        }
       }
     },
     "net8.0/win-arm64": {},

@@ -12,8 +12,8 @@ namespace ClaudeBackup;
 /// copies drifting apart (the same reasoning that moved credential scrubbing
 /// into <see cref="CredentialScrubber"/>).
 ///
-/// Lives in ClaudeCounter.Shared (not ClaudeBackup.csproj, where it was
-/// originally defined) so the restore engine - itself in Shared, for the
+/// Lives in ClaudeCounter.Core (not ClaudeBackup.csproj, where it was
+/// originally defined) so the restore engine - itself in Core, for the
 /// reasons documented on <see cref="IProcessRunner"/> - can reuse it rather
 /// than duplicating the containment logic. GitBackend and RcloneBackend keep
 /// using it unchanged; only the physical file moved, and the namespace did

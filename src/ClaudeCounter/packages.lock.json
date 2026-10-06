@@ -10,12 +10,6 @@
       },
       "claudecounter.core": {
         "type": "Project"
-      },
-      "claudecounter.shared": {
-        "type": "Project",
-        "dependencies": {
-          "ClaudeCounter.Core": "[0.0.0-dev, )"
-        }
       }
     },
     "net8.0-windows10.0.17763/win-arm64": {},
