@@ -300,8 +300,14 @@ public sealed class RestoreZipSource
 
             // Belt-and-braces alongside RelativePathGuard.IsSafe, mirroring
             // GitBackend.MirrorFiles: resolve the actual destination and
-            // verify it is still under destinationDir before writing.
-            if (!RelativePathGuard.IsWithinDirectory(destRootFull, destFull))
+            // verify it is still under destinationDir before writing. Written
+            // out inline rather than through RelativePathGuard.IsWithinDirectory
+            // (same check): CodeQL's zip-slip query only recognises a
+            // StartsWith containment check in the method that does the
+            // extraction, and flagged this one as unsanitised otherwise.
+            // Ordinal is exact here - both sides come from the same
+            // GetFullPath normalisation of destinationDir.
+            if (!destFull.StartsWith(destRootFull + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             {
                 Log.Warn($"RestoreZipSource: refusing zip entry that resolves outside the destination: '{rel}'.");
                 continue;
