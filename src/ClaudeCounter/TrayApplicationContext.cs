@@ -33,6 +33,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly FlyoutForm _flyout;
     private readonly ToolStripMenuItem _updateItem;
     private readonly ToolStripMenuItem _signInItem;
+    private readonly ToolStripMenuItem _switchAccountItem;
     private readonly CancellationTokenSource _lifetime = new();
 
     private SettingsForm? _settingsForm;
@@ -46,6 +47,9 @@ public sealed class TrayApplicationContext : ApplicationContext
     private bool _updateCheckStarted;
     private bool _shutdownDone;
     private string? _updateUrl;
+    // The signed-in account, for "Signed in as ..." (see SignInMenu). Read
+    // once at startup and updated on every sign-in, not per poll.
+    private string? _accountEmail;
     private System.Windows.Forms.Timer? _onboardingTimer;
 
     public TrayApplicationContext()
@@ -93,10 +97,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         };
 
         _signInItem = new ToolStripMenuItem("Sign in to Claude...", null, (_, _) => ShowSignIn());
+        _switchAccountItem = new ToolStripMenuItem("Sign in with another account...", null, (_, _) => ShowSignIn()) { Visible = false };
+        _accountEmail = ReadAccountEmail();
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh now", null, (_, _) => _polling.TriggerNow());
         menu.Items.Add(_signInItem);
+        menu.Items.Add(_switchAccountItem);
         menu.Items.Add("Settings...", null, (_, _) => ShowSettings());
         if (BackupTaskManager.WorkerAvailable())
             menu.Items.Add("Back up now", null, async (_, _) => await RunBackupNowAsync());
@@ -192,7 +199,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         // close. ShowDialog runs a nested message loop, so the poll loop's
         // continuations still run and the tray icon updates behind the wizard -
         // which is what the sign-in step now tells the user to look for.
-        wizard.SignInCompleted += () => _polling.TriggerNow();
+        wizard.SignInCompleted += () =>
+        {
+            _accountEmail = ReadAccountEmail();
+            _polling.TriggerNow();
+        };
 
         wizard.ShowDialog();
 
@@ -560,18 +571,33 @@ public sealed class TrayApplicationContext : ApplicationContext
     }
 
     /// <summary>
-    /// Draws attention to sign-in when there is nothing else the user can do,
-    /// and stays out of the way otherwise.
+    /// Says who is signed in ("Signed in as ...", greyed out, plus "Sign in
+    /// with another account...") instead of always offering sign-in, and
+    /// draws attention to sign-in when there is nothing else the user can do.
+    /// The wording is shared with the Linux tray - see SignInMenu.
     /// </summary>
     private void UpdateSignInItem(PollState state)
     {
         var needed = state.Problem is ProblemKind.SignInRequired or ProblemKind.TokenExpired;
         var baseFont = SystemFonts.MenuFont ?? Control.DefaultFont;
+        var (header, enabled, showSwitch) = SignInMenu.For(state.Source, needed, _accountEmail);
 
         _signInItem.Font = needed ? new Font(baseFont, FontStyle.Bold) : baseFont;
-        _signInItem.Text = state.IsBootstrapped
-            ? "Sign in to Claude... (using Claude Code's session)"
-            : "Sign in to Claude...";
+        _signInItem.Text = header;
+        _signInItem.Enabled = enabled;
+        _switchAccountItem.Visible = showSwitch;
+    }
+
+    private string? ReadAccountEmail()
+    {
+        try
+        {
+            return _sessionStore.Read()?.AccountEmail;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private void ShowSignIn()
@@ -590,6 +616,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         _signInForm = new SignInForm(coordinator);
         _signInForm.ShowDialog();
         var signedIn = _signInForm.Session is not null;
+        if (_signInForm.Session is { } session)
+            _accountEmail = session.AccountEmail;
         _signInForm.Dispose();
         _signInForm = null;
 

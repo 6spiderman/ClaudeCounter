@@ -70,7 +70,8 @@ public sealed class OAuthTokenEndpoint : IDisposable
                 access,
                 refresh,
                 _now().AddSeconds(expiresIn).ToUnixTimeMilliseconds(),
-                GetString(root, "scope")));
+                GetString(root, "scope"),
+                AccountEmail(root)));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -105,6 +106,15 @@ public sealed class OAuthTokenEndpoint : IDisposable
         }
         return "(no error code)";
     }
+
+    /// <summary>
+    /// account.email_address, if the response carries one - optional, and
+    /// never required for a successful sign-in or refresh.
+    /// </summary>
+    private static string? AccountEmail(JsonElement root) =>
+        root.TryGetProperty("account", out var account) && account.ValueKind == JsonValueKind.Object
+            ? GetString(account, "email_address") is { Length: > 0 } email ? email : null
+            : null;
 
     private static string? GetString(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String

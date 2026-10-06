@@ -138,7 +138,7 @@ public sealed class TokenProvider
             switch (await _refresher.RefreshAsync(session.RefreshToken, ct))
             {
                 case TokenResult.Success success:
-                    return Persist(success.Tokens);
+                    return Persist(success.Tokens, session.AccountEmail);
 
                 case TokenResult.Rejected rejected:
                     // Permanently dead. Drop it so the next poll falls through
@@ -192,11 +192,11 @@ public sealed class TokenProvider
         }
     }
 
-    private CredentialResult Persist(OAuthTokens tokens)
+    private CredentialResult Persist(OAuthTokens tokens, string? previousEmail)
     {
         try
         {
-            _session.Write(OAuthSession.FromTokens(tokens, _now()));
+            _session.Write(OAuthSession.FromTokens(tokens, _now(), previousEmail));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
