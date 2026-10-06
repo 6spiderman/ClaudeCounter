@@ -51,6 +51,23 @@ public static class ClaudeLocationScanner
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
+        if (!OperatingSystem.IsWindows())
+        {
+            // Same folders, under their Linux names: ApplicationData is
+            // ~/.config and LocalApplicationData ~/.local/share there, and
+            // Claude Desktop for Linux keeps its settings in ~/.config/Claude.
+            // Labels name the real paths rather than Windows variables.
+            return new List<ClaudeLocation>
+            {
+                new("Claude config (~/.claude)", System.IO.Path.Combine(home, ".claude"), true),
+                new("Claude config file (~/.claude.json)", System.IO.Path.Combine(home, ".claude.json"), false),
+                new("Claude Desktop (~/.config/Claude)", System.IO.Path.Combine(appData, "Claude"), true),
+                new("Claude Desktop (~/.local/share/Claude)", System.IO.Path.Combine(localAppData, "Claude"), true),
+                new("Claude Desktop (~/.local/share/AnthropicClaude)", System.IO.Path.Combine(localAppData, "AnthropicClaude"), true),
+                new("Claude config (~/.config/claude)", System.IO.Path.Combine(home, ".config", "claude"), true),
+            };
+        }
+
         return new List<ClaudeLocation>
         {
             new("Claude config (~/.claude)", System.IO.Path.Combine(home, ".claude"), true),

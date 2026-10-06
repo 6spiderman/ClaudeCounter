@@ -143,11 +143,13 @@ jobs:
         run: |
           dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
           dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
+          dotnet restore src/ClaudeBackup/ClaudeBackup.csproj --locked-mode
 
       - name: Build
         run: |
           dotnet build src/ClaudeCounter.Core/ClaudeCounter.Core.csproj -c Release --no-restore
           dotnet build src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj -c Release --no-restore
+          dotnet build src/ClaudeBackup/ClaudeBackup.csproj -c Release --no-restore
 
       # Core's own tests already run against this same code in the Windows
       # job (tests/ClaudeCounter.Tests references ClaudeCounter.Core
@@ -161,10 +163,27 @@ jobs:
             -o dist/linux-x64
           test -f dist/linux-x64/ClaudeCounter
 
+          dotnet publish src/ClaudeBackup/ClaudeBackup.csproj \
+            -c Release -r linux-x64 --self-contained true --no-restore \
+            -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:DebugType=none \
+            -o dist/linux-x64
+          test -f dist/linux-x64/ClaudeBackup
+
+          # With no backup configured the worker must exit 1 ("nothing to
+          # do"), not crash - proves the Linux binary starts at all.
+          set +e
+          HOME="$(mktemp -d)" XDG_CONFIG_HOME="$(mktemp -d)" XDG_DATA_HOME="$(mktemp -d)" dist/linux-x64/ClaudeBackup
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "ClaudeBackup with no config exited $code, expected 1" >&2
+            exit 1
+          fi
+
           # "Single file" must mean it, same trap the Windows build already
           # hit once with WPF's native libraries - see
           # IncludeNativeLibrariesForSelfExtract in ClaudeCounter.Linux.csproj.
-          stray=$(find dist/linux-x64 -maxdepth 1 -type f ! -name ClaudeCounter)
+          stray=$(find dist/linux-x64 -maxdepth 1 -type f ! -name ClaudeCounter ! -name ClaudeBackup)
           if [ -n "$stray" ]; then
             echo "Publish left files beside the exe: $stray" >&2
             exit 1
@@ -203,6 +222,7 @@ jobs:
         run: |
           mkdir -p packaging/nfpm/build
           cp dist/linux-x64/ClaudeCounter packaging/nfpm/build/ClaudeCounter
+          cp dist/linux-x64/ClaudeBackup packaging/nfpm/build/ClaudeBackup
           cd packaging/nfpm
           VERSION=0.0.0-ci ARCH=amd64 nfpm package --config nfpm.yaml --packager deb --target ../../dist/
           VERSION=0.0.0-ci ARCH=amd64 nfpm package --config nfpm.yaml --packager rpm --target ../../dist/
@@ -218,6 +238,7 @@ jobs:
           dpkg-deb --info dist/*.deb
           sudo apt-get install -y ./dist/*.deb
           test -x /usr/lib/claudecounter/ClaudeCounter
+          test -x /usr/lib/claudecounter/ClaudeBackup
           test "$(readlink -f /usr/bin/claudecounter)" = /usr/lib/claudecounter/ClaudeCounter
           test -f /usr/share/applications/claudecounter.desktop
           test -f /usr/share/icons/hicolor/scalable/apps/claudecounter.svg

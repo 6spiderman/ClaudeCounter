@@ -40,6 +40,14 @@ contents:
     dst: /usr/bin/claudecounter
     type: symlink
 
+  # The backup worker. The tray finds it next to its own binary (see
+  # BackupTaskManager.WorkerPath) and shows the Backup settings only when it
+  # is there; the systemd user timer it registers runs it from this path.
+  - src: build/ClaudeBackup
+    dst: /usr/lib/claudecounter/ClaudeBackup
+    file_info:
+      mode: 0755
+
   - src: ../../assets/icon.svg
     dst: /usr/share/icons/hicolor/scalable/apps/claudecounter.svg
 
