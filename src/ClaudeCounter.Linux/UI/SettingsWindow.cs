@@ -25,7 +25,10 @@ public sealed class SettingsWindow : Window
 
         Title = "ClaudeCounter Settings";
         Width = 380;
-        Height = 300;
+        // Height follows the content rather than a fixed number: text
+        // metrics depend on the desktop's fonts and scaling, and a fixed 300
+        // clipped the OK/Cancel row on Kubuntu/Plasma.
+        SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
