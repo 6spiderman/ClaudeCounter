@@ -5,6 +5,47 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - Unreleased
+
+### Added
+
+- **Linux.** A native Linux tray app (`ClaudeCounter.Linux`, on Avalonia) with
+  the same tray icon, flyout, tooltip, sign-in, first-run wizard and settings
+  as the Windows build. Shipped as `.deb` and `.rpm` packages and a portable
+  `.tar.gz`, for x64 and arm64 (arm64 is cross-built and not yet tested on
+  real hardware). Tested on Kubuntu 26.04 with KDE Plasma 6. The session is
+  kept in the desktop keyring (KWallet, GNOME Keyring) when one is available.
+- `ClaudeCounter.Core`: everything platform-neutral (polling, OAuth, usage
+  models, settings) moved into a shared library that both builds use
+  unchanged.
+
+### Fixed (Linux)
+
+- **ClaudeCounter no longer blocks logout or shutdown.** Once the flyout had
+  been opened in a session, the app answered KDE Plasma's logout request
+  (X11 session management) by cancelling it, so logging out or shutting down
+  did nothing until ClaudeCounter was quit by hand. The flyout now only
+  refuses a normal close and lets a logout or app shutdown through.
+- Exiting on `SIGTERM` (what systemd sends at shutdown) is bounded: if the
+  clean exit has not finished within five seconds it is forced, instead of
+  holding shutdown for systemd's full 90-second stop timeout.
+- No more orphaned `dbus-monitor` process. Sleep/resume detection now
+  subscribes to systemd-logind in-process instead of running a helper that
+  could outlive the app.
+- The `.deb` no longer pulls GNOME Shell onto KDE and other desktops. It
+  recommended the GNOME AppIndicator extension, which apt installs by default
+  and which depends on GNOME Shell; it is now only suggested.
+- The `.deb`/`.rpm` declare the system libraries the app needs (OpenSSL,
+  fontconfig, the X11 client libraries), and recommend `libsecret-tools` so
+  the session goes into KWallet/GNOME Keyring rather than the file fallback.
+- The flyout opens next to the panel (bottom-right on Plasma's default
+  layout) instead of always top-right, and clicking the tray icon while it is
+  open now closes it instead of reopening it.
+- Startup no longer freezes the tray for up to three seconds while checking
+  for a system tray host.
+- Uninstalling no longer leaves a login autostart entry pointing at a missing
+  program.
+
 ## [1.0.0] - 2026-07-31
 
 ### Fixed
@@ -77,4 +118,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.1.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.0
 [1.0.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.0.0
