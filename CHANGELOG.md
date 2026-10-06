@@ -5,6 +5,43 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-06
+
+### Added
+
+- **`claudecounter --status`** prints your usage on one line, such as
+  `5h 42% (1 h 12 min) | week 25% (2 d 19 h)`, for Claude Code's status line,
+  a shell prompt or a script. `--status --json` gives every window with its
+  colour and reset countdown, and `--refresh` asks the running app to check
+  now. They read what the running app last fetched and never sign in or
+  contact Claude themselves. See "Usage in Claude Code, your prompt or a
+  Plasma widget" in the README. Windows and Linux.
+- **KDE Plasma widget.** The `.deb`/`.rpm` install a Plasma 6 panel widget
+  (Add Widgets -> ClaudeCounter): a badge with the session percentage in the
+  tray icon's colours, and a popup with every window, extra usage, Refresh
+  and Open. The tray icon stays. The portable archive includes it as
+  `plasma-widget/`.
+- **Sign out**, in the tray menu once you are signed in to ClaudeCounter. It
+  asks first, then forgets ClaudeCounter's own login on this computer; it
+  does not sign you out of claude.ai or Claude Code. Windows and Linux.
+
+### Changed
+
+- **Starting ClaudeCounter while it is already running** (from the Start
+  menu or the application launcher) now opens the running copy's flyout,
+  instead of doing nothing. Windows and Linux.
+
+### Fixed
+
+- Signing out on Linux also removes the encrypted-file copy of the session,
+  if one was ever written, not only the keyring entry.
+
+### Internal
+
+- The platform-neutral tests (more than 800) now run on Linux CI as well as
+  Windows, in a new `tests/ClaudeCounter.Core.Tests` project, and before
+  every Linux release build.
+
 ## [1.2.1] - 2026-10-06
 
 ### Fixed
@@ -255,6 +292,7 @@ Everything here is on both Windows and Linux.
   raw response body is never logged or shown, because an error body can echo
   back the credential that was rejected.
 
+[1.3.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.3.0
 [1.2.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.1
 [1.2.0]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.2.0
 [1.1.1]: https://github.com/6spiderman/ClaudeCounter/releases/tag/v1.1.1
