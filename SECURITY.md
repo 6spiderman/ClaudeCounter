@@ -21,6 +21,19 @@ DPAPI keys are bound to your Windows user account **and** the machine. Copying
 `session.dat` to another PC leaves it undecryptable, and the app treats that as
 "not signed in" rather than as an error.
 
+### Linux
+
+| Location | Contents | Protection |
+| --- | --- | --- |
+| Secret Service keyring (KWallet, GNOME Keyring, ...) | ClaudeCounter's own OAuth session, as above | Whatever your keyring provides - typically encrypted at rest and unlocked with your login. Written and read through `secret-tool` (package `libsecret-tools`), under the attributes `application=ClaudeCounter`, `account=session`. |
+| `~/.local/share/ClaudeCounter/session.dat` | The same session - **only** when no keyring is reachable (`secret-tool` missing, no Secret Service on the session bus, or a call failing) | AES-GCM with a key derived from `/etc/machine-id` and your username, and the file is restricted to mode `0600`. This stops a casual read of the file or a copy carried to another machine; it does **not** stop another program already running as you, which can derive the same key. |
+| `~/.config/ClaudeCounter/settings.json` | As on Windows | Plain JSON. Contains no secrets. |
+| `~/.local/share/ClaudeCounter/logs/claudecounter.log` | As on Windows | Plain text. Contains no tokens by design. |
+
+The fallback is chosen once per run and logged
+(`Falling back to encrypted-file session storage: ...`), so the log says which
+store a given session lives in.
+
 ## Known limitations
 
 Two things below are not bugs to be fixed; they are properties of every

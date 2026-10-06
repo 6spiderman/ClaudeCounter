@@ -320,11 +320,45 @@ until someone has ticked these.
 
 ---
 
+## 14. Linux (KDE Plasma and GNOME)
+
+On a real desktop session, ideally Kubuntu/KDE Plasma on Wayland plus one
+GNOME machine. Install the `.deb` from the CI run's **linux-packages**
+artifact, or from the draft release:
+`sudo apt install ./ClaudeCounter-<version>-x64.deb`.
+
+- [ ] apt pulls in `libsecret-tools` and does **not** pull in `gnome-shell`
+      or `gnome-shell-extension-appindicator` on Kubuntu
+- [ ] ClaudeCounter appears in the application menu with its icon, and starts
+- [ ] The tray icon shows the session percentage; hovering shows the tooltip
+- [ ] Left-click opens the flyout next to the panel (bottom-right with
+      Plasma's default bottom panel); clicking the icon again closes it
+- [ ] The log says nothing about falling back to encrypted-file storage
+      (the session is in KWallet / GNOME Keyring)
+- [ ] **Logout with the flyout opened earlier.** Open the flyout, close it,
+      then log out from the application launcher. The session ends normally:
+      no "logout cancelled by ClaudeCounter", no waiting. The log ends with
+      `Desktop session is ending (logout/shutdown) - exiting.`
+- [ ] **Shutdown.** Same, but shut down. No "A stop job is running..." wait
+      for ClaudeCounter on the way down.
+- [ ] After logging back in, it starts on its own (autostart) and is signed in
+- [ ] Suspend and resume: the log shows `System resumed from sleep -
+      refreshing now.` straight after waking
+- [ ] `pkill -TERM ClaudeCounter` exits within a second, log says
+      `Received SIGTERM - exiting.`
+- [ ] `sudo apt remove claudecounter`, log out and in: no error about a
+      missing autostart program
+- [ ] GNOME without the AppIndicator extension: a one-time notification says
+      no tray was found
+
+---
+
 ## Release blockers
 
-Everything above is worth fixing, but these four stop a release outright:
+Everything above is worth fixing, but these five stop a release outright:
 
 1. Section 4 - the credentials file hash changed.
 2. Section 1 - signing in kills the Claude Code session.
 3. Section 7 - a secret reached the log.
 4. Section 0 - the publish output is more than one file.
+5. Section 14 - ClaudeCounter blocks or delays logout or shutdown on Linux.

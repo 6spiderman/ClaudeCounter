@@ -11,16 +11,22 @@ namespace ClaudeCounter.UI;
 /// Shows the same usage summary as the Windows build's FlyoutForm. Linux
 /// desktop environments do not reliably expose the cursor position or a tray
 /// icon's screen rect to an application the way Windows does, so this opens
-/// near the primary screen's top-right corner instead of anchored to the
-/// click point.
+/// in the primary screen's corner next to the panel instead of anchored to
+/// the click point - see <see cref="ShowNearTray"/>.
 /// </summary>
 public sealed class FlyoutWindow : Window
 {
     private const int Pad = 14;
+    private const int ScreenMargin = 12;
+
+    // How long after an auto-hide (focus loss) a tray click still counts as
+    // "close the flyout" rather than "open it again" - see RecentlyDismissed.
+    private static readonly TimeSpan DismissGrace = TimeSpan.FromMilliseconds(400);
 
     private readonly Func<AppSettings> _getSettings;
     private PollState? _state;
     private string? _updateVersion;
+    private DateTime _autoHiddenAtUtc = DateTime.MinValue;
 
     public event Action? RefreshRequested;
     public event Action? UpdateRequested;
@@ -41,18 +47,46 @@ public sealed class FlyoutWindow : Window
         // this is a transient popup, not a window with its own close button.
         WindowDecorations = WindowDecorations.None;
 
-        Deactivated += (_, _) => Hide();
+        Deactivated += (_, _) =>
+        {
+            if (!IsVisible)
+                return;
+            _autoHiddenAtUtc = DateTime.UtcNow;
+            Hide();
+        };
 
         RebuildContent();
     }
+
+    /// <summary>
+    /// True for a moment after the flyout hid itself on losing focus. Clicking
+    /// the tray icon while the flyout is open moves focus to the panel first,
+    /// so by the time the click arrives the flyout is already hidden - without
+    /// this the click would immediately reopen it and the tray icon could
+    /// never close the flyout.
+    /// </summary>
+    public bool RecentlyDismissed => DateTime.UtcNow - _autoHiddenAtUtc < DismissGrace;
 
     // Belt and braces alongside the borderless chrome above: some window
     // managers still offer a way to close an undecorated window (Alt+F4,
     // right-click in an alt-tab list). Closing this window for real would
     // leave it disposed, so the next tray-icon click could never show it
-    // again - it must only ever be hidden until the app itself exits.
+    // again - a user-initiated close only ever hides it.
+    //
+    // A close driven by logout/shutdown or by the app exiting must go
+    // through, though: Avalonia's session-management handler (X11 XSMP)
+    // closes every open window when the desktop asks to log out, and
+    // cancels the whole logout if any window refuses. This window stays
+    // registered (hidden) from the first time it is shown, so refusing here
+    // made ClaudeCounter cancel every logout and shutdown for the rest of
+    // the session once the flyout had been opened even once.
     protected override void OnClosing(WindowClosingEventArgs e)
     {
+        if (e.CloseReason is WindowCloseReason.OSShutdown or WindowCloseReason.ApplicationShutdown)
+        {
+            base.OnClosing(e);
+            return;
+        }
         e.Cancel = true;
         Hide();
     }
@@ -76,12 +110,38 @@ public sealed class FlyoutWindow : Window
     {
         RebuildContent();
         if (Screens.Primary is { } screen)
-        {
-            var wa = screen.WorkingArea;
-            Position = new PixelPoint(wa.Right - (int)Width - 12, wa.Y + 12);
-        }
+            Position = PositionNearPanel(screen);
         Show();
         Activate();
+    }
+
+    /// <summary>
+    /// Picks the corner of the work area that borders the panel. The panel is
+    /// what the work area excludes - KDE's default bottom panel shrinks its
+    /// bottom edge, GNOME's top bar its top edge - so whichever edge moved in
+    /// is where the tray lives. Defaults to the right side, then the bottom,
+    /// when nothing is excluded (an auto-hiding panel, a bare window manager).
+    /// </summary>
+    private PixelPoint PositionNearPanel(Avalonia.Platform.Screen screen)
+    {
+        var bounds = screen.Bounds;
+        var work = screen.WorkingArea;
+
+        // Borderless and SizeToContent, so the content's desired size is the
+        // window size; measure it now rather than showing first and moving,
+        // which flickers.
+        if (Content is Control content)
+            content.Measure(new Size(Width, double.PositiveInfinity));
+        var width = (int)Math.Ceiling(Width * screen.Scaling);
+        var height = (int)Math.Ceiling(((Content as Control)?.DesiredSize.Height ?? 300) * screen.Scaling);
+        var margin = (int)Math.Ceiling(ScreenMargin * screen.Scaling);
+
+        var panelLeft = work.X > bounds.X;
+        var panelTop = work.Y > bounds.Y && work.Bottom >= bounds.Bottom;
+
+        var x = panelLeft ? work.X + margin : work.Right - width - margin;
+        var y = panelTop ? work.Y + margin : work.Bottom - height - margin;
+        return new PixelPoint(Math.Max(work.X, x), Math.Max(work.Y, y));
     }
 
     private void RebuildContent()

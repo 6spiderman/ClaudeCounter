@@ -24,6 +24,10 @@
     <PackageReference Include="Avalonia" Version="12.1.2" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.2" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.2" />
+    <!-- Already shipped transitively by Avalonia (its tray icon's D-Bus
+         client); referenced directly, at the same version, for
+         SleepResumeWatcher's logind subscription. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,6 +1,5 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using ClaudeCounter.Core;
+using Tmds.DBus.Protocol;
 
 namespace ClaudeCounter;
 
@@ -9,99 +8,101 @@ namespace ClaudeCounter;
 /// PrepareForSleep D-Bus signal on the system bus (boolean false = resuming,
 /// true = about to sleep - only the former matters here). The Windows build
 /// gets this for free from SystemEvents.PowerModeChanged; there is no BCL
-/// equivalent on Linux, and shelling out to dbus-monitor and parsing its
-/// output matches this project's existing preference (see Shell.cs,
-/// TrayPresence.cs) for a well-known CLI over a bespoke D-Bus client.
+/// equivalent on Linux.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Subscribes in-process with Tmds.DBus.Protocol - the D-Bus client Avalonia
+/// already ships for its tray icon, so this adds no new dependency to the
+/// published binary. An earlier version shelled out to dbus-monitor instead,
+/// but a child process outlives the app whenever the app is stopped abruptly
+/// (the X server going away at logout ends the process from inside Xlib, with
+/// no chance to clean up), leaving an orphaned dbus-monitor behind.
+/// </para>
+/// <para>
 /// Best-effort like everything else platform-specific here: on a non-systemd
-/// system, or one with no dbus-monitor, or without permission to monitor the
-/// system bus, this simply never fires and the app just waits for its next
-/// poll - exactly what happened before this existed.
+/// system, or with no system bus, this simply never fires and the app just
+/// waits for its next poll.
+/// </para>
 /// </remarks>
 public sealed class SleepResumeWatcher : IDisposable
 {
-    private readonly Process? _process;
-    private readonly CancellationTokenSource _cts = new();
+    private readonly object _gate = new();
+    private DBusConnection? _connection;
+    private IDisposable? _subscription;
+    private bool _disposed;
 
     public event Action? Resumed;
 
     public SleepResumeWatcher()
     {
-        _process = TryStart();
-        if (_process is not null)
-            _ = WatchAsync(_process, _cts.Token);
+        _ = StartAsync();
     }
 
-    private static Process? TryStart()
+    private async Task StartAsync()
     {
+        DBusConnection? connection = null;
         try
         {
-            var psi = new ProcessStartInfo("dbus-monitor")
+            if (DBusAddress.System is not { } address)
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                Log.Warn("No system D-Bus address; sleep/resume detection is disabled.");
+                return;
+            }
+
+            connection = new DBusConnection(address);
+            await connection.ConnectAsync();
+
+            var rule = new MatchRule
+            {
+                Type = MessageType.Signal,
+                Path = "/org/freedesktop/login1",
+                Interface = "org.freedesktop.login1.Manager",
+                Member = "PrepareForSleep",
             };
-            psi.ArgumentList.Add("--system");
-            psi.ArgumentList.Add(
-                "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'");
-            return Process.Start(psi);
-        }
-        catch (Exception e) when (e is Win32Exception or IOException)
-        {
-            Log.Warn($"Could not start dbus-monitor for sleep/resume detection: {e.Message}");
-            return null;
-        }
-    }
-
-    private async Task WatchAsync(Process process, CancellationToken ct)
-    {
-        // Drained, not parsed: dbus-monitor prints its "falling back to
-        // eavesdropping" permission notice here, which is expected and not
-        // an error, but the pipe must still be read or the child can block.
-        _ = Task.Run(() => process.StandardError.ReadToEndAsync(ct), ct);
-
-        var expectingBoolean = false;
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                var line = await process.StandardOutput.ReadLineAsync(ct);
-                if (line is null)
-                    break; // dbus-monitor exited
-
-                if (line.Contains("member=PrepareForSleep"))
+            var subscription = await connection.AddMatchAsync(
+                rule,
+                static (Message message, object? _) => message.GetBodyReader().ReadBool(),
+                (Notification<bool> notification) =>
                 {
-                    expectingBoolean = true;
-                }
-                else if (expectingBoolean)
-                {
-                    expectingBoolean = false;
-                    if (line.Contains("boolean false"))
+                    // Completions (connection closed, observer disposed) carry
+                    // no value and are not a signal.
+                    if (notification.HasValue && !notification.Value)
                         Resumed?.Invoke();
+                },
+                false, // emitOnCapturedContext
+                ObserverFlags.None,
+                null); // readerState
+
+            lock (_gate)
+            {
+                if (!_disposed)
+                {
+                    _connection = connection;
+                    _subscription = subscription;
+                    return;
                 }
             }
+            // Disposed while connecting.
+            subscription.Dispose();
+            connection.Dispose();
         }
-        catch (OperationCanceledException)
+        catch (Exception e)
         {
-            // Disposing.
+            Log.Warn($"Could not subscribe to sleep/resume notifications: {e.Message}");
+            connection?.Dispose();
         }
     }
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _cts.Dispose();
-        try
+        lock (_gate)
         {
-            if (_process is { HasExited: false })
-                _process.Kill();
+            if (_disposed)
+                return;
+            _disposed = true;
         }
-        catch (InvalidOperationException)
-        {
-            // Already exited between the check and the kill.
-        }
-        _process?.Dispose();
+        _subscription?.Dispose();
+        _connection?.Dispose();
     }
 }

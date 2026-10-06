@@ -46,15 +46,74 @@ contents:
   - src: claudecounter.desktop
     dst: /usr/share/applications/claudecounter.desktop
 
-# A weak hint, not a hard requirement: irrelevant on KDE/XFCE/Cinnamon/MATE,
-# which all provide a tray natively, and harmless if the package name has
-# drifted on a given distro release - the app's own runtime check (see
-# TrayPresence in ClaudeCounter.Linux) and the README are the real fallback
-# for a user on GNOME who has no tray at all.
+# Runtime dependencies. The binary is a self-contained .NET publish, so no
+# .NET runtime is needed, but it still links or dlopens these system
+# libraries - list taken from a running instance's mapped libraries on
+# Kubuntu 26.04: OpenSSL for every HTTPS call, fontconfig/freetype for Skia
+# text, the X11 client libraries Avalonia's X11 backend loads (it runs under
+# XWayland on a Wayland session), and libSM/libICE for X11 session
+# management, which is how the desktop's logout/shutdown request reaches the
+# app. Alternatives cover the Debian/Ubuntu t64 renames and older releases.
+#
+# Recommends (installed by default by apt, skippable):
+#   libsecret-tools - secret-tool, so the session is kept in the desktop
+#     keyring (KWallet on KDE, GNOME Keyring) instead of the encrypted-file
+#     fallback. Not installed by default on Kubuntu.
+#   libgl1 - hardware-accelerated rendering; Avalonia falls back to software.
+#   xdg-utils, libnotify-bin - opening the browser/log folder, and the
+#     "no system tray found" notification.
+#
+# Suggests only, never Recommends: gnome-shell-extension-appindicator. It is
+# what a stock GNOME desktop needs to show any tray icon at all, but it
+# depends on gnome-shell, and apt installs Recommends by default - as a
+# Recommends it pulled GNOME Shell onto KDE/XFCE systems that already have a
+# tray. The app's own runtime check (TrayPresence in ClaudeCounter.Linux) and
+# the README tell GNOME users to install it.
 overrides:
   deb:
+    depends:
+      - libc6
+      - libgcc-s1
+      - libstdc++6
+      - zlib1g
+      - libssl3t64 | libssl3 | libssl1.1
+      - libfontconfig1
+      - libfreetype6
+      - libx11-6
+      - libice6
+      - libsm6
+      - libxcursor1
+      - libxext6
+      - libxi6
+      - libxrandr2
+      - libxrender1
     recommends:
+      - libsecret-tools
+      - libgl1
+      - xdg-utils
+      - libnotify-bin
+    suggests:
       - gnome-shell-extension-appindicator
   rpm:
+    depends:
+      - glibc
+      - libstdc++
+      - zlib
+      - openssl-libs
+      - fontconfig
+      - freetype
+      - libX11
+      - libICE
+      - libSM
+      - libXcursor
+      - libXext
+      - libXi
+      - libXrandr
+      - libXrender
     recommends:
+      - libsecret
+      - mesa-libGL
+      - xdg-utils
+      - libnotify
+    suggests:
       - gnome-shell-extension-appindicator

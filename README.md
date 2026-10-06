@@ -68,22 +68,30 @@ Compare that against the release notes. Or read the source and
 
 ### Linux
 
-No admin rights, no runtime to install, no background service - the same
-self-contained model as the Windows build.
+No .NET runtime to install and no background service - the same
+self-contained model as the Windows build. The `.deb` and `.rpm` need `sudo`
+once, to install; the portable build needs nothing.
 
-**deb** (Debian, Ubuntu, and derivatives)
+Download the package for your system from the
+[latest release](https://github.com/6spiderman/ClaudeCounter/releases/latest),
+then install it from the folder you saved it to. Install with `apt`/`dnf`
+rather than `dpkg -i`/`rpm -i`, so the libraries it needs come with it.
+
+**deb** (Ubuntu, Kubuntu, Debian, Linux Mint, Pop!_OS, and other derivatives)
 
 ```sh
-curl -LO https://github.com/6spiderman/ClaudeCounter/releases/latest/download/ClaudeCounter-<version>-x64.deb
 sudo apt install ./ClaudeCounter-<version>-x64.deb
 ```
 
 **rpm** (Fedora, openSUSE, and derivatives)
 
 ```sh
-curl -LO https://github.com/6spiderman/ClaudeCounter/releases/latest/download/ClaudeCounter-<version>-x64.rpm
 sudo dnf install ./ClaudeCounter-<version>-x64.rpm
 ```
+
+Then start **ClaudeCounter** from your application menu, or run
+`claudecounter` in a terminal. It starts on login from then on (see
+[Settings](#settings) to turn that off).
 
 **Portable** - download `ClaudeCounter-<version>-x64-portable.tar.gz` from the
 [latest release](https://github.com/6spiderman/ClaudeCounter/releases/latest),
@@ -100,6 +108,47 @@ build's `SHA256SUMS.txt`, if you would rather verify before trusting it:
 ```sh
 sha256sum -c SHA256SUMS-linux.txt
 ```
+
+#### Kubuntu and KDE Plasma
+
+Tested on Kubuntu 26.04 with Plasma 6 (Wayland session). Nothing extra is
+needed: Plasma has a system tray, and the app runs through XWayland, which
+Plasma starts on demand.
+
+- **Can't see the icon?** Check behind the **^** (show hidden icons) arrow
+  in the system tray. To pin it to the panel, right-click the arrow ->
+  **Configure System Tray...** -> **Entries**, and set **ClaudeCounter** to
+  **Always shown**.
+- **Sign-in storage.** The `.deb` installs `libsecret-tools`, which lets
+  ClaudeCounter keep its session in KWallet. If you installed with
+  `--no-install-recommends`, or wallet access was refused, it uses the
+  encrypted-file fallback instead - see [File locations](#file-locations).
+  To switch to KWallet later, `sudo apt install libsecret-tools`, restart
+  ClaudeCounter, and sign in once more from the tray menu.
+- **The flyout** opens in the corner next to your panel, since Linux desktops
+  do not tell apps where a tray icon is on screen.
+
+#### Uninstall (Linux)
+
+```sh
+sudo apt remove claudecounter      # or: sudo dnf remove claudecounter
+```
+
+This removes the program. Your settings, log and any stored session stay in
+your home folder (see [File locations](#file-locations)); delete
+`~/.config/ClaudeCounter` and `~/.local/share/ClaudeCounter` to remove them
+too. A leftover autostart entry is skipped harmlessly once the program is
+gone.
+
+#### Logout or shutdown blocked, or slow (Linux)
+
+Fixed in 1.1.0. Earlier Linux builds could stop KDE Plasma (and other
+desktops using X11 session management) from logging out or shutting down
+once the flyout had been opened during the session, and could hold up
+shutdown for up to 90 seconds if the app stopped responding. If you still
+see it on 1.1.0 or later, please
+[open an issue](https://github.com/6spiderman/ClaudeCounter/issues) with
+`~/.local/share/ClaudeCounter/logs/claudecounter.log` attached.
 
 #### No tray icon after installing (GNOME)
 
@@ -232,11 +281,17 @@ settings.
 | `~/.config/ClaudeCounter/settings.json` | Your settings. No secrets. |
 | `~/.local/share/ClaudeCounter/logs/claudecounter.log` | Same rules as Windows |
 | `~/.config/autostart/claudecounter.desktop` | Autostart entry, written when "Start on login" is enabled |
+| `~/.net/ClaudeCounter/` | Native libraries (Skia, HarfBuzz) the single-file binary unpacks on first start. Safe to delete; recreated as needed. |
+| `/usr/lib/claudecounter/`, `/usr/bin/claudecounter` | The program, when installed from the `.deb`/`.rpm` |
 | `~/.claude/.credentials.json` | Claude Code's tokens. **Read only, and only as a fallback.** |
 
 ## Build from source
 
-Needs the [.NET 8 SDK](https://dotnet.microsoft.com/download).
+Needs the [.NET 10 SDK](https://dotnet.microsoft.com/download) (or 9.0.300 or
+later), plus the .NET 8 runtime to run the tests. Everything targets .NET 8,
+but Avalonia 12's source generator needs a newer C# compiler than any .NET 8
+SDK ships - with only the .NET 8 SDK installed, the Linux project fails with
+`CS9057`.
 
 ### Windows
 
@@ -320,10 +375,17 @@ the UI and the platform-specific seams below it.
   drawing context on Linux.
 - `TrayPresence` (Linux) checks for a tray host on the session bus at startup,
   since stock GNOME has none - see [No tray icon after installing](#no-tray-icon-after-installing-gnome).
-- `SleepResumeWatcher` (Linux) shells out to `dbus-monitor` for systemd-
-  logind's `PrepareForSleep` signal on the system bus - the same "known CLI
-  over a bespoke D-Bus client" choice as `SecretServiceSessionStore` and
-  `TrayPresence`.
+- `SleepResumeWatcher` (Linux) subscribes to systemd-logind's
+  `PrepareForSleep` signal on the system bus in-process, with the D-Bus
+  client Avalonia already ships for its tray icon - no child process that
+  could outlive the app.
+- **Logout and shutdown (Linux).** The desktop's logout request arrives
+  through X11 session management, which Avalonia handles by closing every
+  window and cancelling the logout if any window refuses. The flyout only
+  ever hides on a normal close, but lets a logout or app shutdown through.
+  `SIGTERM`/`SIGINT` (what systemd sends at shutdown) run the same clean exit
+  as the tray menu's **Exit**, with a watchdog that forces the exit if it has
+  not finished within five seconds.
 
 ## Project layout
 
