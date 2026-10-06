@@ -1,4 +1,3 @@
-// tests/ClaudeCounter.Tests/ClaudeBackupTests/ProcessRunnerTests.cs
 using ClaudeBackup;
 using Xunit;
 
@@ -6,18 +5,22 @@ namespace ClaudeCounter.Tests.Backup;
 
 public class ProcessRunnerTests
 {
+    // The platform's own shell: cmd on Windows, sh everywhere else.
+    private static (string Shell, string[] ExitThree) Shell => OperatingSystem.IsWindows()
+        ? ("cmd", new[] { "/c", "exit", "3" })
+        : ("sh", new[] { "-c", "exit 3" });
+
     [Fact]
     public void RunsAndCapturesExitCode()
     {
         var runner = new ProcessRunner();
-        // `cmd /c exit 3` is available on the Windows CI runner.
-        var result = runner.Run("cmd", new[] { "/c", "exit", "3" });
+        var result = runner.Run(Shell.Shell, Shell.ExitThree);
         Assert.Equal(3, result.ExitCode);
         Assert.False(result.Ok);
     }
 
     [Fact]
-    public void ExistsFindsCmd() => Assert.True(new ProcessRunner().Exists("cmd"));
+    public void ExistsFindsTheShell() => Assert.True(new ProcessRunner().Exists(Shell.Shell));
 
     [Fact]
     public void ExistsFalseForNonsense() =>

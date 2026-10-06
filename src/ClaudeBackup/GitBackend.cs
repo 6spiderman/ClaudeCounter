@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ClaudeCounter.Core;
 
 [assembly: InternalsVisibleTo("ClaudeCounter.Tests")]
+[assembly: InternalsVisibleTo("ClaudeCounter.Core.Tests")]
 
 namespace ClaudeBackup;
 

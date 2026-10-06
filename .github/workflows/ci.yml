@@ -144,16 +144,30 @@ jobs:
           dotnet restore src/ClaudeCounter.Core/ClaudeCounter.Core.csproj --locked-mode
           dotnet restore src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj --locked-mode
           dotnet restore src/ClaudeBackup/ClaudeBackup.csproj --locked-mode
+          dotnet restore tests/ClaudeCounter.Core.Tests/ClaudeCounter.Core.Tests.csproj --locked-mode
 
       - name: Build
         run: |
           dotnet build src/ClaudeCounter.Core/ClaudeCounter.Core.csproj -c Release --no-restore
           dotnet build src/ClaudeCounter.Linux/ClaudeCounter.Linux.csproj -c Release --no-restore
           dotnet build src/ClaudeBackup/ClaudeBackup.csproj -c Release --no-restore
+          dotnet build tests/ClaudeCounter.Core.Tests/ClaudeCounter.Core.Tests.csproj -c Release --no-restore
 
-      # Core's own tests already run against this same code in the Windows
-      # job (tests/ClaudeCounter.Tests references ClaudeCounter.Core
-      # directly); there is no Linux-only test project yet to run here.
+      # The platform-neutral tests (Core and the backup worker) on Linux too -
+      # the Windows job runs them as well, plus the WinForms-only project. A
+      # Linux path or file-system assumption fails here, not after a merge.
+      - name: Test
+        run: >-
+          dotnet test tests/ClaudeCounter.Core.Tests/ClaudeCounter.Core.Tests.csproj
+          -c Release --no-build
+          --logger "trx;LogFileName=test-results-linux.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results-linux
+          path: TestResults/*.trx
 
       - name: Publish smoke test
         run: |

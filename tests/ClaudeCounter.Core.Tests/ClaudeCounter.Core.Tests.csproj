@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The platform-neutral tests: everything that exercises ClaudeCounter.Core
+    and the ClaudeBackup worker. Plain net8.0, so CI runs it on Linux as well
+    as Windows - the WinForms-only tests stay in ClaudeCounter.Tests
+    (net8.0-windows). A test that is genuinely Windows-specific uses
+    [WindowsOnlyFact]/[WindowsOnlyTheory] (see WindowsOnly.cs).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+    <PackageReference Include="xunit" Version="2.7.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClaudeCounter.Core\ClaudeCounter.Core.csproj" />
+    <ProjectReference Include="..\..\src\ClaudeBackup\ClaudeBackup.csproj" />
+  </ItemGroup>
+
+</Project>

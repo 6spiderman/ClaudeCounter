@@ -39,7 +39,9 @@ public class RestoreCleanupTests : IDisposable
     // open by something else) must be logged loudly, not thrown and not
     // silently swallowed - the directory can hold a plaintext copy of a
     // subset of the user's Claude config.
-    [Fact]
+    // Windows refuses to delete a file that is open; Linux allows it, so the
+    // failure this test provokes cannot happen there.
+    [WindowsOnlyFact]
     public void LockedFileIsLoggedLoudlyAndDoesNotThrow()
     {
         Directory.CreateDirectory(_dir);

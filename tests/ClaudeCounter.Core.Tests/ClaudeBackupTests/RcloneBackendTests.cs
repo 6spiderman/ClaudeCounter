@@ -326,7 +326,9 @@ public class RcloneBackendTests : IDisposable
     // I-2: a failed temp-zip delete must be loud, not swallowed - it is the
     // one failure in this class that most needs to be visible, since the
     // file left behind is a plaintext copy of the user's Claude config.
-    [Fact]
+    // Windows refuses to delete a file that is open; Linux allows it, so the
+    // failure this test provokes cannot happen there.
+    [WindowsOnlyFact]
     public void FailedZipDeleteIsLoggedLoudlyAndDoesNotOverrideTheUploadResult()
     {
         var runner = new FakeRunner { LockZipDuringCopy = true };
