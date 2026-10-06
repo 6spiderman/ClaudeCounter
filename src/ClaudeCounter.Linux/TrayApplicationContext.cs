@@ -6,6 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using ClaudeCounter.Core;
 using ClaudeCounter.Core.Auth;
+using ClaudeCounter.Notifications;
 using ClaudeCounter.Settings;
 using ClaudeCounter.UI;
 
@@ -30,6 +31,7 @@ public sealed class TrayApplicationContext
     private readonly UsageClient _usageClient = new();
     private readonly UpdateChecker _updates = new();
     private readonly PollingService _polling;
+    private readonly ThresholdTracker _tracker;
     private readonly SleepResumeWatcher _sleepResume = new();
     private readonly FlyoutWindow _flyout;
     private readonly TrayIcon _trayIcon;
@@ -69,13 +71,22 @@ public sealed class TrayApplicationContext
             if (_settings.AutostartEnabled)
                 AutostartManager.Enable();
         }
-        else if (_settings.AutostartEnabled)
+        else
         {
-            AutostartManager.EnsurePathCurrent();
+            if (_settings.AutostartEnabled)
+                AutostartManager.EnsurePathCurrent();
+
+            // Normalize() (inside Load()) may have just migrated the alert
+            // dedupe state in memory; persist that now rather than on some
+            // unrelated later save. Same as the Windows build.
+            if (_settings.NotificationStateJustMigrated)
+                _settingsStore.Save(_settings);
         }
 
         _refresher = new OAuthTokenRefresher(_tokenEndpoint);
         _exchanger = new OAuthCodeExchanger(_tokenEndpoint);
+
+        _tracker = new ThresholdTracker(_settings.NotificationState);
 
         _polling = new PollingService(
             new TokenProvider(_sessionStore, _refresher),
@@ -317,6 +328,63 @@ public sealed class TrayApplicationContext
             _updateCheckStarted = true;
             _ = CheckForUpdatesAsync();
         }
+
+        EvaluateAlerts(state);
+    }
+
+    /// <summary>
+    /// Same rules as the Windows build: ThresholdTracker decides which
+    /// crossings are new (once per crossing per window, re-armed on reset,
+    /// optionally repeated), the per-level toggles decide which are shown.
+    /// </summary>
+    private void EvaluateAlerts(PollState state)
+    {
+        if (state.Problem != ProblemKind.None || state.Snapshot is not { } snapshot)
+            return;
+
+        var events = _tracker.Evaluate(snapshot, _settings, DateTimeOffset.UtcNow);
+        if (events.Count == 0)
+            return;
+
+        // While a dialog is open (first-run wizard, Settings, Sign in) a
+        // popup - a centered one takes focus - would land on top of what the
+        // user is doing. The tracker has still consumed the crossing and the
+        // state is still saved below, so it does not fire late either; it is
+        // just not shown. Mirrors the Windows build.
+        var dialogOpen = !_settings.OnboardingCompleted
+            || _settingsWindow is not null
+            || _signInWindow is not null;
+
+        foreach (var e in events)
+        {
+            var enabled = e.Level switch
+            {
+                AlertLevel.Maxed => _settings.MaxedAlertsEnabled,
+                AlertLevel.Critical => _settings.CriticalAlertsEnabled,
+                AlertLevel.Warn => _settings.WarnAlertsEnabled,
+                _ => false,
+            };
+            if (!enabled)
+                continue;
+            if (dialogOpen)
+            {
+                Log.Info($"Alert suppressed (dialog open): {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+                continue;
+            }
+            Log.Info($"Alert: {e.WindowKey} {e.Level} at {e.Utilization:0}%.");
+            try
+            {
+                AlertPopupWindow.Show(e, _settings.PopupPlacement, _settings.PopupAutoDismissSeconds);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Alert popup failed: {ex.Message}");
+            }
+        }
+
+        // Persist dedupe state whether or not a popup was shown, so a disabled
+        // level does not re-fire on every later poll.
+        SaveSettings();
     }
 
     private void UpdateIcon(PollState state)

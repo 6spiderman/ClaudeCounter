@@ -1,16 +1,38 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
 using ClaudeCounter.Settings;
 
 namespace ClaudeCounter.UI;
 
+/// <summary>
+/// Settings, in the same General / Alerts split as the Windows build's
+/// SettingsForm, with the same wording and limits. (Backup is Windows-only
+/// for now, so there is no Backup tab here yet.)
+/// </summary>
 public sealed class SettingsWindow : Window
 {
+    private const double FieldWidth = 130;
+
     private readonly ComboBox _intervalCombo;
     private readonly NumericUpDown _warnInput;
     private readonly NumericUpDown _criticalInput;
     private readonly CheckBox _autostartCheck;
     private readonly CheckBox _updateCheck;
+
+    private readonly CheckBox _warnAlerts;
+    private readonly CheckBox _criticalAlerts;
+    private readonly CheckBox _maxedAlerts;
+    private readonly CheckBox _alertFiveHour;
+    private readonly CheckBox _alertSevenDay;
+    private readonly CheckBox _alertOpus;
+    private readonly CheckBox _alertSonnet;
+    private readonly ComboBox _placement;
+    private readonly NumericUpDown _autoDismissInput;
+    private readonly NumericUpDown _alertRepeatInput;
+
+    private readonly TabControl _tabs;
     private readonly TextBlock _error;
     private readonly int _warnDefault;
     private readonly int _criticalDefault;
@@ -24,47 +46,96 @@ public sealed class SettingsWindow : Window
         _criticalDefault = current.CriticalThreshold;
 
         Title = "ClaudeCounter Settings";
-        Width = 380;
+        Width = 440;
         // Height follows the content rather than a fixed number: text
-        // metrics depend on the desktop's fonts and scaling, and a fixed 300
-        // clipped the OK/Cancel row on Kubuntu/Plasma.
+        // metrics depend on the desktop's fonts and scaling, and a fixed
+        // height clipped the OK/Cancel row on Kubuntu/Plasma.
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Topmost = true;
 
+        // --- General ---
         _intervalCombo = new ComboBox
         {
             ItemsSource = AppSettings.IntervalPresets.Select(m => $"{m} min").ToArray(),
             SelectedIndex = Math.Max(0, Array.IndexOf(AppSettings.IntervalPresets, current.PollIntervalMinutes)),
             HorizontalAlignment = HorizontalAlignment.Right,
-            Width = 130,
+            Width = FieldWidth,
         };
-
-        _warnInput = new NumericUpDown
-        {
-            Minimum = 1, Maximum = 99, Value = current.WarnThreshold, FormatString = "0",
-            Width = 130, HorizontalAlignment = HorizontalAlignment.Right,
-        };
-        _criticalInput = new NumericUpDown
-        {
-            Minimum = 2, Maximum = 100, Value = current.CriticalThreshold, FormatString = "0",
-            Width = 130, HorizontalAlignment = HorizontalAlignment.Right,
-        };
-
+        _warnInput = Numeric(1, 99, current.WarnThreshold);
+        _criticalInput = Numeric(2, 100, current.CriticalThreshold);
         _autostartCheck = new CheckBox { Content = "Start on login", IsChecked = current.AutostartEnabled };
-        _updateCheck = new CheckBox
+        _updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = current.CheckForUpdates };
+
+        var general = Page(
+            LabeledRow("Update frequency", _intervalCombo),
+            Hint("Intervals under 3 min may be rate limited; the app backs off automatically."),
+            LabeledRow("Warn threshold (%)", _warnInput),
+            LabeledRow("Critical threshold (%)", _criticalInput),
+            _autostartCheck,
+            _updateCheck);
+
+        // --- Alerts ---
+        _warnAlerts = new CheckBox { Content = "Popup when a window hits the warn threshold", IsChecked = current.WarnAlertsEnabled };
+        _criticalAlerts = new CheckBox { Content = "Popup when a window hits the critical threshold", IsChecked = current.CriticalAlertsEnabled };
+        _maxedAlerts = new CheckBox { Content = "Popup when a window hits 100%", IsChecked = current.MaxedAlertsEnabled };
+        _alertFiveHour = new CheckBox { Content = "5-hour session", IsChecked = current.AlertFiveHour };
+        _alertSevenDay = new CheckBox { Content = "Weekly (all models)", IsChecked = current.AlertSevenDay };
+        _alertOpus = new CheckBox { Content = "Weekly (Opus)", IsChecked = current.AlertSevenDayOpus };
+        _alertSonnet = new CheckBox { Content = "Weekly (Sonnet)", IsChecked = current.AlertSevenDaySonnet };
+
+        _placement = new ComboBox
         {
-            Content = "Check for updates automatically",
-            IsChecked = current.CheckForUpdates,
+            ItemsSource = new[] { "Near tray", "Centered" },
+            SelectedIndex = current.PopupPlacement == PopupPlacement.Centered ? 1 : 0,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Width = FieldWidth,
         };
+        _autoDismissInput = Numeric(0, 300, current.PopupAutoDismissSeconds);
+        _alertRepeatInput = Numeric(0, 1440, current.AlertRepeatMinutes);
+
+        var windows = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,*"),
+            RowDefinitions = new RowDefinitions("Auto,Auto"),
+        };
+        Place(windows, _alertFiveHour, 0, 0);
+        Place(windows, _alertSevenDay, 0, 1);
+        Place(windows, _alertOpus, 1, 0);
+        Place(windows, _alertSonnet, 1, 1);
+
+        var alerts = Page(
+            _warnAlerts,
+            _criticalAlerts,
+            _maxedAlerts,
+            SectionLabel("Watch these windows"),
+            windows,
+            LabeledRow("Popup placement", _placement),
+            LabeledRow("Auto-dismiss popups after (seconds, 0 = never)", _autoDismissInput),
+            Hint("Centered popups (including every 100% popup) always wait for you to dismiss them."),
+            LabeledRow("Re-notify every (minutes, 0 = only once until reset)", _alertRepeatInput));
+
+        _tabs = new TabControl
+        {
+            Items =
+            {
+                new TabItem { Header = "General", Content = general },
+                new TabItem { Header = "Alerts", Content = alerts },
+            },
+        };
+
+        // Both pages as tall as the taller one, so the window does not jump
+        // in size when switching tabs. Measured once the window is open: a
+        // page only has its real (styled) size while it is the selected tab.
+        Opened += (_, _) => EqualizePageHeights(general, alerts);
 
         _error = new TextBlock
         {
             Text = "Warn threshold must be lower than the critical threshold.",
-            Foreground = Avalonia.Media.Brushes.OrangeRed,
+            Foreground = Brushes.OrangeRed,
             IsVisible = false,
-            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            TextWrapping = TextWrapping.Wrap,
         };
 
         var okButton = new Button { Content = "OK", IsDefault = true };
@@ -74,21 +145,11 @@ public sealed class SettingsWindow : Window
 
         Content = new StackPanel
         {
-            Margin = new Avalonia.Thickness(16),
+            Margin = new Thickness(16),
             Spacing = 10,
             Children =
             {
-                LabeledRow("Update frequency", _intervalCombo),
-                new TextBlock
-                {
-                    Text = "Intervals under 3 min may be rate limited; the app backs off automatically.",
-                    Foreground = Avalonia.Media.Brushes.Gray,
-                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                },
-                LabeledRow("Warn threshold (%)", _warnInput),
-                LabeledRow("Critical threshold (%)", _criticalInput),
-                _autostartCheck,
-                _updateCheck,
+                _tabs,
                 _error,
                 new StackPanel
                 {
@@ -101,6 +162,59 @@ public sealed class SettingsWindow : Window
         };
     }
 
+    private void EqualizePageHeights(params Control[] pages)
+    {
+        var selected = _tabs.SelectedIndex;
+        double tallest = 0;
+        for (var i = 0; i < pages.Length; i++)
+        {
+            _tabs.SelectedIndex = i;
+            UpdateLayout();
+            tallest = Math.Max(tallest, pages[i].Bounds.Height);
+        }
+        foreach (var page in pages)
+            page.MinHeight = tallest;
+        _tabs.SelectedIndex = selected;
+    }
+
+    private static NumericUpDown Numeric(int min, int max, int value) => new()
+    {
+        Minimum = min,
+        Maximum = max,
+        Value = Math.Clamp(value, min, max),
+        FormatString = "0",
+        Width = FieldWidth,
+        HorizontalAlignment = HorizontalAlignment.Right,
+    };
+
+    private static StackPanel Page(params Control[] children)
+    {
+        var page = new StackPanel { Spacing = 10, Margin = new Thickness(0, 12, 0, 0) };
+        page.Children.AddRange(children);
+        return page;
+    }
+
+    private static TextBlock Hint(string text) => new()
+    {
+        Text = text,
+        Foreground = Brushes.Gray,
+        TextWrapping = TextWrapping.Wrap,
+    };
+
+    private static TextBlock SectionLabel(string text) => new()
+    {
+        Text = text,
+        FontWeight = FontWeight.SemiBold,
+        Margin = new Thickness(0, 4, 0, 0),
+    };
+
+    private static void Place(Grid grid, Control control, int row, int column)
+    {
+        Grid.SetRow(control, row);
+        Grid.SetColumn(control, column);
+        grid.Children.Add(control);
+    }
+
     private static Control LabeledRow(string label, Control input)
     {
         DockPanel.SetDock(input, Dock.Right);
@@ -109,7 +223,13 @@ public sealed class SettingsWindow : Window
             Children =
             {
                 input,
-                new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock
+                {
+                    Text = label,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 12, 0),
+                },
             },
         };
     }
@@ -118,6 +238,9 @@ public sealed class SettingsWindow : Window
     {
         if (_warnInput.Value >= _criticalInput.Value)
         {
+            // The thresholds live on General; make sure the error is next to
+            // the fields it is about.
+            _tabs.SelectedIndex = 0;
             _error.IsVisible = true;
             return;
         }
@@ -133,5 +256,19 @@ public sealed class SettingsWindow : Window
         settings.CriticalThreshold = (int)(_criticalInput.Value ?? _criticalDefault);
         settings.AutostartEnabled = _autostartCheck.IsChecked ?? false;
         settings.CheckForUpdates = _updateCheck.IsChecked ?? false;
+
+        settings.WarnAlertsEnabled = _warnAlerts.IsChecked ?? false;
+        settings.CriticalAlertsEnabled = _criticalAlerts.IsChecked ?? false;
+        settings.MaxedAlertsEnabled = _maxedAlerts.IsChecked ?? false;
+        settings.AlertFiveHour = _alertFiveHour.IsChecked ?? false;
+        settings.AlertSevenDay = _alertSevenDay.IsChecked ?? false;
+        settings.AlertSevenDayOpus = _alertOpus.IsChecked ?? false;
+        settings.AlertSevenDaySonnet = _alertSonnet.IsChecked ?? false;
+        settings.PopupPlacement = _placement.SelectedIndex == 1 ? PopupPlacement.Centered : PopupPlacement.NearTray;
+        settings.PopupAutoDismissSeconds = (int)(_autoDismissInput.Value ?? 12);
+        settings.AlertRepeatMinutes = (int)(_alertRepeatInput.Value ?? 0);
+        // Normalize clamps the numbers and keeps the thresholds consistent,
+        // exactly as on load.
+        settings.Normalize();
     }
 }

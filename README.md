@@ -198,9 +198,10 @@ to Claude...**
   desktop distros, but not a non-systemd setup).
 - **Update notifications** from GitHub Releases, at most once a day, shown as a
   menu entry rather than a popup. Off with one checkbox.
-- **Alert popups** (Windows for now) when a window crosses your critical
-  threshold or hits 100%, placed near the tray or centered on screen, each
-  configurable (or turned off) independently in Settings.
+- **Alert popups** when a window crosses your warn or critical threshold or
+  hits 100%, placed near the tray (on Linux, the corner next to your panel)
+  or centered on screen, each configurable (or turned off) independently in
+  Settings -> Alerts. See [Alerts](#alerts).
 - **Backup** (`ClaudeBackup.exe`, Windows for now): scheduled or on-demand backup of a subset
   of your Claude config to any number of destinations you configure, in any
   combination, with restore built in. Installed by default; untick "Backup
@@ -280,6 +281,22 @@ Right-click the tray icon -> **Settings...**
 | Critical threshold | Session % at which the icon turns red. | 90 |
 | Start on login | Windows: the `HKCU\...\Run` key. Linux: an XDG autostart entry at `~/.config/autostart/`. | On |
 | Check for updates automatically | Ask GitHub once a day whether a newer release exists. | On |
+
+### Alerts
+
+Settings -> **Alerts**, on both Windows and Linux.
+
+| Setting | Description | Default |
+| --- | --- | --- |
+| Popup when a window hits the warn / critical threshold / 100% | Which levels pop up. Each crossing alerts once per window until that window resets. | All on |
+| Watch these windows | 5-hour session, weekly (all models), weekly (Opus), weekly (Sonnet). | Session and weekly on; Opus and Sonnet off |
+| Popup placement | **Near tray** (bottom-right on Windows; the corner next to your panel on Linux) or **Centered**. A 100% popup is always centered. | Near tray |
+| Auto-dismiss popups after | Seconds before a near-tray popup closes itself; 0 = never. Centered popups always wait for you. | 12 |
+| Re-notify every | Minutes before an already-alerted window that is still over its level alerts again; 0 = only once until it resets. | 0 |
+
+Near-tray popups never take focus from what you are typing in; several at
+once stack instead of overlapping. Alerts are held back while the Settings,
+Sign in or first-run window is open, rather than popping up over it.
 
 ## File locations
 

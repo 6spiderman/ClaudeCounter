@@ -7,10 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - Unreleased
 
-Alert popups and backup are in the Windows build only for now; the Linux
-build gains them in a later release. Everything else here applies to both.
+Backup is in the Windows build only for now; the Linux build gains it in a
+later release. Alert popups, and everything else here, are on both.
 
 ### Added
+
+- **Alert popups on Linux**, with the same levels, per-window choices,
+  placement, auto-dismiss and repeat settings as Windows, in a new Alerts tab
+  in Settings. Near-tray popups appear in the corner next to your panel and
+  stack; they never take focus. Settings now has General and Alerts tabs.
 
 - **Alert popups.** A configurable popup when a usage window crosses your
   critical threshold or hits 100%, independently for the 5-hour session, the

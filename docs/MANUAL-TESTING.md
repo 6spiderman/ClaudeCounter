@@ -409,6 +409,14 @@ artifact, or from the draft release:
       missing autostart program
 - [ ] GNOME without the AppIndicator extension: a one-time notification says
       no tray was found
+- [ ] Settings has **General** and **Alerts** tabs of the same height; OK and
+      Cancel are fully visible on both
+- [ ] Lower the critical threshold below current usage: one popup per
+      crossed window appears next to the panel, stacked with a gap, without
+      taking focus from the window you are typing in, and closes itself after
+      the auto-dismiss time
+- [ ] Restart the app: the same crossing does **not** pop up again
+- [ ] With an alert popup open, log out: the logout is not blocked
 
 ---
 

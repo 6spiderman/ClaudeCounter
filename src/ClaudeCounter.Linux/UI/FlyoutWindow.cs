@@ -12,7 +12,7 @@ namespace ClaudeCounter.UI;
 /// desktop environments do not reliably expose the cursor position or a tray
 /// icon's screen rect to an application the way Windows does, so this opens
 /// in the primary screen's corner next to the panel instead of anchored to
-/// the click point - see <see cref="ShowNearTray"/>.
+/// the click point - see <see cref="PanelPlacement"/>.
 /// </summary>
 public sealed class FlyoutWindow : Window
 {
@@ -115,33 +115,10 @@ public sealed class FlyoutWindow : Window
         Activate();
     }
 
-    /// <summary>
-    /// Picks the corner of the work area that borders the panel. The panel is
-    /// what the work area excludes - KDE's default bottom panel shrinks its
-    /// bottom edge, GNOME's top bar its top edge - so whichever edge moved in
-    /// is where the tray lives. Defaults to the right side, then the bottom,
-    /// when nothing is excluded (an auto-hiding panel, a bare window manager).
-    /// </summary>
     private PixelPoint PositionNearPanel(Avalonia.Platform.Screen screen)
     {
-        var bounds = screen.Bounds;
-        var work = screen.WorkingArea;
-
-        // Borderless and SizeToContent, so the content's desired size is the
-        // window size; measure it now rather than showing first and moving,
-        // which flickers.
-        if (Content is Control content)
-            content.Measure(new Size(Width, double.PositiveInfinity));
-        var width = (int)Math.Ceiling(Width * screen.Scaling);
-        var height = (int)Math.Ceiling(((Content as Control)?.DesiredSize.Height ?? 300) * screen.Scaling);
-        var margin = (int)Math.Ceiling(ScreenMargin * screen.Scaling);
-
-        var panelLeft = work.X > bounds.X;
-        var panelTop = work.Y > bounds.Y && work.Bottom >= bounds.Bottom;
-
-        var x = panelLeft ? work.X + margin : work.Right - width - margin;
-        var y = panelTop ? work.Y + margin : work.Bottom - height - margin;
-        return new PixelPoint(Math.Max(work.X, x), Math.Max(work.Y, y));
+        var (width, height) = PanelPlacement.MeasurePixels(Content as Control, Width, screen.Scaling, 300);
+        return PanelPlacement.NearPanel(screen, width, height, (int)Math.Ceiling(ScreenMargin * screen.Scaling));
     }
 
     private void RebuildContent()
