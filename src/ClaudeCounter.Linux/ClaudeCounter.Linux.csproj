@@ -27,7 +27,7 @@
     <!-- Already shipped transitively by Avalonia (its tray icon's D-Bus
          client); referenced directly, at the same version, for
          SleepResumeWatcher's logind subscription. -->
-    <PackageReference Include="Tmds.DBus.Protocol" Version="0.94.1" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
   </ItemGroup>
 
   <ItemGroup>
